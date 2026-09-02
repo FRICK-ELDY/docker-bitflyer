@@ -52,5 +52,5 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 ## 注意
 
 - API キー、パスフレーズ、本番設定をリポジトリにコミットしない
-- 開発環境の既定は dry-run / paper とする
+- 開発環境の既定は `dry_run` とする。`paper` と `live` は明示する
 - 本番キーに出金権限を付けない

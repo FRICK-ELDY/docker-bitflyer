@@ -4,9 +4,9 @@
 
 ## 背景
 
-開発の既定は実資金を使わない。ただし「注文を出さない」だけだと、約定・建玉・再起動後の復帰を検証できない。
+開発の既定は `dry_run`（注文を出さず、擬似約定もしない）。ただし「注文を出さない」だけだと、約定・建玉・再起動後の復帰を検証できない。
 
-ペーパーは、市場データと strategy / risk は本番と同じ経路を使い、最後の発注先だけを仮想約定にする。
+ペーパーは、市場データと strategy / risk は本番と同じ経路を使い、最後の発注先だけを仮想約定にする。`dry_run` と同義ではない。`TRADE_MODE=paper` を明示したときだけ有効にする。
 
 `apps/paper` は作らない。ペーパーは取引所ではなく、order-executor の出口である。
 
@@ -15,7 +15,7 @@
 | 項目 | 方針 |
 | --- | --- |
 | 形 | `apps/bitflyer` 内の executor アダプタ |
-| 切替 | `TRADE_MODE=paper`（開発既定。`dry_run` と同系統） |
+| 切替 | `TRADE_MODE=paper`（明示。開発既定は `dry_run`） |
 | 発注経路 | strategy → risk-manager → executor は live と同一 |
 | 市場データ | 本番と同じ market-data。板をペーパー専用に複製しない |
 | 正本 | 仮想残高・仮想建玉・内部注文を datastore に書く |
@@ -23,8 +23,9 @@
 
 ```text
 strategy → risk-manager → order-executor
-                              ├─ paper  擬似約定 → datastore
-                              └─ live   bitFlyer REST → datastore
+                              ├─ dry_run  送らず記録のみ（建玉は動かさない）
+                              ├─ paper    擬似約定 → datastore
+                              └─ live     bitFlyer REST → datastore
 ```
 
 ## この要望で満たすこと
@@ -39,7 +40,7 @@ strategy → risk-manager → order-executor
 
 - `apps/paper` を Umbrella に追加すること
 - 独自の板合わせエンジンを取引所の代替として作ること（初期は ticker / 最良気配での即時擬似約定で足りる）
-- ペーパーと live を同一プロセスで同時に動かすこと
+- ペーパーと `dry_run` を同一視すること（開発既定は `dry_run` のまま）
 - ペーパー損益を Discord 以外の対外報告に使うこと
 
 板合わせや遅延約定が必要になったら、executor アダプタの中で足す。アプリ分割は、ペーパーを他システムへ提供する境界が痛くなってから検討する。

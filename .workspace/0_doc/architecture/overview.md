@@ -96,14 +96,17 @@ Ash は永続状態（注文、建玉、残高スナップショット、リス�
 
 ## 取引モード
 
-ペーパーは `apps/paper` にしない。strategy と risk-manager は live と同じ経路を通り、切り替えるのは order-executor の出口だけにする。同じ経路を通さないペーパーは、本番で初めて壊れる。
+ペーパーは `apps/paper` にしない。strategy と risk-manager はどのモードでも同じ経路を通り、切り替えるのは order-executor の出口だけにする。同じ経路を通さないペーパーは、本番で初めて壊れる。
 
-| モード | 約定 | 市場データ |
-| --- | --- | --- |
-| `dry_run` / `paper` | 取引所へ出さない。executor 内で擬似約定し、仮想残高・建玉を datastore に書く | 本番と同じ market-data でよい |
-| `live` | bitFlyer REST で実発注 | 同じ market-data |
+`TRADE_MODE` で選ぶ。開発の既定は `dry_run`。`paper` と `live` は明示する。live へ切り替える操作は設定上で目立たせ、キーも混ぜない。
 
-`TRADE_MODE` で選ぶ。ペーパー中の起動突合は取引所の建玉ではなく、内部の仮想状態を正とする。live へ切り替える操作は設定上で目立たせ、キーも混ぜない。
+| モード | 約定 | 建玉・残高 | 市場データ |
+| --- | --- | --- | --- |
+| `dry_run` | 取引所へ出さない。擬似約定もしない。意図だけログする | 動かさない | 本番と同じ market-data でよい |
+| `paper` | 取引所へ出さない。executor 内で擬似約定する | 仮想残高・建玉を datastore に書く | 同じ market-data |
+| `live` | bitFlyer REST で実発注 | 取引所の事実と突合する | 同じ market-data |
+
+`paper` の起動突合は取引所の建玉ではなく、内部の仮想状態を正とする。`dry_run` では突合で建玉を書き換えない。
 
 ## データと状態
 
@@ -130,7 +133,7 @@ Ash は永続状態（注文、建玉、残高スナップショット、リス�
 1. strategy が「買いたい / 売りたい / 閉じたい」を内部コマンドとして出す
 2. risk-manager が上限と市場データの鮮度を確認する
 3. 通過したコマンドだけが order-executor に届く
-4. executor は内部注文 ID で冪等に送る。`paper` なら擬似約定、`live` なら bitFlyer REST
+4. executor は内部注文 ID で冪等に送る。`dry_run` なら送らず記録のみ、`paper` なら擬似約定、`live` なら bitFlyer REST
 5. 約定・拒否・取消は datastore に書き、strategy と risk に返す
 
 strategy から API を直接叩かない。market-data の遅延や欠損があるときは、新しい注文を出さない。

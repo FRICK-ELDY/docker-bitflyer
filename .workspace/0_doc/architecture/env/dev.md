@@ -18,14 +18,14 @@
 | サービス | `app`（Umbrella 一式）、`db`（PostgreSQL） |
 | ネットワーク | Compose 内部ネットワーク。ホストへは localhost のみ公開 |
 | 公開ポート | UI `4000`（Phoenix）、PostgreSQL `5432` |
-| 取引モード | `TRADE_MODE=dry_run` を既定にする。実発注は明示フラグが必要 |
+| 取引モード | `TRADE_MODE=dry_run` を既定にする。`paper` と `live` は明示する |
 | 接続先 | モック、または用途を限定した検証用 API キー |
 | データストア | `db` の名前付きボリューム。消えても再作成できる前提 |
 | `app` | ソースを bind mount。`mix` はコンテナ内で実行する |
 | ログ | コンテナ標準出力。必要ならローカルファイルへも出す |
 | 秘密情報 | `.env` またはローカルシークレット。Git 管理外 |
 
-実発注フラグがオフのときは、order-executor は取引所へ送らず、擬似約定を返す。
+既定の `dry_run` では、order-executor は取引所へ出さず、擬似約定もしない。意図だけログする。仮想建玉を動かすのは `TRADE_MODE=paper` のときだけ。`live` は明示したときだけ実発注する。
 
 ## Compose サービスとポート
 
@@ -45,7 +45,7 @@
 | `DATABASE_URL` | PostgreSQL 接続。Compose 内部ではホスト名 `db` |
 | `SECRET_KEY_BASE` | Phoenix 用 |
 | `PHX_HOST` | 開発は `localhost` |
-| `TRADE_MODE` | 既定 `dry_run` |
+| `TRADE_MODE` | 既定 `dry_run`。`paper` / `live` は明示 |
 
 ## 起動の前提
 
@@ -74,7 +74,7 @@
 
 | 項目 | 開発 | 本番 |
 | --- | --- | --- |
-| 既定の発注 | dry-run | 実発注（段階的に解禁） |
+| 既定の発注 | `dry_run`（`paper` は明示） | 実発注（段階的に解禁） |
 | API キー | 開発専用 / なし（モック） | 本番専用。出金不可 |
 | データ永続化 | 消してよい | バックアップ対象 |
 | アラート | ローカル通知で十分 | 到達確認できる通知 |
