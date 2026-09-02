@@ -17,17 +17,17 @@
 
 ### 1. 文書に技術スタックを反映する
 
-- [ ] `architecture/overview.md` に Umbrella、`apps/ui`、`apps/bitflyer`、Ash、PostgreSQL を追記する
-- [ ] `architecture/env/dev.md` に Compose サービス（app / db）と開発用ポートを追記する
-- [ ] `README.md` の現状と起動案内を、骨格完成後に更新できるよう項目だけ先に決める
+- [x] `architecture/overview.md` に Umbrella、`apps/ui`、`apps/bitflyer`、Ash、PostgreSQL を追記する
+- [x] `architecture/env/dev.md` に Compose サービス（app / db）と開発用ポートを追記する
+- [x] `README.md` の現状と起動案内を、骨格完成後に更新できるよう項目だけ先に決める
 
 完了: コードを書く人が、アプリ境界と「誰が Repo を持つか」で迷わない。
 
 ### 2. リポジトリの除外規則を置く
 
-- [ ] Elixir / Mix / Phoenix 用の `.gitignore` を追加する
-- [ ] `.env` を無視し、`.env.example` だけを追跡する
-- [ ] 追跡対象外にする例: `_build/`、`deps/`、`*.ez`、DB ボリューム、秘密情報
+- [x] Elixir / Mix / Phoenix 用の `.gitignore` を追加する
+- [x] `.env` を無視し、`.env.example` だけを追跡する
+- [x] 追跡対象外にする例: `_build/`、`deps/`、`*.ez`、DB ボリューム、秘密情報
 
 完了: ビルド成果物と秘密情報が commit 対象にならない。
 

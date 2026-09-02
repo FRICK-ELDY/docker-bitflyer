@@ -6,45 +6,28 @@
 
 ## 論理構成
 
-```text
-                    ┌──────────────────┐
-                    │  bitFlyer API    │
-                    │  REST / WebSocket│
-                    └────────┬─────────┘
-                             │
-┌────────────────────────────┼────────────────────────────┐
-│ Docker                     │                            │
-│                            ▼                            │
-│                 ┌────────────────────┐                  │
-│                 │ market-data        │                  │
-│                 │ 板・約定・Ticker    │                  │
-│                 └─────────┬──────────┘                  │
-│                           │                             │
-│                           ▼                             │
-│                 ┌────────────────────┐                  │
-│                 │ strategy           │                  │
-│                 │ シグナル生成        │                  │
-│                 └─────────┬──────────┘                  │
-│                           │                             │
-│                           ▼                             │
-│                 ┌────────────────────┐                  │
-│                 │ risk-manager       │                  │
-│                 │ 上限・サーキット    │                  │
-│                 └─────────┬──────────┘                  │
-│                           │                             │
-│                           ▼                             │
-│                 ┌────────────────────┐                  │
-│                 │ order-executor     │                  │
-│                 │ 冪等な発注・取消    │                  │
-│                 └─────────┬──────────┘                  │
-│                           │                             │
-│          ┌────────────────┼────────────────┐            │
-│          ▼                ▼                ▼            │
-│   ┌────────────┐   ┌────────────┐   ┌────────────┐     │
-│   │ datastore  │   │  cache     │   │  observe   │     │
-│   │ 状態・約定  │   │ 短期データ  │   │ log/metric │     │
-│   └────────────┘   └────────────┘   └────────────┘     │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  bitFlyerApi["bitFlyer API REST / WebSocket"]
+
+  subgraph docker [Docker]
+    marketData["market-data 板・約定・Ticker"]
+    strategy["strategy シグナル生成"]
+    riskManager["risk-manager 上限・サーキット"]
+    orderExecutor["order-executor 冪等な発注・取消"]
+    datastore["datastore 状態・約定"]
+    cache["cache 短期データ"]
+    observe["observe log / metric"]
+  end
+
+  bitFlyerApi --> marketData
+  marketData --> strategy
+  strategy --> riskManager
+  riskManager --> orderExecutor
+  orderExecutor --> datastore
+  orderExecutor --> cache
+  orderExecutor --> observe
+  orderExecutor -->|"live のみ"| bitFlyerApi
 ```
 
 ## コンポーネント
@@ -60,6 +43,70 @@
 | observe | ログ、メトリクス、ヘルス、アラート | 取引は止めないが、盲目運転は禁止する |
 
 初期実装ではプロセス数を減らし、同一リポジトリ・同一 Compose プロジェクトとして起動する。境界（データ取得 / 判断 / リスク / 発注 / 永続化）はコード上でも分ける。
+
+## 実装スタック
+
+論理構成は変えず、次の技術で実装する。
+
+| 層 | 選定 |
+| --- | --- |
+| 言語 / ランタイム | Elixir (OTP) |
+| プロジェクト形 | Mix Umbrella（アプリ名 `docker_bitflyer`） |
+| 取引所連携とドメイン | `apps/bitflyer` |
+| 運用 UI | `apps/ui`（Phoenix / LiveView） |
+| 永続化 | Ash Framework + AshPostgres |
+| DB | PostgreSQL |
+| 実行基盤 | Docker Compose（サービス `app` / `db`） |
+
+第 3 の Umbrella アプリは切らない。ペーパー取引も Discord 通知も、アプリではなく `bitflyer` 内のアダプタにする。
+
+## アプリ境界
+
+```mermaid
+flowchart LR
+  subgraph umbrella ["Umbrella docker_bitflyer / app コンテナ"]
+    ui["apps/ui Phoenix Endpoint"]
+    bitflyerApp["apps/bitflyer Repo / Domain / エンジン"]
+  end
+
+  db["db PostgreSQL localhost:5432"]
+  browser["Browser localhost:4000"]
+
+  browser --> ui
+  ui --> bitflyerApp
+  bitflyerApp --> db
+```
+
+- `Bitflyer.Repo`（`AshPostgres.Repo`）は `apps/bitflyer` が持つ
+- `ui` は `bitflyer` に依存し、Ash の公開インターフェース経由でのみデータに触る
+- `ui` から bitFlyer API を直接叩かない。発注経路は risk-manager を通す
+- 初期は Elixir コンテナは 1 つ。同じ BEAM でも Endpoint と取引監督は兄弟にし、UI の例外で発注側を再起動しない
+
+論理コンポーネントの配置:
+
+| 論理コンポーネント | 実装 |
+| --- | --- |
+| market-data / strategy / risk-manager / order-executor | `apps/bitflyer` |
+| datastore | Ash Resource + PostgreSQL（`Bitflyer.Repo`） |
+| cache | ETS（鮮度付き。単一ノードでは Redis を置かない） |
+| observe（ログ・メトリクス） | `apps/bitflyer` |
+| observe（画面） | `apps/ui` |
+
+Ash は永続状態（注文、建玉、残高スナップショット、リスク停止状態、パラメータ履歴）にだけ使う。板・Ticker・判定ループは ETS または GenServer に置き、ホットパスから Resource を呼ばない。価格と数量は Decimal にする。
+
+## 取引モード
+
+ペーパーは `apps/paper` にしない。strategy と risk-manager はどのモードでも同じ経路を通り、切り替えるのは order-executor の出口だけにする。同じ経路を通さないペーパーは、本番で初めて壊れる。
+
+`TRADE_MODE` で選ぶ。開発の既定は `dry_run`。`paper` と `live` は明示する。live へ切り替える操作は設定上で目立たせ、キーも混ぜない。
+
+| モード | 約定 | 建玉・残高 | 市場データ |
+| --- | --- | --- | --- |
+| `dry_run` | 取引所へ出さない。擬似約定もしない。意図だけログする | 動かさない | 本番と同じ market-data でよい |
+| `paper` | 取引所へ出さない。executor 内で擬似約定する | 仮想残高・建玉を datastore に書く | 同じ market-data |
+| `live` | bitFlyer REST で実発注 | 取引所の事実と突合する | 同じ market-data |
+
+`paper` の起動突合は取引所の建玉ではなく、内部の仮想状態を正とする。`dry_run` では突合で建玉を書き換えない。
 
 ## データと状態
 
@@ -86,7 +133,7 @@
 1. strategy が「買いたい / 売りたい / 閉じたい」を内部コマンドとして出す
 2. risk-manager が上限と市場データの鮮度を確認する
 3. 通過したコマンドだけが order-executor に届く
-4. executor は内部注文 ID で冪等に送信する
+4. executor は内部注文 ID で冪等に送る。`dry_run` なら送らず記録のみ、`paper` なら擬似約定、`live` なら bitFlyer REST
 5. 約定・拒否・取消は datastore に書き、strategy と risk に返す
 
 strategy から API を直接叩かない。market-data の遅延や欠損があるときは、新しい注文を出さない。

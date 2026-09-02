@@ -1,0 +1,50 @@
+# Mix / Elixir
+/_build/
+/cover/
+/deps/
+/doc/
+/.fetch
+erl_crash.dump
+*.ez
+*.beam
+/tmp/
+*.plt
+*.plt.hash
+.elixir_ls/
+.lexical/
+.elixir-tools/
+
+# Umbrella 配下に残った場合
+/apps/*/_build/
+/apps/*/deps/
+/apps/*/doc/
+/apps/*/cover/
+
+# Phoenix / assets（apps/ui）
+/apps/*/assets/node_modules/
+/apps/*/priv/static/assets/
+/apps/*/priv/static/cache_manifest.json
+npm-debug.log
+/assets/node_modules/
+
+# 秘密情報（.env.example だけ追跡する）
+.env
+.env.*
+!.env.example
+
+# API キー・証明書
+*.pem
+*.key
+!*.public.key
+secrets/
+credentials.json
+
+# Docker / PostgreSQL のローカル永続データ
+/pgdata/
+/postgres-data/
+/docker-data/
+*.pgdata
+
+# OS
+.DS_Store
+Thumbs.db
