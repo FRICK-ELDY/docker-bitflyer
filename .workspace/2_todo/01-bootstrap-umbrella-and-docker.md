@@ -35,12 +35,12 @@
 
 ホストに Mix がなくても生成できるようにする。
 
-- [ ] 開発用 `Dockerfile`（Elixir 安定版、Hex / Rebar、ソース bind mount 前提）
-- [ ] `compose.yaml`（または `docker-compose.yml`）
+- [x] 開発用 `Dockerfile`（Elixir 安定版、Hex / Rebar、ソース bind mount 前提）
+- [x] `compose.yaml`（または `docker-compose.yml`）
   - `db`: PostgreSQL。名前付きボリューム。開発用ポートは localhost のみ
   - `app`: Umbrella を起動する。`db` を待つ
-- [ ] `.env.example` に `DATABASE_URL`、`SECRET_KEY_BASE`、`PHX_HOST`、取引モード（既定 `dry_run`）を書く
-- [ ] `app` はソースをマウントし、再生成や `mix` をコンテナ内で実行できる
+- [x] `.env.example` に `DATABASE_URL`、`SECRET_KEY_BASE`、`PHX_HOST`、取引モード（既定 `dry_run`）を書く
+- [x] `app` はソースをマウントし、再生成や `mix` をコンテナ内で実行できる
 
 完了: 空に近いリポジトリでも `docker compose run --rm app mix --version` が通る。PostgreSQL が単体で上がる。
 

@@ -8,23 +8,38 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 
 ## 現状
 
-技術スタックとアプリ境界を文書で固定した段階。実装は [ToDo 手順 2 以降](.workspace/2_todo/01-bootstrap-umbrella-and-docker.md) で進める。
+開発用 Docker（`app` / `db`）まで置いた段階。Umbrella 本体は [ToDo 手順 4 以降](.workspace/2_todo/01-bootstrap-umbrella-and-docker.md)。
 
-起動手順の本文は、骨格（手順 6）が通ってからこの README に移す。
+Phoenix の常時起動手順は、骨格（手順 6）が通ってからここに移す。
 
 ## 開発起動
 
-（未実装。`docker compose up` の手順をここに書く。）
+```bash
+cp .env.example .env
+docker compose up -d db
+docker compose run --rm app mix --version
+```
+
+`db` は `127.0.0.1:5432`、将来の UI は `127.0.0.1:4000`。ソースは `app` にマウントする。
 
 ## 環境変数
 
-（未実装。`.env.example` をここに要約する。）
+`.env.example` をコピーして使う。追跡するのは example だけ。
 
-名前だけ先に固定する: `DATABASE_URL`、`SECRET_KEY_BASE`、`PHX_HOST`、`TRADE_MODE`（既定 `dry_run`）。値は Git に入れない。
+| 名前 | 既定の意味 |
+| --- | --- |
+| `DATABASE_URL` | Compose 内ホスト `db` 向け |
+| `SECRET_KEY_BASE` | Phoenix 用（後で生成し直す） |
+| `PHX_HOST` | `localhost` |
+| `TRADE_MODE` | `dry_run` |
 
 ## よく使う mix
 
-（未実装。コンテナ内で使う `mix` をここに書く。）
+```bash
+docker compose run --rm app mix --version
+```
+
+Umbrella 生成後の `mix` は手順 4 以降で追記する。
 
 ## ドキュメント
 

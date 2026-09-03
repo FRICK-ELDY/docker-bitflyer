@@ -1,0 +1,46 @@
+# 開発用 Compose。サービス名とポートは architecture/env/dev.md に合わせる。
+services:
+  db:
+    image: postgres:16-alpine
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: docker_bitflyer_dev
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d docker_bitflyer_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:4000:4000"
+    working_dir: /app
+    volumes:
+      - .:/app
+      - mix_deps:/app/deps
+      - mix_build:/app/_build
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-ecto://postgres:postgres@db:5432/docker_bitflyer_dev}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:-change_me_generate_with_mix_phx_gen_secret}
+      PHX_HOST: ${PHX_HOST:-localhost}
+      TRADE_MODE: ${TRADE_MODE:-dry_run}
+      MIX_ENV: ${MIX_ENV:-dev}
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  mix_deps:
+  mix_build:
