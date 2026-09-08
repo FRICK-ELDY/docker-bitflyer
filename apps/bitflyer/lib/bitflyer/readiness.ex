@@ -110,7 +110,9 @@ defmodule Bitflyer.Readiness do
   @spec format(state()) :: String.t()
   def format(:not_ready), do: "not_ready"
   def format(:ready), do: "ready"
-  def format({:halted, reason}), do: "halted:#{reason}"
+  def format({:halted, reason}) when is_atom(reason), do: "halted:#{reason}"
+  def format({:halted, reason}), do: "halted:#{inspect(reason)}"
+  def format(other), do: "unknown:#{inspect(other)}"
 
   # —— Server ——
 

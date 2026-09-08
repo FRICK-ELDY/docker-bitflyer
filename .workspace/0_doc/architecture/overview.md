@@ -130,6 +130,8 @@ Ash は永続状態（注文、建玉、残高スナップショット、リス�
 
 Ready 状態の正本は `Bitflyer.Readiness`（`:not_ready` / `:ready` / `{:halted, reason}`）。UI・executor・health は同じ状態を読む。起動直後は `:not_ready`（fail-closed）。不整合時は `halt/1` し、Ready へ直接は戻さない。
 
+稼働 API は `GET /health`（JSON）。DB 断または readiness halted のとき 503、それ以外（起動中の `:not_ready` 含む）は 200。Compose の healthcheck もこのパスを見る。
+
 ## 発注経路
 
 1. strategy が「買いたい / 売りたい / 閉じたい」を内部コマンドとして出す
