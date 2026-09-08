@@ -157,5 +157,10 @@ strategy から API を直接叩かない。market-data の遅延や欠損があ
 
 - 開発: [env/dev.md](./env/dev.md)
 - 本番: [env/prod.md](./env/prod.md)
+- CI / CD: [ci-cd.md](./ci-cd.md)
 
 開発と本番は同じ Compose 構造を使い、接続先・上限・秘密情報・再起動ポリシーだけを変える。
+
+## CI
+
+ローカルと GitHub Actions は同じ `mix precommit` を品質ゲートにする。保証範囲・非保証・秘密情報の扱いは [ci-cd.md](./ci-cd.md) を正とする。CD（本番配布）はこの文書の対象外。
