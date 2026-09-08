@@ -99,7 +99,7 @@ defmodule Bitflyer.MarketData.FeedTest do
     assert status.connected?
     assert status.subscribe_count >= 1
 
-    socket = :sys.get_state(feed).socket
+    socket = status.socket
     assert MarketData.ticker_channel(@product) in Socket.Local.subscribed(socket)
 
     frame =
@@ -112,7 +112,7 @@ defmodule Bitflyer.MarketData.FeedTest do
       })
 
     Socket.Local.push_frame(socket, frame)
-    _ = :sys.get_state(feed)
+    _ = Feed.status(feed)
 
     assert_receive {:telemetry, [:bitflyer, :market_data, :tick], %{count: 1},
                     %{product_code: @product}},
@@ -171,7 +171,7 @@ defmodule Bitflyer.MarketData.FeedTest do
                    500
 
     fetches_after_connect = FakeRest.fetch_count()
-    socket = :sys.get_state(feed).socket
+    socket = Feed.status(feed).socket
     subs_before = length(Socket.Local.subscribed(socket))
     assert subs_before >= 1
 
@@ -227,7 +227,7 @@ defmodule Bitflyer.MarketData.FeedTest do
          reconnect_max_ms: 50}
       )
 
-    _ = :sys.get_state(feed)
+    _ = Feed.status(feed)
 
     started_at = Cache.monotonic_ms()
     newer = started_at + 10
@@ -239,7 +239,7 @@ defmodule Bitflyer.MarketData.FeedTest do
       {:gap_fill_tick, @market_key, %{ltp: Decimal.new("100")}, @product, started_at}
     )
 
-    _ = :sys.get_state(feed)
+    _ = Feed.status(feed)
 
     assert {:ok, %{ltp: ltp}, ^newer} = Cache.get(@market_key)
     assert Decimal.equal?(ltp, Decimal.new("5000000"))

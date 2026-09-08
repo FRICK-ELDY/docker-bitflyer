@@ -88,7 +88,8 @@ defmodule Bitflyer.MarketData.Feed do
       connected?: state.connected?,
       product_codes: state.product_codes,
       subscribe_count: state.subscribe_count,
-      reconnect_attempt: state.reconnect_attempt
+      reconnect_attempt: state.reconnect_attempt,
+      socket: state.socket
     }
 
     {:reply, status, state}
@@ -233,7 +234,15 @@ defmodule Bitflyer.MarketData.Feed do
               send(parent, {:gap_fill_tick, key, value, product_code, gap_fill_started_at})
 
             :error ->
-              :ok
+              Bitflyer.Telemetry.log(
+                :warning,
+                "market_data gap fill normalization failed",
+                %{
+                  product_code: product_code,
+                  reason: :normalization_failed,
+                  status: :gap_fill_failed
+                }
+              )
           end
 
         {:error, reason} ->
@@ -265,7 +274,12 @@ defmodule Bitflyer.MarketData.Feed do
         :ok
 
       :error ->
-        :ok
+        # フレーム全文はログに載せない（肥大・ノイズ回避）
+        Bitflyer.Telemetry.log(
+          :warning,
+          "market_data ws frame normalization failed",
+          %{reason: :normalization_failed, status: :ws_frame_failed}
+        )
     end
   end
 
