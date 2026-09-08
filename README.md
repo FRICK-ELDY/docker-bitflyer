@@ -26,7 +26,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-初回はイメージビルドと `deps.get` / `ash.setup` で時間がかかる。準備が終わると UI が `http://127.0.0.1:4000/` で開く。
+初回はイメージビルドと `deps.get` / `ash.setup` で時間がかかる。準備が終わると UI に `http://127.0.0.1:4000/` でアクセスできる。
 
 | サービス | ホスト公開 |
 | --- | --- |
@@ -50,6 +50,14 @@ docker compose run --rm app mix precommit
 ```
 
 中身は format チェック / warnings-as-errors の compile / test（両アプリ）。`MIX_ENV` は Compose に固定しない（`.env` にも書かない）。`preferred_envs` が `precommit` を `:test` にする。
+
+`ash.setup` は常駐起動（`phx.server`）時だけ走る。空の DB やマイグレーション追加のあとにゲートだけ先に回す場合は、先に次を実行する。
+
+```bash
+docker compose run --rm -e MIX_ENV=test app mix ash.setup --domains Bitflyer.System
+```
+
+（現状の test は開発用 DB を共有する。分離は改善計画の P0 #5。CI はジョブ内で setup してから `precommit` する。）
 
 GitHub Actions も同じ `mix precommit` を PR と `main` で実行する。範囲の詳細は [architecture/ci-cd.md](.workspace/0_doc/architecture/ci-cd.md)。**CI が赤のまま `main` へマージしない。**
 
