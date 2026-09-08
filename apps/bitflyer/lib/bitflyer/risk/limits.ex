@@ -1,7 +1,10 @@
 defmodule Bitflyer.Risk.Limits do
   @moduledoc """
-  risk-manager の上限設定。Application env から読む。
+  risk-manager の上限設定。Application env または呼び出し側の上書きを正規化する。
   """
+
+  @default_max_order_size "1"
+  @default_max_position_size "5"
 
   @type t :: %{
           max_order_size: Decimal.t(),
@@ -10,21 +13,28 @@ defmodule Bitflyer.Risk.Limits do
         }
 
   @doc """
-  現在の上限マップ。
+  Application env から現在の上限マップを読む。
   """
   @spec current() :: t()
   def current do
-    env = Application.get_env(:bitflyer, Bitflyer.Risk, [])
+    :bitflyer
+    |> Application.get_env(Bitflyer.Risk, [])
+    |> normalize()
+  end
 
+  @doc """
+  任意のマップまたはキーワードリストを `Limits.t()` に正規化する。
+  """
+  @spec normalize(map() | keyword()) :: t()
+  def normalize(limits) when is_list(limits), do: normalize(Map.new(limits))
+
+  def normalize(limits) when is_map(limits) do
     %{
-      max_order_size: decimal(Keyword.get(env, :max_order_size, "1")),
-      max_position_size: decimal(Keyword.get(env, :max_position_size, "5")),
+      max_order_size: decimal(Map.get(limits, :max_order_size, @default_max_order_size)),
+      max_position_size: decimal(Map.get(limits, :max_position_size, @default_max_position_size)),
       market_data_max_age_ms:
-        Keyword.get(
-          env,
-          :market_data_max_age_ms,
+        Map.get(limits, :market_data_max_age_ms) ||
           Bitflyer.MarketData.Cache.default_max_age_ms()
-        )
     }
   end
 

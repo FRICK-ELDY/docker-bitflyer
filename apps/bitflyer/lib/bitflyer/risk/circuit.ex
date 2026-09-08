@@ -128,7 +128,7 @@ defmodule Bitflyer.Risk.Circuit do
          |> Ash.create(
            upsert?: true,
            upsert_identity: :unique_name,
-           upsert_fields: [:halted, :reason, :halted_at]
+           upsert_fields: [:halted, :reason, :halted_at, :updated_at]
          ) do
       {:ok, _} -> :ok
       {:error, error} -> {:error, error}

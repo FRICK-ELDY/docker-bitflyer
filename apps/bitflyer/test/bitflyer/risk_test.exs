@@ -58,6 +58,18 @@ defmodule Bitflyer.RiskTest do
              )
   end
 
+  test "authorize normalizes partial limits overrides" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :limit_exceeded, %{limit: :max_order_size}} =
+             Risk.authorize(
+               valid_command(%{size: Decimal.new("0.02")}),
+               positions: [],
+               limits: %{max_order_size: "0.01"}
+             )
+  end
+
   test "authorize rejects projected position over limit" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()

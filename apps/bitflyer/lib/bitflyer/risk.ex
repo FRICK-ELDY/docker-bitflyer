@@ -27,14 +27,17 @@ defmodule Bitflyer.Risk do
 
   ## Options
   - `:readiness` — 既定 `Bitflyer.Readiness`
-  - `:limits` — `Limits.t()` 上書き
+  - `:limits` — 上限上書き（`Limits.normalize/1` される）
   - `:positions` — 建玉リスト（未指定時は DB から当該銘柄を読む）
-  - `:now` — Cache.fresh? 用 monotonic ms
+  - `:now` / `:server` — Cache.fresh?/3 へ転送
   - `:check_persisted_circuit` — 既定 false。true のとき Ready でも RiskState を見る（診断用。ホットパスでは使わない）
   """
   @spec authorize(map(), keyword()) :: result()
   def authorize(command, opts \\ []) when is_map(command) do
-    limits = Keyword.get_lazy(opts, :limits, &Limits.current/0)
+    limits =
+      opts
+      |> Keyword.get_lazy(:limits, &Limits.current/0)
+      |> Limits.normalize()
 
     result =
       with :ok <- validate_command(command),
@@ -127,7 +130,7 @@ defmodule Bitflyer.Risk do
   defp check_freshness(command, limits, opts) do
     key = Map.fetch!(command, :market_key)
     max_age = limits.market_data_max_age_ms
-    fresh_opts = Keyword.take(opts, [:now])
+    fresh_opts = Keyword.take(opts, [:now, :server])
 
     if Cache.fresh?(key, max_age, fresh_opts) do
       :ok
