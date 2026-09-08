@@ -142,8 +142,9 @@ defmodule Bitflyer.Startup.Reconcile do
   end
 
   defp compare_positions(internal, external) do
-    internal_map = Map.new(internal, &{&1.product_code, &1})
-    external_map = Map.new(external, &{&1.product_code, &1})
+    # size<=0 は「建玉なし」と同等（誤検知防止）。Resource 制約でも弾くが防御的に残す。
+    internal_map = Map.new(active_positions(internal), &{position_code(&1), &1})
+    external_map = Map.new(active_positions(external), &{position_code(&1), &1})
 
     codes = MapSet.union(MapSet.new(Map.keys(internal_map)), MapSet.new(Map.keys(external_map)))
 
@@ -168,15 +169,27 @@ defmodule Bitflyer.Startup.Reconcile do
     end)
   end
 
+  defp active_positions(positions) do
+    Enum.filter(positions, fn position ->
+      Decimal.compare(position_size(position), 0) == :gt
+    end)
+  end
+
+  defp position_code(position), do: Map.fetch!(as_map(position), :product_code)
+  defp position_size(position), do: Map.fetch!(as_map(position), :size)
+
   defp position_match?(left, right) do
+    left = as_map(left)
+    right = as_map(right)
+
     left.side == right.side and
       Decimal.eq?(left.size, right.size) and
       Decimal.eq?(left.average_price, right.average_price)
   end
 
   defp compare_balances(internal_snaps, external) do
-    internal_map = Map.new(internal_snaps, &{&1.currency, &1})
-    external_map = Map.new(external, &{&1.currency, &1})
+    internal_map = Map.new(internal_snaps, &{balance_currency(&1), &1})
+    external_map = Map.new(external, &{balance_currency(&1), &1})
 
     currencies =
       MapSet.union(MapSet.new(Map.keys(internal_map)), MapSet.new(Map.keys(external_map)))
@@ -201,32 +214,60 @@ defmodule Bitflyer.Startup.Reconcile do
     end)
   end
 
+  defp balance_currency(balance), do: Map.fetch!(as_map(balance), :currency)
+
   defp balance_match?(left, right) do
+    left = as_map(left)
+    right = as_map(right)
+
     Decimal.eq?(left.amount, right.amount) and Decimal.eq?(left.available, right.available)
   end
 
   defp compare_open_orders(internal, external) do
-    internal_ids =
-      internal
-      |> Enum.map(& &1.exchange_order_id)
-      |> Enum.reject(&is_nil/1)
-      |> MapSet.new()
+    internal_without_id = Enum.filter(internal, &is_nil(order_exchange_id(&1)))
 
-    external_ids =
-      external
-      |> Enum.map(& &1.exchange_order_id)
-      |> MapSet.new()
-
-    if MapSet.equal?(internal_ids, external_ids) do
-      :ok
+    if internal_without_id != [] do
+      {:error, :reconcile_mismatch, %{kind: :open_order_missing_exchange_id}}
     else
-      {:error, :reconcile_mismatch,
-       %{
-         kind: :open_orders_mismatch,
-         only_internal: MapSet.difference(internal_ids, external_ids) |> MapSet.to_list(),
-         only_exchange: MapSet.difference(external_ids, internal_ids) |> MapSet.to_list()
-       }}
+      internal_map = Map.new(internal, &{order_exchange_id(&1), &1})
+      external_map = Map.new(external, &{order_exchange_id(&1), &1})
+
+      ids = MapSet.union(MapSet.new(Map.keys(internal_map)), MapSet.new(Map.keys(external_map)))
+
+      Enum.reduce_while(ids, :ok, fn id, :ok ->
+        case {Map.get(internal_map, id), Map.get(external_map, id)} do
+          {nil, _} ->
+            {:halt,
+             {:error, :reconcile_mismatch,
+              %{kind: :open_order_missing_internal, exchange_order_id: id}}}
+
+          {_, nil} ->
+            {:halt,
+             {:error, :reconcile_mismatch,
+              %{kind: :open_order_missing_exchange, exchange_order_id: id}}}
+
+          {left, right} ->
+            if open_order_match?(left, right) do
+              {:cont, :ok}
+            else
+              {:halt,
+               {:error, :reconcile_mismatch, %{kind: :open_order_mismatch, exchange_order_id: id}}}
+            end
+        end
+      end)
     end
+  end
+
+  defp order_exchange_id(order), do: Map.get(as_map(order), :exchange_order_id)
+
+  defp open_order_match?(left, right) do
+    left = as_map(left)
+    right = as_map(right)
+
+    left.product_code == right.product_code and
+      left.side == right.side and
+      Decimal.eq?(left.size, right.size) and
+      Decimal.eq?(left.filled_size, right.filled_size)
   end
 
   defp read_risk_state do
@@ -248,17 +289,28 @@ defmodule Bitflyer.Startup.Reconcile do
   end
 
   defp read_latest_balances(trade_mode) do
-    case BalanceSnapshot
-         |> Ash.Query.filter(trade_mode == ^trade_mode)
-         |> Ash.Query.sort(captured_at: :desc)
-         |> Ash.read() do
-      {:ok, snapshots} ->
-        latest =
-          snapshots
-          |> Enum.group_by(& &1.currency)
-          |> Enum.map(fn {_currency, rows} -> hd(rows) end)
+    mode = Atom.to_string(trade_mode)
 
-        {:ok, latest}
+    sql = """
+    SELECT DISTINCT ON (currency) id
+    FROM balance_snapshots
+    WHERE trade_mode = $1
+    ORDER BY currency ASC, captured_at DESC
+    """
+
+    case Ecto.Adapters.SQL.query(Bitflyer.Repo, sql, [mode]) do
+      {:ok, %{rows: []}} ->
+        {:ok, []}
+
+      {:ok, %{rows: rows}} ->
+        ids = Enum.map(rows, fn [id] -> id end)
+
+        case BalanceSnapshot
+             |> Ash.Query.filter(id in ^ids)
+             |> Ash.read() do
+          {:ok, snapshots} -> {:ok, snapshots}
+          {:error, error} -> {:error, error}
+        end
 
       {:error, error} ->
         {:error, error}
@@ -275,4 +327,7 @@ defmodule Bitflyer.Startup.Reconcile do
       {:error, error} -> {:error, error}
     end
   end
+
+  defp as_map(%{__struct__: _} = struct), do: Map.from_struct(struct)
+  defp as_map(map) when is_map(map), do: Map.new(map)
 end

@@ -5,6 +5,7 @@ defmodule Bitflyer.Startup.Reconciler do
   - 成功 → `Readiness.mark_ready/0`（halted 中は拒否される）
   - 失敗 → `Readiness.halt/1` と RiskState 永続化。Ready にはしない
 
+  起動時の重い突合は `handle_continue/2` で行い、`init/1` はすぐ返す。
   テストでは `boot?: false` にして明示的に `run_now/0` する
   （SQL Sandbox との所有権衝突を避ける）。
   """
@@ -52,16 +53,22 @@ defmodule Bitflyer.Startup.Reconciler do
       booted?: false
     }
 
-    state =
-      if state.boot? do
-        state
-        |> then(&apply_result(run_reconcile(&1), &1))
-        |> Map.put(:booted?, true)
-      else
-        state
-      end
+    if state.boot? do
+      {:ok, state, {:continue, :boot_reconcile}}
+    else
+      {:ok, schedule_periodic(state)}
+    end
+  end
 
-    {:ok, schedule_periodic(state)}
+  @impl true
+  def handle_continue(:boot_reconcile, state) do
+    state =
+      state
+      |> then(&apply_result(run_reconcile(&1), &1))
+      |> Map.put(:booted?, true)
+      |> schedule_periodic()
+
+    {:noreply, state}
   end
 
   @impl true
@@ -140,10 +147,9 @@ defmodule Bitflyer.Startup.Reconciler do
          |> Ash.Query.filter(name == "default")
          |> Ash.read_one() do
       {:ok, nil} ->
-        _ =
-          RiskState
-          |> Ash.Changeset.for_create(:create, %{name: "default", halted: false})
-          |> Ash.create()
+        RiskState
+        |> Ash.Changeset.for_create(:create, %{name: "default", halted: false})
+        |> Ash.create!()
 
         :ok
 
@@ -151,19 +157,18 @@ defmodule Bitflyer.Startup.Reconciler do
         :ok
 
       {:ok, %RiskState{} = risk} ->
-        _ =
-          risk
-          |> Ash.Changeset.for_update(:update, %{
-            halted: false,
-            reason: nil,
-            halted_at: nil
-          })
-          |> Ash.update()
+        risk
+        |> Ash.Changeset.for_update(:update, %{
+          halted: false,
+          reason: nil,
+          halted_at: nil
+        })
+        |> Ash.update!()
 
         :ok
 
-      {:error, _} ->
-        :ok
+      {:error, error} ->
+        raise "Failed to read RiskState while clearing halt: #{inspect(error)}"
     end
   end
 
@@ -181,19 +186,21 @@ defmodule Bitflyer.Startup.Reconciler do
          |> Ash.Query.filter(name == "default")
          |> Ash.read_one() do
       {:ok, nil} ->
-        _ = RiskState |> Ash.Changeset.for_create(:create, attrs) |> Ash.create()
+        RiskState
+        |> Ash.Changeset.for_create(:create, attrs)
+        |> Ash.create!()
+
         :ok
 
       {:ok, %RiskState{} = risk} ->
-        _ =
-          risk
-          |> Ash.Changeset.for_update(:update, Map.take(attrs, [:halted, :reason, :halted_at]))
-          |> Ash.update()
+        risk
+        |> Ash.Changeset.for_update(:update, Map.take(attrs, [:halted, :reason, :halted_at]))
+        |> Ash.update!()
 
         :ok
 
-      {:error, _} ->
-        :ok
+      {:error, error} ->
+        raise "Failed to read RiskState while persisting halt: #{inspect(error)}"
     end
   end
 
