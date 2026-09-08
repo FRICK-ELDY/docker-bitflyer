@@ -5,6 +5,9 @@ defmodule Bitflyer.TradeMode do
   許可値は `dry_run` / `paper` / `live` のみ。不正値は起動時に停止する。
   `live` でも `BITFLYER_LIVE_CONFIRM`（UTC 日付）と Ready が揃うまで
   取引所への発注は許可しない。
+
+  環境変数の初期パースは `config/runtime.exs` 側（stdlib のみ）で行い、
+  本モジュールは起動後の判定・述語の正本とする。許可値と confirm 規則を変えるときは両方を更新すること。
   """
 
   @type t :: :dry_run | :paper | :live
