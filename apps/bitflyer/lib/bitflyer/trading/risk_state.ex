@@ -56,6 +56,8 @@ defmodule Bitflyer.Trading.RiskState do
   validations do
     validate present(:reason), where: [attribute_equals(:halted, true)]
     validate present(:halted_at), where: [attribute_equals(:halted, true)]
+    validate absent(:reason), where: [attribute_equals(:halted, false)]
+    validate absent(:halted_at), where: [attribute_equals(:halted, false)]
   end
 
   identities do

@@ -59,4 +59,8 @@ defmodule Bitflyer.Trading.BalanceSnapshot do
     create_timestamp :inserted_at
     update_timestamp :updated_at
   end
+
+  validations do
+    validate compare(:available, less_than_or_equal_to: :amount)
+  end
 end

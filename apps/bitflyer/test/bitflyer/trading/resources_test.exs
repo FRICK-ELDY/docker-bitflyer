@@ -37,7 +37,7 @@ defmodule Bitflyer.Trading.ResourcesTest do
                |> Ash.create()
     end
 
-    test "requires price for limit orders; market may omit price" do
+    test "requires price for limit orders; market forbids price" do
       assert {:error, %Ash.Error.Invalid{}} =
                Order
                |> Ash.Changeset.for_create(:create, %{
@@ -45,6 +45,19 @@ defmodule Bitflyer.Trading.ResourcesTest do
                  product_code: "FX_BTC_JPY",
                  side: :buy,
                  order_type: :limit,
+                 size: Decimal.new("0.01"),
+                 trade_mode: :dry_run
+               })
+               |> Ash.create()
+
+      assert {:error, %Ash.Error.Invalid{}} =
+               Order
+               |> Ash.Changeset.for_create(:create, %{
+                 internal_order_id: "ord-market-with-price",
+                 product_code: "FX_BTC_JPY",
+                 side: :buy,
+                 order_type: :market,
+                 price: Decimal.new("5000000"),
                  size: Decimal.new("0.01"),
                  trade_mode: :dry_run
                })
@@ -63,6 +76,21 @@ defmodule Bitflyer.Trading.ResourcesTest do
                |> Ash.create()
 
       assert is_nil(market.price)
+    end
+
+    test "rejects filled_size greater than size" do
+      assert {:error, %Ash.Error.Invalid{}} =
+               Order
+               |> Ash.Changeset.for_create(:create, %{
+                 internal_order_id: "ord-overfill",
+                 product_code: "FX_BTC_JPY",
+                 side: :buy,
+                 price: Decimal.new("5000000"),
+                 size: Decimal.new("0.01"),
+                 filled_size: Decimal.new("0.02"),
+                 trade_mode: :dry_run
+               })
+               |> Ash.create()
     end
 
     test "rejects non-positive size" do
@@ -178,12 +206,25 @@ defmodule Bitflyer.Trading.ResourcesTest do
       assert Decimal.eq?(snapshot.amount, Decimal.new("1000000"))
       assert Decimal.eq?(snapshot.available, Decimal.new("950000"))
     end
+
+    test "rejects available greater than amount" do
+      captured_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      assert {:error, %Ash.Error.Invalid{}} =
+               BalanceSnapshot
+               |> Ash.Changeset.for_create(:create, %{
+                 currency: "JPY",
+                 amount: Decimal.new("1000000"),
+                 available: Decimal.new("1000001"),
+                 captured_at: captured_at,
+                 trade_mode: :live
+               })
+               |> Ash.create()
+    end
   end
 
   describe "RiskState" do
-    test "persists halt reason with unique name; halted requires reason and halted_at" do
-      halted_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-
+    test "halted requires reason and halted_at" do
       assert {:error, %Ash.Error.Invalid{}} =
                RiskState
                |> Ash.Changeset.for_create(:create, %{
@@ -192,10 +233,12 @@ defmodule Bitflyer.Trading.ResourcesTest do
                })
                |> Ash.create()
 
+      halted_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
       assert {:ok, state} =
                RiskState
                |> Ash.Changeset.for_create(:create, %{
-                 name: "default",
+                 name: "halted-default",
                  halted: true,
                  reason: "reconcile_mismatch",
                  halted_at: halted_at
@@ -204,6 +247,43 @@ defmodule Bitflyer.Trading.ResourcesTest do
 
       assert state.halted
       assert state.reason == "reconcile_mismatch"
+    end
+
+    test "not halted clears reason fields and can be created" do
+      assert {:ok, state} =
+               RiskState
+               |> Ash.Changeset.for_create(:create, %{
+                 name: "not-halted",
+                 halted: false
+               })
+               |> Ash.create()
+
+      assert state.halted == false
+      assert is_nil(state.reason)
+      assert is_nil(state.halted_at)
+
+      assert {:error, %Ash.Error.Invalid{}} =
+               RiskState
+               |> Ash.Changeset.for_create(:create, %{
+                 name: "stale-reason",
+                 halted: false,
+                 reason: "old"
+               })
+               |> Ash.create()
+    end
+
+    test "name is unique" do
+      halted_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      assert {:ok, _} =
+               RiskState
+               |> Ash.Changeset.for_create(:create, %{
+                 name: "default",
+                 halted: true,
+                 reason: "reconcile_mismatch",
+                 halted_at: halted_at
+               })
+               |> Ash.create()
 
       assert {:error, %Ash.Error.Invalid{}} =
                RiskState
