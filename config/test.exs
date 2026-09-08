@@ -26,3 +26,8 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Sandbox 所有権と衝突しないよう、テストでは起動時突合を手動にする
+config :bitflyer, Bitflyer.Startup.Reconciler,
+  boot?: false,
+  interval_ms: :infinity

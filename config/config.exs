@@ -3,7 +3,12 @@ import Config
 
 config :bitflyer,
   ecto_repos: [Bitflyer.Repo],
-  ash_domains: [Bitflyer.System, Bitflyer.Trading]
+  ash_domains: [Bitflyer.System, Bitflyer.Trading],
+  exchange_client: Bitflyer.Exchange.Unavailable
+
+config :bitflyer, Bitflyer.Startup.Reconciler,
+  boot?: true,
+  interval_ms: 60_000
 
 config :ui,
   generators: [timestamp_type: :utc_datetime]
