@@ -29,12 +29,6 @@ defmodule Ui.MixProject do
     ]
   end
 
-  def cli do
-    [
-      preferred_envs: [precommit: :test]
-    ]
-  end
-
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
@@ -94,8 +88,7 @@ defmodule Ui.MixProject do
         "tailwind ui --minify",
         "esbuild ui --minify",
         "phx.digest"
-      ],
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
+      ]
     ]
   end
 end

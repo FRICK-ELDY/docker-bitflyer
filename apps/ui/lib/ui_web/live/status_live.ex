@@ -27,14 +27,14 @@ defmodule UiWeb.StatusLive do
         <div class="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p class="text-sm uppercase tracking-wide text-base-content/60">{gettext("Status")}</p>
-            
+
             <h1 id="app-name" class="mt-2 text-3xl font-semibold tracking-tight">{@app_name}</h1>
-            
+
             <p class="mt-2 text-base-content/70">
               {gettext("Operational health check. This is not a trading UI.")}
             </p>
           </div>
-          
+
           <nav
             id="locale-switcher"
             class="flex items-center gap-2 text-sm"
@@ -51,7 +51,7 @@ defmodule UiWeb.StatusLive do
             >
               English
             </.link>
-             <span class="text-base-content/30" aria-hidden="true">|</span>
+            <span class="text-base-content/30" aria-hidden="true">|</span>
             <.link
               id="locale-ja"
               href={~p"/locale/ja"}
@@ -65,17 +65,17 @@ defmodule UiWeb.StatusLive do
             </.link>
           </nav>
         </div>
-        
+
         <dl class="grid gap-4 sm:grid-cols-2">
           <div id="trade-mode-card" class="rounded-lg border border-base-300 bg-base-200/40 p-4">
             <dt class="text-sm text-base-content/60">{gettext("Trade mode")}</dt>
-            
+
             <dd id="trade-mode" class="mt-1 font-mono text-lg font-medium">{@trade_mode}</dd>
           </div>
-          
+
           <div id="db-status-card" class="rounded-lg border border-base-300 bg-base-200/40 p-4">
             <dt class="text-sm text-base-content/60">PostgreSQL</dt>
-            
+
             <dd class="mt-1 flex items-center gap-2 text-lg font-medium">
               <span
                 id="db-status"
@@ -89,7 +89,7 @@ defmodule UiWeb.StatusLive do
                 {if(@db_ok?, do: gettext("connected"), else: gettext("unavailable"))}
               </span>
             </dd>
-            
+
             <p :if={@db_error} id="db-error" class="mt-2 text-sm text-error">{@db_error}</p>
           </div>
         </dl>
