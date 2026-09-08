@@ -1,6 +1,6 @@
 defmodule UiWeb.StatusLive do
   @moduledoc """
-  稼働確認ページ。アプリ名・取引モード・DB 接続可否を表示する。
+  稼働確認ページ。アプリ名・取引モード・Ready 状態・DB 接続可否を表示する。
   """
   use UiWeb, :live_view
 
@@ -66,13 +66,19 @@ defmodule UiWeb.StatusLive do
           </nav>
         </div>
 
-        <dl class="grid gap-4 sm:grid-cols-2">
+        <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div id="trade-mode-card" class="rounded-lg border border-base-300 bg-base-200/40 p-4">
             <dt class="text-sm text-base-content/60">{gettext("Trade mode")}</dt>
 
             <dd id="trade-mode" class="mt-1 font-mono text-lg font-medium">
               {Bitflyer.TradeMode.name(@trade_mode)}
             </dd>
+          </div>
+
+          <div id="readiness-card" class="rounded-lg border border-base-300 bg-base-200/40 p-4">
+            <dt class="text-sm text-base-content/60">{gettext("Readiness")}</dt>
+
+            <dd id="readiness" class="mt-1 font-mono text-lg font-medium">{@readiness_label}</dd>
           </div>
 
           <div id="db-status-card" class="rounded-lg border border-base-300 bg-base-200/40 p-4">
@@ -107,9 +113,13 @@ defmodule UiWeb.StatusLive do
         {:error, message} -> {false, message}
       end
 
+    readiness = Bitflyer.System.readiness()
+
     socket
     |> assign(:app_name, "docker_bitflyer")
     |> assign(:trade_mode, Bitflyer.System.trade_mode())
+    |> assign(:readiness, readiness)
+    |> assign(:readiness_label, Bitflyer.Readiness.format(readiness))
     |> assign(:db_ok?, db_ok?)
     |> assign(:db_error, db_error)
   end

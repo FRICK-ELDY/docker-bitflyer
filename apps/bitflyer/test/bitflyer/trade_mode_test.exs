@@ -1,19 +1,21 @@
 defmodule Bitflyer.TradeModeTest do
   use ExUnit.Case, async: false
 
+  alias Bitflyer.Readiness
   alias Bitflyer.TradeMode
 
   setup do
     previous = %{
       trade_mode: Application.get_env(:bitflyer, :trade_mode),
-      live_confirmed: Application.get_env(:bitflyer, :live_confirmed),
-      readiness: Application.get_env(:bitflyer, :readiness)
+      live_confirmed: Application.get_env(:bitflyer, :live_confirmed)
     }
+
+    reset_readiness()
 
     on_exit(fn ->
       restore_env(:trade_mode, previous.trade_mode)
       restore_env(:live_confirmed, previous.live_confirmed)
-      restore_env(:readiness, previous.readiness)
+      reset_readiness()
     end)
 
     :ok
@@ -65,7 +67,7 @@ defmodule Bitflyer.TradeModeTest do
     test "dry_run and paper never permit exchange orders" do
       Application.put_env(:bitflyer, :trade_mode, :dry_run)
       Application.put_env(:bitflyer, :live_confirmed, true)
-      Application.put_env(:bitflyer, :readiness, :ready)
+      assert Readiness.mark_ready() == :ok
 
       assert TradeMode.exchange_order_gate() == {:halted, :not_live_mode}
       refute TradeMode.exchange_orders_permitted?()
@@ -77,7 +79,7 @@ defmodule Bitflyer.TradeModeTest do
     test "live alone without confirm stays halted" do
       Application.put_env(:bitflyer, :trade_mode, :live)
       Application.put_env(:bitflyer, :live_confirmed, false)
-      Application.put_env(:bitflyer, :readiness, :ready)
+      assert Readiness.mark_ready() == :ok
 
       assert TradeMode.exchange_order_gate() == {:halted, :live_confirm_missing}
       refute TradeMode.exchange_orders_permitted?()
@@ -86,16 +88,25 @@ defmodule Bitflyer.TradeModeTest do
     test "live with confirm but not ready stays halted" do
       Application.put_env(:bitflyer, :trade_mode, :live)
       Application.put_env(:bitflyer, :live_confirmed, true)
-      Application.put_env(:bitflyer, :readiness, :not_ready)
+      reset_readiness()
 
       assert TradeMode.exchange_order_gate() == {:halted, :not_ready}
+      refute TradeMode.exchange_orders_permitted?()
+    end
+
+    test "live with confirm propagates readiness halt reason" do
+      Application.put_env(:bitflyer, :trade_mode, :live)
+      Application.put_env(:bitflyer, :live_confirmed, true)
+      assert Readiness.halt(:reconcile_mismatch) == :ok
+
+      assert TradeMode.exchange_order_gate() == {:halted, :reconcile_mismatch}
       refute TradeMode.exchange_orders_permitted?()
     end
 
     test "live with confirm and ready permits exchange orders" do
       Application.put_env(:bitflyer, :trade_mode, :live)
       Application.put_env(:bitflyer, :live_confirmed, true)
-      Application.put_env(:bitflyer, :readiness, :ready)
+      assert Readiness.mark_ready() == :ok
 
       assert TradeMode.exchange_order_gate() == :ok
       assert TradeMode.exchange_orders_permitted?()
@@ -104,4 +115,17 @@ defmodule Bitflyer.TradeModeTest do
 
   defp restore_env(key, nil), do: Application.delete_env(:bitflyer, key)
   defp restore_env(key, value), do: Application.put_env(:bitflyer, key, value)
+
+  defp reset_readiness do
+    case Readiness.get() do
+      {:halted, _} ->
+        assert Readiness.clear_halt() == :ok
+
+      :ready ->
+        assert Readiness.mark_not_ready() == :ok
+
+      :not_ready ->
+        :ok
+    end
+  end
 end

@@ -128,6 +128,8 @@ Ash は永続状態（注文、建玉、残高スナップショット、リス�
 5. 市場データの購読を開始する
 6. ヘルスチェックを Ready にする
 
+Ready 状態の正本は `Bitflyer.Readiness`（`:not_ready` / `:ready` / `{:halted, reason}`）。UI・executor・health は同じ状態を読む。起動直後は `:not_ready`（fail-closed）。不整合時は `halt/1` し、Ready へ直接は戻さない。
+
 ## 発注経路
 
 1. strategy が「買いたい / 売りたい / 閉じたい」を内部コマンドとして出す

@@ -11,58 +11,70 @@ msgstr ""
 "Language: ja\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: lib/ui_web/components/core_components.ex:375
+#: lib/ui_web/components/core_components.ex:381
 #, elixir-autogen, elixir-format
 msgid "Actions"
 msgstr "操作"
 
-#: lib/ui_web/components/layouts.ex:102
-#: lib/ui_web/components/layouts.ex:117
+#: lib/ui_web/components/layouts.ex:103
+#: lib/ui_web/components/layouts.ex:118
 #, elixir-autogen, elixir-format
 msgid "Attempting to reconnect"
 msgstr "再接続を試行しています"
 
-#: lib/ui_web/live/status_live.ex:36
+#: lib/ui_web/live/status_live.ex:41
+#: lib/ui_web/live/status_live.ex:41
 #, elixir-autogen, elixir-format
 msgid "Language"
 msgstr "言語"
 
-#: lib/ui_web/live/status_live.ex:32
+#: lib/ui_web/live/status_live.ex:34
+#: lib/ui_web/live/status_live.ex:34
 #, elixir-autogen, elixir-format
 msgid "Operational health check. This is not a trading UI."
 msgstr "運用用の生存確認。取引 UI ではない。"
 
-#: lib/ui_web/components/layouts.ex:109
+#: lib/ui_web/components/layouts.ex:110
 #, elixir-autogen, elixir-format
 msgid "Something went wrong!"
 msgstr "問題が発生しました"
 
 #: lib/ui_web/live/status_live.ex:29
+#: lib/ui_web/live/status_live.ex:29
 #, elixir-autogen, elixir-format
 msgid "Status"
 msgstr "ステータス"
 
-#: lib/ui_web/live/status_live.ex:65
+#: lib/ui_web/live/status_live.ex:71
+#: lib/ui_web/live/status_live.ex:71
 #, elixir-autogen, elixir-format
 msgid "Trade mode"
 msgstr "取引モード"
 
-#: lib/ui_web/components/layouts.ex:94
+#: lib/ui_web/components/layouts.ex:95
 #, elixir-autogen, elixir-format
 msgid "We can't find the internet"
 msgstr "インターネットに接続できません"
 
-#: lib/ui_web/components/core_components.ex:81
+#: lib/ui_web/components/core_components.ex:82
 #, elixir-autogen, elixir-format
 msgid "close"
 msgstr "閉じる"
 
-#: lib/ui_web/live/status_live.ex:81
+#: lib/ui_web/live/status_live.ex:97
+#: lib/ui_web/live/status_live.ex:97
 #, elixir-autogen, elixir-format
 msgid "connected"
 msgstr "接続中"
 
-#: lib/ui_web/live/status_live.ex:81
+#: lib/ui_web/live/status_live.ex:97
+#: lib/ui_web/live/status_live.ex:97
 #, elixir-autogen, elixir-format
 msgid "unavailable"
 msgstr "利用不可"
+
+#: lib/ui_web/live/status_live.ex:79
+#: lib/ui_web/live/status_live.ex:79
+#, elixir-autogen, elixir-format
+msgid "Readiness"
+msgstr "Ready 状態"
