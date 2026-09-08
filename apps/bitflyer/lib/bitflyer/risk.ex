@@ -3,7 +3,8 @@ defmodule Bitflyer.Risk do
   risk-manager の公開境界。
 
   strategy からの発注意図は必ず `authorize/2` を通す（fail-closed）。
-  上限超過・stale・未同期は必ず拒否する。サーキット開は `open_circuit/1`。
+  上限超過・stale・未同期は必ず拒否する。
+  サーキットは `open_circuit/1` / `clear_circuit/1`。
   """
 
   require Ash.Query
@@ -61,6 +62,12 @@ defmodule Bitflyer.Risk do
   def open_circuit(reason, opts \\ []) when is_atom(reason) do
     Circuit.open(reason, opts)
   end
+
+  @doc """
+  サーキットを閉じる（RiskState 解除のあと Readiness.clear_halt）。
+  """
+  @spec clear_circuit(keyword()) :: :ok | {:error, term()}
+  def clear_circuit(opts \\ []), do: Circuit.close(opts)
 
   @doc """
   サーキットが開いているか。
@@ -149,39 +156,41 @@ defmodule Bitflyer.Risk do
     side = Map.fetch!(command, :side)
     product_code = Map.fetch!(command, :product_code)
 
-    positions =
-      cond do
-        Keyword.has_key?(opts, :positions) ->
-          Keyword.get(opts, :positions)
+    case fetch_positions(product_code, opts) do
+      {:ok, positions} ->
+        projected = projected_position_size(positions, product_code, side, size)
 
-        true ->
-          load_positions(product_code, opts)
-      end
+        if Decimal.gt?(projected, limits.max_position_size) do
+          {:error, :limit_exceeded,
+           %{
+             limit: :max_position_size,
+             projected: projected,
+             max: limits.max_position_size,
+             product_code: product_code
+           }}
+        else
+          :ok
+        end
 
-    projected = projected_position_size(positions, product_code, side, size)
+      {:error, _error} ->
+        # 建玉が読めないときは空とみなさない（fail-closed）
+        {:error, :unsynced, %{reason: :position_load_failed, product_code: product_code}}
+    end
+  end
 
-    if Decimal.gt?(projected, limits.max_position_size) do
-      {:error, :limit_exceeded,
-       %{
-         limit: :max_position_size,
-         projected: projected,
-         max: limits.max_position_size,
-         product_code: product_code
-       }}
-    else
-      :ok
+  defp fetch_positions(product_code, opts) do
+    case Keyword.fetch(opts, :positions) do
+      {:ok, positions} -> {:ok, positions || []}
+      :error -> load_positions(product_code, opts)
     end
   end
 
   defp load_positions(product_code, opts) do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
 
-    case Position
-         |> Ash.Query.filter(product_code == ^product_code and trade_mode == ^trade_mode)
-         |> Ash.read() do
-      {:ok, positions} -> positions
-      {:error, _} -> []
-    end
+    Position
+    |> Ash.Query.filter(product_code == ^product_code and trade_mode == ^trade_mode)
+    |> Ash.read()
   end
 
   defp projected_position_size(positions, product_code, side, size) do
