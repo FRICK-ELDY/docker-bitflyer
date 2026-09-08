@@ -4,15 +4,31 @@ defmodule UiWeb.HealthController do
   """
   use UiWeb, :controller
 
-  require Logger
-
   def show(conn, _params) do
     health = Bitflyer.System.health()
     status_code = if health.healthy?, do: 200, else: 503
 
     if not health.healthy? do
-      Logger.error(
-        "health check unhealthy status=#{health.status} reason=#{inspect(health.reason)} db=#{health.db} db_error=#{inspect(health.db_error)}"
+      Bitflyer.Telemetry.execute(
+        :health_unhealthy,
+        %{count: 1},
+        %{
+          status: health.status,
+          reason: health.reason,
+          db: health.db,
+          readiness: Bitflyer.Readiness.format(health.readiness),
+          trade_mode: health.trade_mode
+        }
+      )
+
+      # db_error は公開 JSON / telemetry metadata に載せない。サーバログ本文のみ。
+      Bitflyer.Telemetry.log(
+        :error,
+        "health check unhealthy status=#{health.status} reason=#{inspect(health.reason)} db=#{health.db} db_error=#{inspect(health.db_error)}",
+        status: health.status,
+        reason: health.reason,
+        db: health.db,
+        trade_mode: health.trade_mode
       )
     end
 

@@ -66,4 +66,28 @@ defmodule Bitflyer.ReadinessTest do
     assert Readiness.mark_ready() == :ok
     assert Readiness.clear_halt() == {:error, :not_halted}
   end
+
+  test "state transitions emit readiness_changed telemetry" do
+    parent = self()
+    handler_id = "readiness-telemetry-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:bitflyer, :readiness, :changed],
+        fn event, measurements, metadata, _config ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert Readiness.mark_ready() == :ok
+
+    assert_receive {:telemetry, [:bitflyer, :readiness, :changed], %{count: 1}, metadata}
+    assert metadata.from == "not_ready"
+    assert metadata.to == "ready"
+    assert metadata.trade_mode == :dry_run
+  end
 end

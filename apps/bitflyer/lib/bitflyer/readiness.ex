@@ -132,6 +132,7 @@ defmodule Bitflyer.Readiness do
     case ets_get(table) do
       :not_ready ->
         ets_put(table, :ready)
+        emit_changed(:not_ready, :ready)
         {:reply, :ok, table}
 
       :ready ->
@@ -147,26 +148,49 @@ defmodule Bitflyer.Readiness do
       {:halted, _} ->
         {:reply, :ok, table}
 
-      _ ->
+      :not_ready ->
+        {:reply, :ok, table}
+
+      :ready ->
         ets_put(table, :not_ready)
+        emit_changed(:ready, :not_ready)
         {:reply, :ok, table}
     end
   end
 
   def handle_call({:halt, reason}, _from, table) when is_atom(reason) do
-    ets_put(table, {:halted, reason})
+    from = ets_get(table)
+    to = {:halted, reason}
+    ets_put(table, to)
+    emit_changed(from, to, %{reason: reason})
     {:reply, :ok, table}
   end
 
   def handle_call(:clear_halt, _from, table) do
     case ets_get(table) do
-      {:halted, _} ->
+      {:halted, reason} = from ->
         ets_put(table, :not_ready)
+        emit_changed(from, :not_ready, %{reason: reason})
         {:reply, :ok, table}
 
       _ ->
         {:reply, {:error, :not_halted}, table}
     end
+  end
+
+  defp emit_changed(from, to, extra \\ %{}) do
+    Bitflyer.Telemetry.execute(
+      :readiness_changed,
+      %{count: 1},
+      Map.merge(
+        %{
+          from: format(from),
+          to: format(to),
+          trade_mode: Bitflyer.TradeMode.current()
+        },
+        extra
+      )
+    )
   end
 
   defp ensure_table(table) when is_atom(table) do
