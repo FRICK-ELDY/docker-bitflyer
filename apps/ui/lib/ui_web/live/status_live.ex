@@ -70,7 +70,9 @@ defmodule UiWeb.StatusLive do
           <div id="trade-mode-card" class="rounded-lg border border-base-300 bg-base-200/40 p-4">
             <dt class="text-sm text-base-content/60">{gettext("Trade mode")}</dt>
 
-            <dd id="trade-mode" class="mt-1 font-mono text-lg font-medium">{@trade_mode}</dd>
+            <dd id="trade-mode" class="mt-1 font-mono text-lg font-medium">
+              {Bitflyer.TradeMode.name(@trade_mode)}
+            </dd>
           </div>
 
           <div id="db-status-card" class="rounded-lg border border-base-300 bg-base-200/40 p-4">
