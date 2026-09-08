@@ -46,7 +46,8 @@
 | `TEST_DATABASE_URL` | 任意。未設定時は `MIX_ENV=test` で DB 名を `*_test` に寄せる |
 | `SECRET_KEY_BASE` | Phoenix 用 |
 | `PHX_HOST` | 開発は `localhost` |
-| `TRADE_MODE` | 既定 `dry_run`。`paper` / `live` は明示 |
+| `TRADE_MODE` | 既定 `dry_run`。許可は `dry_run` / `paper` / `live` のみ（不正値は起動停止） |
+| `BITFLYER_LIVE_CONFIRM` | `live` 実発注の二重確認。UTC 当日の `YYYY-MM-DD`。未設定・不一致なら発注は halted |
 
 ## 起動の前提
 

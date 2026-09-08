@@ -98,7 +98,7 @@ Ash は永続状態（注文、建玉、残高スナップショット、リス�
 
 ペーパーは `apps/paper` にしない。strategy と risk-manager はどのモードでも同じ経路を通り、切り替えるのは order-executor の出口だけにする。同じ経路を通さないペーパーは、本番で初めて壊れる。
 
-`TRADE_MODE` で選ぶ。開発の既定は `dry_run`。`paper` と `live` は明示する。live へ切り替える操作は設定上で目立たせ、キーも混ぜない。
+`TRADE_MODE` で選ぶ。開発の既定は `dry_run`。`paper` と `live` は明示する。live へ切り替える操作は設定上で目立たせ、キーも混ぜない。`TRADE_MODE=live` だけでは実発注しない。`BITFLYER_LIVE_CONFIRM`（UTC 当日の `YYYY-MM-DD`）と Ready 完了が揃うまで発注は halted。許可値以外の `TRADE_MODE` は起動時に停止する。
 
 | モード | 約定 | 建玉・残高 | 市場データ |
 | --- | --- | --- | --- |

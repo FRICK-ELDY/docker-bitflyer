@@ -9,7 +9,7 @@ defmodule UiWeb.StatusLiveTest do
     {:ok, view, _html} = live(conn, ~p"/")
 
     assert has_element?(view, "#app-name", "docker_bitflyer")
-    assert has_element?(view, "#trade-mode")
+    assert has_element?(view, "#trade-mode", "dry_run")
     assert has_element?(view, "#db-status-label")
     assert has_element?(view, "#status-page", "Operational health check")
     assert has_element?(view, "#status-page", "Trade mode")

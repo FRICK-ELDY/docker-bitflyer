@@ -26,9 +26,23 @@ defmodule Bitflyer.System do
   end
 
   @doc """
-  現在の取引モード（`dry_run` / `paper` / `live`）。
+  現在の取引モード（`:dry_run` / `:paper` / `:live`）。
   """
   def trade_mode do
-    Application.get_env(:bitflyer, :trade_mode, "dry_run")
+    Bitflyer.TradeMode.current()
+  end
+
+  @doc """
+  取引所への実発注が許可されているか（live + 二重確認 + Ready）。
+  """
+  def exchange_orders_permitted? do
+    Bitflyer.TradeMode.exchange_orders_permitted?()
+  end
+
+  @doc """
+  発注ゲート。`:ok` または `{:halted, reason}`。
+  """
+  def exchange_order_gate do
+    Bitflyer.TradeMode.exchange_order_gate()
   end
 end

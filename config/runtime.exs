@@ -72,8 +72,16 @@ repo_config =
 
 config :bitflyer, Bitflyer.Repo, repo_config
 
+# TRADE_MODE は dry_run / paper / live のみ。不正値はここで起動停止。
+# live の実発注は BITFLYER_LIVE_CONFIRM（UTC の YYYY-MM-DD）+ Ready が揃うまで不可。
+trade_mode = Bitflyer.TradeMode.parse!(System.get_env("TRADE_MODE") || "dry_run")
+
+live_confirmed =
+  Bitflyer.TradeMode.valid_live_confirm?(System.get_env("BITFLYER_LIVE_CONFIRM"))
+
 config :bitflyer,
-  trade_mode: System.get_env("TRADE_MODE") || "dry_run"
+  trade_mode: trade_mode,
+  live_confirmed: live_confirmed
 
 # ## Using releases
 #
