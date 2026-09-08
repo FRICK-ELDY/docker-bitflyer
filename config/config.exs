@@ -12,6 +12,11 @@ config :bitflyer, Bitflyer.Startup.Reconciler,
 
 config :bitflyer, Bitflyer.MarketData.Cache, default_max_age_ms: 5_000
 
+config :bitflyer, Bitflyer.Risk,
+  max_order_size: "1",
+  max_position_size: "5",
+  market_data_max_age_ms: 5_000
+
 config :ui,
   generators: [timestamp_type: :utc_datetime]
 

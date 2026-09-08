@@ -80,4 +80,11 @@ defmodule Bitflyer.System do
   def market_data_fresh?(key, max_age_ms \\ Bitflyer.MarketData.Cache.default_max_age_ms()) do
     Bitflyer.MarketData.Cache.fresh?(key, max_age_ms)
   end
+
+  @doc """
+  発注意図の risk 認可（fail-closed）。
+  """
+  def authorize_order(command, opts \\ []) do
+    Bitflyer.Risk.authorize(command, opts)
+  end
 end
