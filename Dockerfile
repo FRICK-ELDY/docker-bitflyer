@@ -5,8 +5,10 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
+    curl \
     git \
     inotify-tools \
+    postgresql-client \
   && rm -rf /var/lib/apt/lists/*
 
 RUN mix local.hex --force \
@@ -14,5 +16,5 @@ RUN mix local.hex --force \
 
 WORKDIR /app
 
-# `docker compose run --rm app mix ...` で上書きする。常駐時は空待ち。
-CMD ["sleep", "infinity"]
+# 起動時の ash.setup / DB 待ちは compose の entrypoint（bin/docker-entrypoint.sh）が担う。
+CMD ["mix", "phx.server"]
