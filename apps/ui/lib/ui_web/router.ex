@@ -8,6 +8,7 @@ defmodule UiWeb.Router do
     plug :put_root_layout, html: {UiWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug UiWeb.Plugs.Locale
   end
 
   pipeline :api do
@@ -17,7 +18,11 @@ defmodule UiWeb.Router do
   scope "/", UiWeb do
     pipe_through :browser
 
-    live "/", StatusLive
+    get "/locale/:locale", LocaleController, :update
+
+    live_session :default, on_mount: [UiWeb.Hooks.Locale] do
+      live "/", StatusLive
+    end
   end
 
   # Other scopes may use custom stacks.

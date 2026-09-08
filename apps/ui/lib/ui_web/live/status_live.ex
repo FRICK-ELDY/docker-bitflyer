@@ -24,20 +24,58 @@ defmodule UiWeb.StatusLive do
     ~H"""
     <Layouts.app flash={@flash}>
       <div id="status-page" class="space-y-8">
-        <div>
-          <p class="text-sm uppercase tracking-wide text-base-content/60">Status</p>
-          <h1 id="app-name" class="mt-2 text-3xl font-semibold tracking-tight">{@app_name}</h1>
-          <p class="mt-2 text-base-content/70">運用用の生存確認。取引 UI ではない。</p>
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p class="text-sm uppercase tracking-wide text-base-content/60">{gettext("Status")}</p>
+            
+            <h1 id="app-name" class="mt-2 text-3xl font-semibold tracking-tight">{@app_name}</h1>
+            
+            <p class="mt-2 text-base-content/70">
+              {gettext("Operational health check. This is not a trading UI.")}
+            </p>
+          </div>
+          
+          <nav
+            id="locale-switcher"
+            class="flex items-center gap-2 text-sm"
+            aria-label={gettext("Language")}
+          >
+            <.link
+              id="locale-en"
+              href={~p"/locale/en"}
+              class={[
+                "transition-colors hover:text-base-content",
+                @locale == "en" && "font-semibold text-base-content",
+                @locale != "en" && "text-base-content/60"
+              ]}
+            >
+              English
+            </.link>
+             <span class="text-base-content/30" aria-hidden="true">|</span>
+            <.link
+              id="locale-ja"
+              href={~p"/locale/ja"}
+              class={[
+                "transition-colors hover:text-base-content",
+                @locale == "ja" && "font-semibold text-base-content",
+                @locale != "ja" && "text-base-content/60"
+              ]}
+            >
+              日本語
+            </.link>
+          </nav>
         </div>
-
+        
         <dl class="grid gap-4 sm:grid-cols-2">
           <div id="trade-mode-card" class="rounded-lg border border-base-300 bg-base-200/40 p-4">
-            <dt class="text-sm text-base-content/60">取引モード</dt>
+            <dt class="text-sm text-base-content/60">{gettext("Trade mode")}</dt>
+            
             <dd id="trade-mode" class="mt-1 font-mono text-lg font-medium">{@trade_mode}</dd>
           </div>
-
+          
           <div id="db-status-card" class="rounded-lg border border-base-300 bg-base-200/40 p-4">
             <dt class="text-sm text-base-content/60">PostgreSQL</dt>
+            
             <dd class="mt-1 flex items-center gap-2 text-lg font-medium">
               <span
                 id="db-status"
@@ -47,8 +85,11 @@ defmodule UiWeb.StatusLive do
                   !@db_ok? && "bg-error"
                 ]}
               />
-              <span id="db-status-label">{if(@db_ok?, do: "connected", else: "unavailable")}</span>
+              <span id="db-status-label">
+                {if(@db_ok?, do: gettext("connected"), else: gettext("unavailable"))}
+              </span>
             </dd>
+            
             <p :if={@db_error} id="db-error" class="mt-2 text-sm text-error">{@db_error}</p>
           </div>
         </dl>

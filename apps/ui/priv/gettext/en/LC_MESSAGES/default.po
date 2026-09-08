@@ -1,0 +1,80 @@
+## "msgid"s in this file come from POT (.pot) files.
+###
+### Do not add, change, or remove "msgid"s manually here as
+### they're tied to the ones in the corresponding POT file
+### (with the same domain).
+###
+### Use "mix gettext.extract --merge" or "mix gettext.merge"
+### to merge POT files into PO files.
+msgid ""
+msgstr ""
+"Language: en\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: lib/ui_web/components/core_components.ex:375
+#: lib/ui_web/components/core_components.ex:375
+#, elixir-autogen, elixir-format
+msgid "Actions"
+msgstr ""
+
+#: lib/ui_web/components/layouts.ex:102
+#: lib/ui_web/components/layouts.ex:102
+#: lib/ui_web/components/layouts.ex:117
+#: lib/ui_web/components/layouts.ex:117
+#, elixir-autogen, elixir-format
+msgid "Attempting to reconnect"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:36
+#: lib/ui_web/live/status_live.ex:36
+#, elixir-autogen, elixir-format
+msgid "Language"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:32
+#: lib/ui_web/live/status_live.ex:32
+#, elixir-autogen, elixir-format
+msgid "Operational health check. This is not a trading UI."
+msgstr ""
+
+#: lib/ui_web/components/layouts.ex:109
+#: lib/ui_web/components/layouts.ex:109
+#, elixir-autogen, elixir-format
+msgid "Something went wrong!"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:29
+#: lib/ui_web/live/status_live.ex:29
+#, elixir-autogen, elixir-format
+msgid "Status"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:65
+#: lib/ui_web/live/status_live.ex:65
+#, elixir-autogen, elixir-format
+msgid "Trade mode"
+msgstr ""
+
+#: lib/ui_web/components/layouts.ex:94
+#: lib/ui_web/components/layouts.ex:94
+#, elixir-autogen, elixir-format
+msgid "We can't find the internet"
+msgstr ""
+
+#: lib/ui_web/components/core_components.ex:81
+#: lib/ui_web/components/core_components.ex:81
+#, elixir-autogen, elixir-format
+msgid "close"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:81
+#: lib/ui_web/live/status_live.ex:81
+#, elixir-autogen, elixir-format
+msgid "connected"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:81
+#: lib/ui_web/live/status_live.ex:81
+#, elixir-autogen, elixir-format
+msgid "unavailable"
+msgstr ""

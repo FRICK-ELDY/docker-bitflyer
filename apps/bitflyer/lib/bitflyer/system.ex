@@ -13,12 +13,16 @@ defmodule Bitflyer.System do
   Repo 経由で PostgreSQL に到達できるか確認する。
   """
   def check_database do
-    case Ecto.Adapters.SQL.query(Bitflyer.Repo, "SELECT 1", []) do
-      {:ok, _} -> :ok
-      {:error, error} -> {:error, Exception.message(error)}
+    try do
+      case Ecto.Adapters.SQL.query(Bitflyer.Repo, "SELECT 1", [], timeout: 2_000) do
+        {:ok, _} -> :ok
+        {:error, error} -> {:error, Exception.message(error)}
+      end
+    rescue
+      error -> {:error, Exception.message(error)}
+    catch
+      :exit, reason -> {:error, "Database repo is not running: #{inspect(reason)}"}
     end
-  rescue
-    error -> {:error, Exception.message(error)}
   end
 
   @doc """

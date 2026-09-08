@@ -8,6 +8,10 @@ config :bitflyer,
 config :ui,
   generators: [timestamp_type: :utc_datetime]
 
+config :ui, UiWeb.Gettext,
+  default_locale: "en",
+  locales: ~w(en ja)
+
 # Configure the endpoint
 config :ui, UiWeb.Endpoint,
   url: [host: "localhost"],
