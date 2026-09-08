@@ -23,7 +23,7 @@ database_url =
           url
 
         _ ->
-          uri = URI.parse(database_url)
+          uri = URI.new!(database_url)
           db_name = uri.path |> to_string() |> String.trim_leading("/")
 
           test_name =
