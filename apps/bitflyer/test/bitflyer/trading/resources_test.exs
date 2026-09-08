@@ -38,8 +38,8 @@ defmodule Bitflyer.Trading.ResourcesTest do
   end
 
   describe "Position" do
-    test "creates with decimal size and average_price; product_code is unique" do
-      assert {:ok, position} =
+    test "uniqueness is per product_code and trade_mode; update is size/average_price only" do
+      assert {:ok, paper} =
                Position
                |> Ash.Changeset.for_create(:create, %{
                  product_code: "FX_BTC_JPY",
@@ -50,19 +50,53 @@ defmodule Bitflyer.Trading.ResourcesTest do
                })
                |> Ash.create()
 
-      assert Decimal.eq?(position.size, Decimal.new("0.05"))
-      assert Decimal.eq?(position.average_price, Decimal.new("4800000"))
+      assert Decimal.eq?(paper.size, Decimal.new("0.05"))
+      assert Decimal.eq?(paper.average_price, Decimal.new("4800000"))
+
+      assert {:ok, _live} =
+               Position
+               |> Ash.Changeset.for_create(:create, %{
+                 product_code: "FX_BTC_JPY",
+                 side: :buy,
+                 size: Decimal.new("0.01"),
+                 average_price: Decimal.new("4900000"),
+                 trade_mode: :live
+               })
+               |> Ash.create()
 
       assert {:error, %Ash.Error.Invalid{}} =
                Position
                |> Ash.Changeset.for_create(:create, %{
                  product_code: "FX_BTC_JPY",
                  side: :sell,
-                 size: Decimal.new("0.01"),
-                 average_price: Decimal.new("4900000"),
+                 size: Decimal.new("0.02"),
+                 average_price: Decimal.new("4950000"),
                  trade_mode: :paper
                })
                |> Ash.create()
+
+      assert {:error, %Ash.Error.Invalid{}} =
+               paper
+               |> Ash.Changeset.for_update(:update, %{
+                 size: Decimal.new("0.06"),
+                 average_price: Decimal.new("4810000"),
+                 side: :sell,
+                 trade_mode: :live
+               })
+               |> Ash.update()
+
+      assert {:ok, updated} =
+               paper
+               |> Ash.Changeset.for_update(:update, %{
+                 size: Decimal.new("0.06"),
+                 average_price: Decimal.new("4810000")
+               })
+               |> Ash.update()
+
+      assert updated.side == :buy
+      assert updated.trade_mode == :paper
+      assert Decimal.eq?(updated.size, Decimal.new("0.06"))
+      assert Decimal.eq?(updated.average_price, Decimal.new("4810000"))
     end
   end
 
