@@ -3,7 +3,7 @@ import Config
 
 config :bitflyer,
   ecto_repos: [Bitflyer.Repo],
-  ash_domains: [Bitflyer.System]
+  ash_domains: [Bitflyer.System, Bitflyer.Trading]
 
 config :ui,
   generators: [timestamp_type: :utc_datetime]
