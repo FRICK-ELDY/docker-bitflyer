@@ -14,7 +14,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 - UI は `http://127.0.0.1:4000/`（稼働確認用 Status。取引 UI ではない）
 - 稼働 API は `GET /health`（DB + readiness。Compose healthcheck もここを見る）
 - 品質ゲートはローカルも CI も `mix precommit`
-- `.dockerignore` で `.env` / `_build` / `deps` 等をビルドコンテキストから除外（本番イメージより先）
+- `.dockerignore` で `.env` / `_build` / `deps` 等をビルドコンテキストから除外（本番イメージへの混入防止）
 - 市場データ・戦略・リスク・発注の engine は未実装（`TRADE_MODE` の既定は `dry_run`）
 
 完了した骨格作業は [3_archive/01-bootstrap-umbrella-and-docker.md](.workspace/3_archive/01-bootstrap-umbrella-and-docker.md)。次の本番配布は [2_todo/03-cd-prod-host.md](.workspace/2_todo/03-cd-prod-host.md)。
