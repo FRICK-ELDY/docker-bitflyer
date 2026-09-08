@@ -33,17 +33,20 @@ defmodule Bitflyer.MarketData.Normalize do
     end
   end
 
-  def from_ws_frame(%{"method" => "channelMessage", "params" => params}) when is_map(params) do
-    message = Map.get(params, "message") || Map.get(params, :message)
+  def from_ws_frame(map) when is_map(map) do
+    method = Map.get(map, "method") || Map.get(map, :method)
+    params = Map.get(map, "params") || Map.get(map, :params)
 
-    case from_ticker(message) do
-      {:ok, _, _} = ok -> ok
-      :error -> :error
+    if method == "channelMessage" and is_map(params) do
+      message = Map.get(params, "message") || Map.get(params, :message)
+
+      case from_ticker(message) do
+        {:ok, _, _} = ok -> ok
+        _ -> :error
+      end
+    else
+      :ignore
     end
-  end
-
-  def from_ws_frame(%{method: "channelMessage", params: params}) when is_map(params) do
-    from_ws_frame(%{"method" => "channelMessage", "params" => stringify_keys(params)})
   end
 
   def from_ws_frame(_), do: :ignore
@@ -53,12 +56,5 @@ defmodule Bitflyer.MarketData.Normalize do
       {:ok, %Decimal{} = d} -> {:ok, d}
       _ -> :error
     end
-  end
-
-  defp stringify_keys(map) do
-    Map.new(map, fn
-      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-      {k, v} -> {k, v}
-    end)
   end
 end

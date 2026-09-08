@@ -5,6 +5,7 @@ defmodule Bitflyer.MarketData.Feed do
   - 接続時: チャネル再購読 + REST 穴埋め
   - 切断時: telemetry → backoff 再接続（古い Cache のままなので risk は stale 拒否）
   - フレーム: 正規化 → Cache.put → tick telemetry
+  - socket は link + trap_exit（Feed 終了時のリーク防止、切断は EXIT で検知）
   """
 
   use GenServer
@@ -37,6 +38,7 @@ defmodule Bitflyer.MarketData.Feed do
 
   @impl true
   def init(opts) do
+    Process.flag(:trap_exit, true)
     cfg = MarketData.config()
 
     state = %{
@@ -62,7 +64,6 @@ defmodule Bitflyer.MarketData.Feed do
       reconnect_max_ms:
         Keyword.get(opts, :reconnect_max_ms, Keyword.get(cfg, :reconnect_max_ms, 30_000)),
       socket: nil,
-      socket_ref: nil,
       connected?: false,
       reconnect_attempt: 0,
       reconnect_timer: nil,
@@ -121,9 +122,11 @@ defmodule Bitflyer.MarketData.Feed do
     {:noreply, handle_disconnect(state, reason)}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %{socket_ref: ref} = state) do
+  def handle_info({:EXIT, pid, reason}, %{socket: pid} = state) do
     {:noreply, handle_disconnect(state, reason)}
   end
+
+  def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info(:reconnect, state) do
     {:noreply, connect_socket(%{state | reconnect_timer: nil})}
@@ -155,28 +158,25 @@ defmodule Bitflyer.MarketData.Feed do
 
     case state.socket_client.start(url: state.ws_url, feed: self()) do
       {:ok, pid} ->
-        ref = Process.monitor(pid)
-        %{state | socket: pid, socket_ref: ref}
+        %{state | socket: pid}
 
       {:error, {:already_started, pid}} ->
         # 既存 socket は別 Feed PID 向けのままなので捨てて張り直す
         if is_pid(pid), do: Process.exit(pid, :shutdown)
         emit_disconnected({:already_started, pid})
-        schedule_reconnect(%{state | connected?: false, socket: nil, socket_ref: nil})
+        schedule_reconnect(%{state | connected?: false, socket: nil})
 
       {:error, reason} ->
         emit_disconnected(reason)
-        schedule_reconnect(%{state | connected?: false, socket: nil, socket_ref: nil})
+        schedule_reconnect(%{state | connected?: false, socket: nil})
     end
   end
 
-  defp stop_socket(%{socket: nil} = state), do: %{state | socket_ref: nil}
+  defp stop_socket(%{socket: nil} = state), do: state
 
-  defp stop_socket(%{socket: pid, socket_ref: ref} = state) do
-    if is_reference(ref), do: Process.demonitor(ref, [:flush])
+  defp stop_socket(%{socket: pid} = state) do
     if is_pid(pid), do: Process.exit(pid, :shutdown)
-
-    %{state | socket: nil, socket_ref: nil}
+    %{state | socket: nil}
   end
 
   defp subscribe_all(%{socket: nil} = state), do: state

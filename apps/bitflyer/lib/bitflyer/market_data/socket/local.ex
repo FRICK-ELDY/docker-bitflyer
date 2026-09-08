@@ -11,7 +11,7 @@ defmodule Bitflyer.MarketData.Socket.Local do
     name = Keyword.get(opts, :name)
     genserver_opts = if name, do: [name: name], else: []
 
-    GenServer.start(__MODULE__, %{feed: feed, subscribed: []}, genserver_opts)
+    GenServer.start_link(__MODULE__, %{feed: feed, subscribed: []}, genserver_opts)
   end
 
   @impl Bitflyer.MarketData.Socket.Client
