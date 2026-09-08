@@ -62,14 +62,14 @@ flowchart TB
     ProdPC["本番PC<br/>自動売買 常時稼働"]
   end
 
-  subgraph VLAN3["VLAN3 · 10GbE · 作業"]
+  subgraph VLAN3["VLAN3 · 2.5GbE · 作業"]
     AP["AP<br/>tp-link BE7200"]
     Work1["作業用PC1<br/>デスクトップ"]
     Work2["作業用PC2<br/>ノートPC"]
   end
 
   RTX -->|"VLAN1 (1GbE)"| ProdPC
-  RTX -->|"VLAN3 (10GbE)"| AP
+  RTX -->|"VLAN3 (2.5GbE)"| AP
   AP --> Work1
   AP -.->|"無線"| Work2
 ```
@@ -80,7 +80,9 @@ flowchart TB
 | ONU | NTT 10G |
 | ルーター | YAMAHA RTX1300 |
 | VLAN1 | 1GbE · 本番PC（自動売買） |
-| VLAN3 | 10GbE · tp-link BE7200（AP）経由で作業用PC |
+| VLAN3 | 2.5GbE · tp-link BE7200（AP）経由で作業用PC（AP 有線ポート上限） |
+
+回線・ONU・ルーター側は 10G 経路だが、VLAN3 の実効リンクは AP（BE7200）の有線ポート上限により **2.5GbE** に制約される。
 
 ### 役割分担
 
@@ -104,6 +106,8 @@ flowchart LR
   W2 -.->|"監視"| P
 ```
 
+VLAN3（作業）から VLAN1（本番）へのアクセスは、RTX1300 のフィルター等で **必要最小のポートのみ** 許可する（Least privilege）。詳細な許可リストは運用ドキュメントで定義する。
+
 ### 本番PC
 
 | 項目 | スペック |
@@ -115,6 +119,8 @@ flowchart LR
 | OS | Windows 11 Pro + WSL2 |
 | 接続 | VLAN1（1GbE） |
 
+常時稼働前提のため、Windows Update による予期しない再起動、WSL2 の時刻ずれ・メモリ抱え込みをリスクとして認識する。運用対策（更新制御・時刻同期・`.wslconfig` 等）は別途文書化し、必要なら将来 Linux ネイティブへの移行も検討する。
+
 ### 作業用PC1（デスクトップ）
 
 | 項目 | スペック |
@@ -124,7 +130,7 @@ flowchart LR
 | RAM | 64 GB |
 | ストレージ | C: 2 TB / D: 2 TB |
 | OS | Windows 11 Pro + WSL2 |
-| 接続 | VLAN3 · AP（tp-link BE7200）経由（10GbE） |
+| 接続 | VLAN3 · AP（tp-link BE7200）経由（2.5GbE） |
 
 ### 作業用PC2（ノートPC）
 
