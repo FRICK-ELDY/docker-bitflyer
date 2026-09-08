@@ -31,3 +31,9 @@ config :phoenix,
 config :bitflyer, Bitflyer.Startup.Reconciler,
   boot?: false,
   interval_ms: :infinity
+
+# 実ネット禁止。テストは Feed を明示起動し Local socket / Stub REST を注入する
+config :bitflyer, Bitflyer.MarketData,
+  enabled: false,
+  rest_client: Bitflyer.MarketData.Rest.Stub,
+  socket_client: Bitflyer.MarketData.Socket.Local

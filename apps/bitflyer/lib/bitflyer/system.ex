@@ -82,6 +82,17 @@ defmodule Bitflyer.System do
   end
 
   @doc """
+  市場データ Feed の状態（接続・再購読回数など）。
+  """
+  def market_data_status do
+    if Process.whereis(Bitflyer.MarketData.Feed) do
+      Bitflyer.MarketData.Feed.status()
+    else
+      %{enabled: false}
+    end
+  end
+
+  @doc """
   発注意図の risk 認可（fail-closed）。
   """
   def authorize_order(command, opts \\ []) do
