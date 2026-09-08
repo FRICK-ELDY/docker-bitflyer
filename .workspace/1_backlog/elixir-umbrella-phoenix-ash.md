@@ -1,6 +1,6 @@
 # 要望: Elixir Umbrella + Phoenix UI + Ash + Docker
 
-ステータス: 要望を確定。着手手順は [ToDo](../2_todo/01-bootstrap-umbrella-and-docker.md) を正とする。
+ステータス: 完了。実施記録は [ToDo（アーカイブ）](../3_archive/01-bootstrap-umbrella-and-docker.md)。
 
 ## 背景
 

@@ -2,6 +2,8 @@
 
 対応する要望: [elixir-umbrella-phoenix-ash.md](../1_backlog/elixir-umbrella-phoenix-ash.md)
 
+ステータス: 完了（手順 1–7）。
+
 目的は、戦略や実発注の前に、**Docker 上で Phoenix UI と Ash/PostgreSQL が動く骨格**を作ること。
 
 作業は上から順に行う。前の完了条件を満たしてから次へ進む。
@@ -48,11 +50,11 @@
 
 コンテナ内でリポジトリルートに生成する。既存の `.workspace/` と `README.md` は消さない。
 
-- [ ] ルートを Umbrella にする（アプリ名は `docker_bitflyer`）
-- [ ] `apps/bitflyer` を通常の OTP アプリとして追加する
-- [ ] `apps/ui` を Phoenix アプリとして追加する（LiveView あり）
-- [ ] `ui` の Ecto は Phoenix 既定のまま残さず、永続化は AshPostgres に寄せる
-- [ ] ルートの `mix.exs` から両アプリが起動対象になる
+- [x] ルートを Umbrella にする（アプリ名は `docker_bitflyer`）
+- [x] `apps/bitflyer` を通常の OTP アプリとして追加する
+- [x] `apps/ui` を Phoenix アプリとして追加する（LiveView あり）
+- [x] `ui` の Ecto は Phoenix 既定のまま残さず、永続化は AshPostgres に寄せる
+- [x] ルートの `mix.exs` から両アプリが起動対象になる
 
 完了: コンテナ内で `mix compile` が通る。`apps/ui` と `apps/bitflyer` が存在する。
 
@@ -60,22 +62,22 @@
 
 正本は `bitflyer` に置く。
 
-- [ ] `bitflyer` に Ash、AshPostgres を入れる
-- [ ] `Bitflyer.Repo`（`AshPostgres.Repo`）を `bitflyer` に置く
-- [ ] `ui` に AshPhoenix を入れ、`bitflyer` を依存させる
-- [ ] 開発用 Domain / Resource を 1 つだけ置く（例: ヘルス用の稼働記録、または空の `System` 系）。取引エンティティはまだ作らない
-- [ ] `config/` で Repo、Ash domains、`DATABASE_URL` を環境変数から読む
-- [ ] コンテナ起動時、または明示コマンドで `mix ash.setup` / マイグレーションが走る
+- [x] `bitflyer` に Ash、AshPostgres を入れる
+- [x] `Bitflyer.Repo`（`AshPostgres.Repo`）を `bitflyer` に置く
+- [x] `ui` に AshPhoenix を入れ、`bitflyer` を依存させる
+- [x] 開発用 Domain / Resource を 1 つだけ置く（例: ヘルス用の稼働記録、または空の `System` 系）。取引エンティティはまだ作らない
+- [x] `config/` で Repo、Ash domains、`DATABASE_URL` を環境変数から読む
+- [x] コンテナ起動時、または明示コマンドで `mix ash.setup` / マイグレーションが走る
 
 完了: `docker compose up` 後、Ash が PostgreSQL にテーブルを作れる。`ui` から Domain を呼べる。
 
 ### 6. 起動経路を通す
 
-- [ ] `bitflyer` の Application で Repo を起動する
-- [ ] `ui` の Endpoint を開発ポートで公開する（localhost）
-- [ ] 生存確認の LiveView またはページを 1 つ置く（アプリ名、取引モード、DB 接続可否）
-- [ ] Compose の `app` コマンドを `mix phx.server` 相当にする
-- [ ] `db` 未起動では app が Ready にならないよう depends_on / 接続リトライを付ける
+- [x] `bitflyer` の Application で Repo を起動する
+- [x] `ui` の Endpoint を開発ポートで公開する（localhost）
+- [x] 生存確認の LiveView またはページを 1 つ置く（アプリ名、取引モード、DB 接続可否）
+- [x] Compose の `app` コマンドを `mix phx.server` 相当にする
+- [x] `db` 未起動では app が Ready にならないよう depends_on / 接続リトライを付ける
 
 完了: `docker compose up` だけで UI をブラウザで開ける。DB 停止時はページまたはログで失敗が分かる。
 
@@ -83,11 +85,11 @@
 
 開発環境の検証として、次だけをこの ToDo の完了条件にする。
 
-- [ ] 初回 `docker compose up --build` で UI と DB が上がる
-- [ ] 生存確認ページが 200 を返す
-- [ ] マイグレーション済みテーブルが PostgreSQL に存在する
-- [ ] `docker compose restart app` のあと、UI と DB 接続が復帰する
-- [ ] `.env` を commit していない
+- [x] 初回 `docker compose up --build` で UI と DB が上がる
+- [x] 生存確認ページが 200 を返す
+- [x] マイグレーション済みテーブルが PostgreSQL に存在する
+- [x] `docker compose restart app` のあと、UI と DB 接続が復帰する
+- [x] `.env` を commit していない
 
 完了したら、このファイルを `.workspace/3_archive/` へ移し、要望側のステータスを更新する。
 

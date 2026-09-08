@@ -23,6 +23,9 @@ services:
     ports:
       - "127.0.0.1:4000:4000"
     working_dir: /app
+    entrypoint: ["sh", "/app/bin/docker-entrypoint.sh"]
+    command: ["mix", "phx.server"]
+    restart: unless-stopped
     volumes:
       - .:/app
       - mix_deps:/app/deps
@@ -33,12 +36,22 @@ services:
       PHX_HOST: ${PHX_HOST:-localhost}
       TRADE_MODE: ${TRADE_MODE:-dry_run}
       MIX_ENV: ${MIX_ENV:-dev}
+      DB_HOST: db
+      DB_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_DB: docker_bitflyer_dev
     env_file:
       - path: .env
         required: false
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4000/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
 
 volumes:
   postgres_data:
