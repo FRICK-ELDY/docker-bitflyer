@@ -1,0 +1,68 @@
+## "msgid"s in this file come from POT (.pot) files.
+##
+## Do not add, change, or remove "msgid"s manually here as
+## they're tied to the ones in the corresponding POT file
+## (with the same domain).
+##
+## Use "mix gettext.extract --merge" or "mix gettext.merge"
+## to merge POT files into PO files.
+msgid ""
+msgstr ""
+"Language: ja\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: lib/ui_web/components/core_components.ex:375
+#, elixir-autogen, elixir-format
+msgid "Actions"
+msgstr "操作"
+
+#: lib/ui_web/components/layouts.ex:102
+#: lib/ui_web/components/layouts.ex:117
+#, elixir-autogen, elixir-format
+msgid "Attempting to reconnect"
+msgstr "再接続を試行しています"
+
+#: lib/ui_web/live/status_live.ex:36
+#, elixir-autogen, elixir-format
+msgid "Language"
+msgstr "言語"
+
+#: lib/ui_web/live/status_live.ex:32
+#, elixir-autogen, elixir-format
+msgid "Operational health check. This is not a trading UI."
+msgstr "運用用の生存確認。取引 UI ではない。"
+
+#: lib/ui_web/components/layouts.ex:109
+#, elixir-autogen, elixir-format
+msgid "Something went wrong!"
+msgstr "問題が発生しました"
+
+#: lib/ui_web/live/status_live.ex:29
+#, elixir-autogen, elixir-format
+msgid "Status"
+msgstr "ステータス"
+
+#: lib/ui_web/live/status_live.ex:65
+#, elixir-autogen, elixir-format
+msgid "Trade mode"
+msgstr "取引モード"
+
+#: lib/ui_web/components/layouts.ex:94
+#, elixir-autogen, elixir-format
+msgid "We can't find the internet"
+msgstr "インターネットに接続できません"
+
+#: lib/ui_web/components/core_components.ex:81
+#, elixir-autogen, elixir-format
+msgid "close"
+msgstr "閉じる"
+
+#: lib/ui_web/live/status_live.ex:81
+#, elixir-autogen, elixir-format
+msgid "connected"
+msgstr "接続中"
+
+#: lib/ui_web/live/status_live.ex:81
+#, elixir-autogen, elixir-format
+msgid "unavailable"
+msgstr "利用不可"
