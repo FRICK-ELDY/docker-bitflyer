@@ -71,8 +71,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
       Decimal.equal?(size, position.size) ->
         case Ash.destroy(position, return_notifications?: true) do
           :ok -> {:ok, []}
-          {:ok, _, notifications} -> {:ok, notifications}
-          {:ok, _} -> {:ok, []}
+          {:ok, notifications} when is_list(notifications) -> {:ok, notifications}
           {:error, error} -> {:error, :persist_failed, %{error: error}}
         end
 

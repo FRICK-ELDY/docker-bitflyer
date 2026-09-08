@@ -52,11 +52,23 @@ defmodule Bitflyer.OrderExecutor do
 
   defp validate_command(command) do
     id = Map.get(command, :internal_order_id)
+    product_code = Map.get(command, :product_code)
+    side = Map.get(command, :side)
+    size = Map.get(command, :size)
     order_type = Map.get(command, :order_type, :market)
 
     cond do
       not is_binary(id) or id == "" ->
         {:error, :invalid_command, %{field: :internal_order_id}}
+
+      not is_binary(product_code) or product_code == "" ->
+        {:error, :invalid_command, %{field: :product_code}}
+
+      side not in [:buy, :sell] ->
+        {:error, :invalid_command, %{field: :side}}
+
+      not match?(%Decimal{}, size) or not Decimal.positive?(size) ->
+        {:error, :invalid_command, %{field: :size}}
 
       order_type not in [:limit, :market] ->
         {:error, :invalid_command, %{field: :order_type}}

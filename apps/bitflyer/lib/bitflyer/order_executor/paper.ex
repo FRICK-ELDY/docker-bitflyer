@@ -54,18 +54,23 @@ defmodule Bitflyer.OrderExecutor.Paper do
   end
 
   defp fill_price(%Order{order_type: :market}, command, opts) do
-    key = Map.fetch!(command, :market_key)
-    server = Keyword.get(opts, :server, Cache)
+    case Map.fetch(command, :market_key) do
+      {:ok, key} ->
+        server = Keyword.get(opts, :server, Cache)
 
-    case Cache.get(key, server) do
-      {:ok, value, _received_at} ->
-        case extract_ltp(value) do
-          {:ok, ltp} -> {:ok, ltp}
-          :error -> {:error, :fill_price_unavailable, %{market_key: key}}
+        case Cache.get(key, server) do
+          {:ok, value, _received_at} ->
+            case extract_ltp(value) do
+              {:ok, ltp} -> {:ok, ltp}
+              :error -> {:error, :fill_price_unavailable, %{market_key: key}}
+            end
+
+          :miss ->
+            {:error, :fill_price_unavailable, %{market_key: key}}
         end
 
-      :miss ->
-        {:error, :fill_price_unavailable, %{market_key: key}}
+      :error ->
+        {:error, :invalid_command, %{field: :market_key}}
     end
   end
 

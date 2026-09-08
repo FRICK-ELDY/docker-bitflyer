@@ -33,8 +33,30 @@ defmodule Bitflyer.OrderExecutor.Live do
         case order
              |> Ash.Changeset.for_update(:update, %{exchange_order_id: exchange_order_id})
              |> Ash.update() do
-          {:ok, updated} -> {:ok, updated}
-          {:error, error} -> {:error, :persist_failed, %{error: error}}
+          {:ok, updated} ->
+            {:ok, updated}
+
+          {:error, error} ->
+            # 取引所では受注済みなのに ID を見失うと照合不能になる
+            Bitflyer.Telemetry.log(
+              :critical,
+              "Failed to persist exchange_order_id after successful place_order: #{inspect(error)}",
+              %{
+                internal_order_id: order.internal_order_id,
+                exchange_order_id: exchange_order_id,
+                product_code: order.product_code,
+                side: order.side,
+                trade_mode: :live,
+                status: order.status
+              }
+            )
+
+            {:error, :persist_failed,
+             %{
+               error: error,
+               internal_order_id: order.internal_order_id,
+               exchange_order_id: exchange_order_id
+             }}
         end
 
       {:error, reason} ->
