@@ -148,15 +148,12 @@ defmodule Bitflyer.MarketData.Feed do
       |> cancel_reconnect_timer()
       |> stop_socket()
 
-    case state.socket_client.start_link(url: state.ws_url, feed: self()) do
+    case state.socket_client.start(url: state.ws_url, feed: self()) do
       {:ok, pid} ->
-        # socket 切断で Feed まで落とさない（monitor で再接続する）
-        true = Process.unlink(pid)
         ref = Process.monitor(pid)
         %{state | socket: pid, socket_ref: ref}
 
       {:error, {:already_started, pid}} ->
-        true = Process.unlink(pid)
         ref = Process.monitor(pid)
         %{state | socket: pid, socket_ref: ref}
 
@@ -201,8 +198,21 @@ defmodule Bitflyer.MarketData.Feed do
   end
 
   defp do_gap_fill(state) do
-    Enum.each(state.product_codes, fn product_code ->
-      case state.rest_client.fetch_ticker(product_code) do
+    rest_client = state.rest_client
+    product_codes = state.product_codes
+
+    # REST は Feed をブロックしない（WS フレーム処理を止めない）
+    _ =
+      Task.start(fn ->
+        gap_fill_products(rest_client, product_codes)
+      end)
+
+    state
+  end
+
+  defp gap_fill_products(rest_client, product_codes) do
+    Enum.each(product_codes, fn product_code ->
+      case rest_client.fetch_ticker(product_code) do
         {:ok, body} ->
           case Normalize.from_ticker(body) do
             {:ok, key, value} -> put_tick(key, value, product_code)
@@ -217,8 +227,6 @@ defmodule Bitflyer.MarketData.Feed do
           )
       end
     end)
-
-    state
   end
 
   defp ingest_frame(frame) do

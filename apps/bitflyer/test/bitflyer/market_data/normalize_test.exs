@@ -27,4 +27,9 @@ defmodule Bitflyer.MarketData.NormalizeTest do
   test "from_ws_frame ignores non channelMessage" do
     assert :ignore = Normalize.from_ws_frame(~s({"id":1,"result":true}))
   end
+
+  test "from_ticker rejects invalid ltp without raising" do
+    assert :error =
+             Normalize.from_ticker(%{"product_code" => "FX_BTC_JPY", "ltp" => "not-a-number"})
+  end
 end

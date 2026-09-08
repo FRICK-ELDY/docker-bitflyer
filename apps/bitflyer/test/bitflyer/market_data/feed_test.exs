@@ -84,9 +84,12 @@ defmodule Bitflyer.MarketData.FeedTest do
          reconnect_max_ms: 50}
       )
 
-    # Local auto-connect + gap fill
+    # Local auto-connect + async gap fill
     assert_receive {:fetch_ticker, @product}, 500
-    _ = :sys.get_state(feed)
+
+    assert_receive {:telemetry, [:bitflyer, :market_data, :tick], %{count: 1},
+                    %{product_code: @product}},
+                   500
 
     assert Cache.fresh?(@market_key, 5_000)
     assert {:ok, %{ltp: ltp}, _} = Cache.get(@market_key)
@@ -121,11 +124,12 @@ defmodule Bitflyer.MarketData.FeedTest do
 
   test "disconnect resubscribes and gap-fills again; stale cache rejects risk" do
     parent = self()
-    handler_id = "md-disc-#{System.unique_integer([:positive])}"
+    disc_id = "md-disc-#{System.unique_integer([:positive])}"
+    tick_id = "md-tick2-#{System.unique_integer([:positive])}"
 
     :ok =
       :telemetry.attach(
-        handler_id,
+        disc_id,
         [:bitflyer, :market_data, :disconnected],
         fn event, measurements, metadata, _ ->
           send(parent, {:telemetry, event, measurements, metadata})
@@ -133,7 +137,20 @@ defmodule Bitflyer.MarketData.FeedTest do
         nil
       )
 
-    on_exit(fn -> :telemetry.detach(handler_id) end)
+    :ok =
+      :telemetry.attach(
+        tick_id,
+        [:bitflyer, :market_data, :tick],
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn ->
+      :telemetry.detach(disc_id)
+      :telemetry.detach(tick_id)
+    end)
 
     feed =
       start_supervised!(
@@ -148,7 +165,11 @@ defmodule Bitflyer.MarketData.FeedTest do
       )
 
     assert_receive {:fetch_ticker, @product}, 500
-    _ = :sys.get_state(feed)
+
+    assert_receive {:telemetry, [:bitflyer, :market_data, :tick], %{count: 1},
+                    %{product_code: @product}},
+                   500
+
     fetches_after_connect = FakeRest.fetch_count()
     socket = :sys.get_state(feed).socket
     subs_before = length(Socket.Local.subscribed(socket))
@@ -179,7 +200,11 @@ defmodule Bitflyer.MarketData.FeedTest do
 
     # 再接続で再購読 + 穴埋め
     assert_receive {:fetch_ticker, @product}, 500
-    _ = :sys.get_state(feed)
+
+    assert_receive {:telemetry, [:bitflyer, :market_data, :tick], %{count: 1},
+                    %{product_code: @product}},
+                   500
+
     assert FakeRest.fetch_count() > fetches_after_connect
 
     status = Feed.status(feed)

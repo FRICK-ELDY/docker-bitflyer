@@ -8,13 +8,13 @@ defmodule Bitflyer.MarketData.Socket do
   @behaviour Bitflyer.MarketData.Socket.Client
 
   @impl Bitflyer.MarketData.Socket.Client
-  def start_link(opts) do
+  def start(opts) do
     url = Keyword.fetch!(opts, :url)
     feed = Keyword.fetch!(opts, :feed)
     name = Keyword.get(opts, :name)
 
     start_opts = if name, do: [name: name], else: []
-    WebSockex.start_link(url, __MODULE__, %{feed: feed}, start_opts)
+    WebSockex.start(url, __MODULE__, %{feed: feed}, start_opts)
   end
 
   @impl Bitflyer.MarketData.Socket.Client

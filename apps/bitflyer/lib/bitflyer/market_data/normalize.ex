@@ -48,11 +48,12 @@ defmodule Bitflyer.MarketData.Normalize do
 
   def from_ws_frame(_), do: :ignore
 
-  defp cast_decimal(%Decimal{} = d), do: {:ok, d}
-  defp cast_decimal(v) when is_binary(v), do: {:ok, Decimal.new(v)}
-  defp cast_decimal(v) when is_integer(v), do: {:ok, Decimal.new(v)}
-  defp cast_decimal(v) when is_float(v), do: {:ok, Decimal.from_float(v)}
-  defp cast_decimal(_), do: :error
+  defp cast_decimal(v) do
+    case Decimal.cast(v) do
+      {:ok, %Decimal{} = d} -> {:ok, d}
+      _ -> :error
+    end
+  end
 
   defp stringify_keys(map) do
     Map.new(map, fn

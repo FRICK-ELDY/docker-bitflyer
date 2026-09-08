@@ -8,6 +8,6 @@ defmodule Bitflyer.MarketData.Socket.Client do
   - `{:socket_disconnected, reason}`
   """
 
-  @callback start_link(keyword()) :: GenServer.on_start()
+  @callback start(keyword()) :: GenServer.on_start()
   @callback subscribe(pid_or_name :: term(), channel :: String.t()) :: :ok | {:error, term()}
 end
