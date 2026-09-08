@@ -78,7 +78,7 @@
 
 `precommit` alias が `apps/ui/mix.exs` にしか無いため、Umbrella のタスク再帰で `apps/bitflyer` は素通りする。しかも alias の中身が `format`（書き換え）であって `format --check-formatted` ではないため、整形漏れを検出できない。AGENTS.md と ToDo 02 が「ローカルと CI の同じ品質ゲート」と位置付けているコマンドが、取引ロジックの正本アプリを検査していない。今は差が 1 テストだが、engine の実装が始まった瞬間に「緑なのに壊れている」を生む。`.github/workflows/` が未作成なことと合わせ、CI / CD 観点は -8 と最も低い小計になった。
 
-**テストが「動くこと」を確認していない。** `StatusLiveTest` は `#db-status-label` の存在しか見ておらず、DB が繋がっていても切れていても緑になる。両 `test_helper.exs` に `Ecto.Adapters.SQL.Sandbox.mode(Repo, :manual)` が無く、テストが開発用データベース `docker_bitflyer_dev` を直接使っていることも実測で確認した（`Bitflyer.Repo.config()[:database]` が `MIX_ENV=test` でも `docker_bitflyer_dev` を返す）。現状は Sandbox のロールバックに救われているが、`ash.setup` 相当を test で走らせた日に開発データを壊す。
+**テストが「動くこと」を確認していない。** `StatusLiveTest` は `#db-status-label` の存在しか見ておらず、DB が繋がっていても切れていても緑になる。両 `test_helper.exs` に `Ecto.Adapters.SQL.Sandbox.mode(Bitflyer.Repo, :manual)` が無く、テストが開発用データベース `docker_bitflyer_dev` を直接使っていることも実測で確認した（`Bitflyer.Repo.config()[:database]` が `MIX_ENV=test` でも `docker_bitflyer_dev` を返す）。現状は Sandbox のロールバックに救われているが、`ash.setup` 相当を test で走らせた日に開発データを壊す。
 
 **観測手段が無い。** `apps/bitflyer` に `Logger` の使用も `:telemetry.execute/3` も 0 件。`tech-stack.md` 自身が「Telemetry + 構造化ログ」を『今』足すものに分類している（L59）が着手されていない。Discord 通知も未着手で、VLAN1 の本番PC が無人稼働する想定に対して、人に届く経路が存在しない。
 

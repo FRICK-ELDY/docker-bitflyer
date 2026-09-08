@@ -2,7 +2,7 @@
 
 - 評価日: 2026-09-08
 - 評価種別: 初回評価
-- 正本: `.workspace/0_doc/vision.md`、`.workspace/0_doc/architecture/overview.md`、`architecture/env/dev.md`、`architecture/env/prod.md`
+- 正本: `.workspace/0_doc/vision.md`、`.workspace/0_doc/architecture/overview.md`、`.workspace/0_doc/architecture/env/dev.md`、`.workspace/0_doc/architecture/env/prod.md`
 - 評価方法: 第1評価者の文書および過去の評価まとめを参照せず、現行コード・設定・テスト・ToDo / Backlog を直接検証
 
 ## 総合スコア

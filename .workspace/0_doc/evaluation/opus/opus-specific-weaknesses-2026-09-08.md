@@ -144,7 +144,7 @@
   > 対象ファイル: `apps/bitflyer/test/`, `apps/ui/test/`
 
 - **Sandbox のモード設定が無く、DB 検証が実質ノーオペになっている** `-2`
-  > `apps/ui/test/test_helper.exs` も `apps/bitflyer/test/test_helper.exs` も中身は `ExUnit.start()` の 1 行だけで、Phoenix 生成物にある `Ecto.Adapters.SQL.Sandbox.mode(Repo, :manual)` が呼ばれていない。`UiWeb.ConnCase` は `start_owner!(Bitflyer.Repo, shared: not tags[:async])`（conn_case.ex L35）を実行するが、`StatusLiveTest` は `async: true` で走るため LiveView プロセスからの接続所有権が保証されない。実際 `StatusLiveTest` は `has_element?(view, "#db-status-label")`（status_live_test.exs L12）としか書いておらず、DB が繋がっていても切れていても緑になる。「DB 接続可否を出す画面」のテストが接続可否を検証していない。
+  > `apps/ui/test/test_helper.exs` も `apps/bitflyer/test/test_helper.exs` も中身は `ExUnit.start()` の 1 行だけで、`Ecto.Adapters.SQL.Sandbox.mode(Bitflyer.Repo, :manual)` が呼ばれていない。`UiWeb.ConnCase` は `start_owner!(Bitflyer.Repo, shared: not tags[:async])`（conn_case.ex L35）を実行するが、`StatusLiveTest` は `async: true` で走るため LiveView プロセスからの接続所有権が保証されない。実際 `StatusLiveTest` は `has_element?(view, "#db-status-label")`（status_live_test.exs L12）としか書いておらず、DB が繋がっていても切れていても緑になる。「DB 接続可否を出す画面」のテストが接続可否を検証していない。
   > 改善方針: 両 `test_helper.exs` に `Ecto.Adapters.SQL.Sandbox.mode(Bitflyer.Repo, :manual)` を追加し、`StatusLiveTest` は `#db-status-label` のテキストが `connected` であることまでアサートする。あわせて DB 断のケースを別テストで固定する。
   > 対象ファイル: `apps/ui/test/test_helper.exs`, `apps/bitflyer/test/test_helper.exs`, `apps/ui/test/ui_web/live/status_live_test.exs`
 
