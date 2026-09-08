@@ -155,13 +155,8 @@ defmodule Bitflyer.MarketData.Cache do
   end
 
   defp ensure_table(table) when is_atom(table) do
-    case :ets.whereis(table) do
-      :undefined ->
-        :ets.new(table, [:named_table, :protected, :set, read_concurrency: true])
-
-      _tid ->
-        table
-    end
+    # 同名テーブルが他プロセス所有なら :ets.new が失敗し、init で fail-fast する
+    :ets.new(table, [:named_table, :protected, :set, read_concurrency: true])
   end
 
   defp ets_lookup(table, key) when is_atom(table) do
