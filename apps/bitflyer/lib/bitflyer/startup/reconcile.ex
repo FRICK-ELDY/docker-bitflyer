@@ -171,17 +171,28 @@ defmodule Bitflyer.Startup.Reconcile do
 
   defp active_positions(positions) do
     Enum.filter(positions, fn position ->
-      Decimal.compare(position_size(position), 0) == :gt
+      case Map.get(position, :size) do
+        %Decimal{} = size -> Decimal.compare(size, 0) == :gt
+        _ -> false
+      end
     end)
   end
 
   defp position_code(position), do: Map.fetch!(position, :product_code)
-  defp position_size(position), do: Map.fetch!(position, :size)
 
   defp position_match?(left, right) do
-    Map.fetch!(left, :side) == Map.fetch!(right, :side) and
-      Decimal.eq?(Map.fetch!(left, :size), Map.fetch!(right, :size)) and
-      Decimal.eq?(Map.fetch!(left, :average_price), Map.fetch!(right, :average_price))
+    left_size = Map.get(left, :size)
+    right_size = Map.get(right, :size)
+    left_avg = Map.get(left, :average_price)
+    right_avg = Map.get(right, :average_price)
+
+    Map.get(left, :side) == Map.get(right, :side) and
+      match?(%Decimal{}, left_size) and
+      match?(%Decimal{}, right_size) and
+      match?(%Decimal{}, left_avg) and
+      match?(%Decimal{}, right_avg) and
+      Decimal.eq?(left_size, right_size) and
+      Decimal.eq?(left_avg, right_avg)
   end
 
   defp compare_balances(internal_snaps, external) do
@@ -210,8 +221,17 @@ defmodule Bitflyer.Startup.Reconcile do
   defp balance_currency(balance), do: Map.fetch!(balance, :currency)
 
   defp balance_match?(left, right) do
-    Decimal.eq?(Map.fetch!(left, :amount), Map.fetch!(right, :amount)) and
-      Decimal.eq?(Map.fetch!(left, :available), Map.fetch!(right, :available))
+    left_amount = Map.get(left, :amount)
+    right_amount = Map.get(right, :amount)
+    left_available = Map.get(left, :available)
+    right_available = Map.get(right, :available)
+
+    match?(%Decimal{}, left_amount) and
+      match?(%Decimal{}, right_amount) and
+      match?(%Decimal{}, left_available) and
+      match?(%Decimal{}, right_available) and
+      Decimal.eq?(left_amount, right_amount) and
+      Decimal.eq?(left_available, right_available)
   end
 
   defp compare_open_orders(internal, external) do
@@ -252,10 +272,19 @@ defmodule Bitflyer.Startup.Reconcile do
   defp order_exchange_id(order), do: Map.get(order, :exchange_order_id)
 
   defp open_order_match?(left, right) do
-    Map.fetch!(left, :product_code) == Map.fetch!(right, :product_code) and
-      Map.fetch!(left, :side) == Map.fetch!(right, :side) and
-      Decimal.eq?(Map.fetch!(left, :size), Map.fetch!(right, :size)) and
-      Decimal.eq?(Map.fetch!(left, :filled_size), Map.fetch!(right, :filled_size))
+    left_size = Map.get(left, :size)
+    right_size = Map.get(right, :size)
+    left_filled = Map.get(left, :filled_size)
+    right_filled = Map.get(right, :filled_size)
+
+    Map.get(left, :product_code) == Map.get(right, :product_code) and
+      Map.get(left, :side) == Map.get(right, :side) and
+      match?(%Decimal{}, left_size) and
+      match?(%Decimal{}, right_size) and
+      match?(%Decimal{}, left_filled) and
+      match?(%Decimal{}, right_filled) and
+      Decimal.eq?(left_size, right_size) and
+      Decimal.eq?(left_filled, right_filled)
   end
 
   defp read_risk_state do

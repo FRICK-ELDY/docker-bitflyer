@@ -107,15 +107,36 @@ defmodule Bitflyer.Startup.Reconciler do
         state
 
       :ready ->
-        ensure_risk_cleared()
-        state
+        case ensure_risk_cleared() do
+          :ok ->
+            state
+
+          {:error, error} ->
+            Bitflyer.Telemetry.log(
+              :error,
+              "Failed to ensure risk cleared while ready: #{inspect(error)}",
+              %{reason: :risk_persist_failed, trade_mode: Bitflyer.TradeMode.current()}
+            )
+
+            state
+        end
 
       :not_ready ->
-        ensure_risk_cleared()
+        case ensure_risk_cleared() do
+          :ok ->
+            case state.readiness.mark_ready() do
+              :ok -> state
+              {:error, _} -> state
+            end
 
-        case state.readiness.mark_ready() do
-          :ok -> state
-          {:error, _} -> state
+          {:error, error} ->
+            Bitflyer.Telemetry.log(
+              :error,
+              "Failed to ensure risk cleared, keeping not_ready: #{inspect(error)}",
+              %{reason: :risk_persist_failed, trade_mode: Bitflyer.TradeMode.current()}
+            )
+
+            state
         end
     end
   end
@@ -140,7 +161,19 @@ defmodule Bitflyer.Startup.Reconciler do
 
     # 即時にメモリ上を止め、その後 RiskState を永続化する（persist 失敗でも発注は閉じる）
     _ = state.readiness.halt(reason)
-    persist_risk_halt(reason)
+
+    case persist_risk_halt(reason) do
+      :ok ->
+        :ok
+
+      {:error, error} ->
+        Bitflyer.Telemetry.log(
+          :error,
+          "Failed to persist risk halt after readiness halt: #{inspect(error)}",
+          %{reason: reason, trade_mode: Bitflyer.TradeMode.current()}
+        )
+    end
+
     state
   end
 
@@ -149,28 +182,30 @@ defmodule Bitflyer.Startup.Reconciler do
          |> Ash.Query.filter(name == "default")
          |> Ash.read_one() do
       {:ok, nil} ->
-        RiskState
-        |> Ash.Changeset.for_create(:create, %{name: "default", halted: false})
-        |> Ash.create!()
-
-        :ok
+        case RiskState
+             |> Ash.Changeset.for_create(:create, %{name: "default", halted: false})
+             |> Ash.create() do
+          {:ok, _} -> :ok
+          {:error, error} -> {:error, error}
+        end
 
       {:ok, %RiskState{halted: false}} ->
         :ok
 
       {:ok, %RiskState{} = risk} ->
-        risk
-        |> Ash.Changeset.for_update(:update, %{
-          halted: false,
-          reason: nil,
-          halted_at: nil
-        })
-        |> Ash.update!()
-
-        :ok
+        case risk
+             |> Ash.Changeset.for_update(:update, %{
+               halted: false,
+               reason: nil,
+               halted_at: nil
+             })
+             |> Ash.update() do
+          {:ok, _} -> :ok
+          {:error, error} -> {:error, error}
+        end
 
       {:error, error} ->
-        raise "Failed to read RiskState while clearing halt: #{inspect(error)}"
+        {:error, error}
     end
   end
 
@@ -188,21 +223,23 @@ defmodule Bitflyer.Startup.Reconciler do
          |> Ash.Query.filter(name == "default")
          |> Ash.read_one() do
       {:ok, nil} ->
-        RiskState
-        |> Ash.Changeset.for_create(:create, attrs)
-        |> Ash.create!()
-
-        :ok
+        case RiskState
+             |> Ash.Changeset.for_create(:create, attrs)
+             |> Ash.create() do
+          {:ok, _} -> :ok
+          {:error, error} -> {:error, error}
+        end
 
       {:ok, %RiskState{} = risk} ->
-        risk
-        |> Ash.Changeset.for_update(:update, Map.take(attrs, [:halted, :reason, :halted_at]))
-        |> Ash.update!()
-
-        :ok
+        case risk
+             |> Ash.Changeset.for_update(:update, Map.take(attrs, [:halted, :reason, :halted_at]))
+             |> Ash.update() do
+          {:ok, _} -> :ok
+          {:error, error} -> {:error, error}
+        end
 
       {:error, error} ->
-        raise "Failed to read RiskState while persisting halt: #{inspect(error)}"
+        {:error, error}
     end
   end
 
