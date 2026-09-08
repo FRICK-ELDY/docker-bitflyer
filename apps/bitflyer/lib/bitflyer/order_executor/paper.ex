@@ -1,34 +1,51 @@
 defmodule Bitflyer.OrderExecutor.Paper do
   @moduledoc false
 
-  require Ash.Query
-
   alias Bitflyer.MarketData.Cache
   alias Bitflyer.OrderExecutor.Positions
   alias Bitflyer.Trading.Order
 
   @doc """
   取引所 REST を呼ばず、キャッシュ価格で即時擬似約定し建玉を更新する。
+
+  注文の filled 更新と建玉反映は同一トランザクションで行い、片側だけ成功しないようにする。
   """
   @spec execute(Order.t(), map(), keyword()) :: {:ok, Order.t()} | {:error, atom(), map()}
   def execute(%Order{} = order, command, opts) do
-    with {:ok, fill_price} <- fill_price(order, command, opts),
-         {:ok, order} <- mark_filled(order, fill_price),
-         :ok <- Positions.apply_fill(order, fill_price) do
-      Bitflyer.Telemetry.execute(
-        :order_filled,
-        %{count: 1},
-        %{
-          internal_order_id: order.internal_order_id,
-          exchange_order_id: order.exchange_order_id,
-          product_code: order.product_code,
-          side: order.side,
-          trade_mode: :paper,
-          status: :filled
-        }
-      )
+    with {:ok, fill_price} <- fill_price(order, command, opts) do
+      case Bitflyer.Repo.transaction(fn ->
+             with {:ok, filled_order, order_notifications} <- mark_filled(order, fill_price),
+                  {:ok, position_notifications} <- Positions.apply_fill(filled_order, fill_price) do
+               {filled_order, order_notifications ++ position_notifications}
+             else
+               {:error, code, meta} when is_atom(code) and is_map(meta) ->
+                 Bitflyer.Repo.rollback({code, meta})
+             end
+           end) do
+        {:ok, {filled_order, notifications}} ->
+          _ = Ash.Notifier.notify(notifications)
 
-      {:ok, order}
+          Bitflyer.Telemetry.execute(
+            :order_filled,
+            %{count: 1},
+            %{
+              internal_order_id: filled_order.internal_order_id,
+              exchange_order_id: filled_order.exchange_order_id,
+              product_code: filled_order.product_code,
+              side: filled_order.side,
+              trade_mode: :paper,
+              status: :filled
+            }
+          )
+
+          {:ok, filled_order}
+
+        {:error, {code, meta}} when is_atom(code) and is_map(meta) ->
+          {:error, code, meta}
+
+        {:error, error} ->
+          {:error, :persist_failed, %{error: error}}
+      end
     end
   end
 
@@ -56,17 +73,15 @@ defmodule Bitflyer.OrderExecutor.Paper do
     {:error, :invalid_command, %{field: :price}}
   end
 
-  defp extract_ltp(%{ltp: %Decimal{} = ltp}), do: {:ok, ltp}
-
-  defp extract_ltp(%{ltp: ltp}) when is_binary(ltp) or is_integer(ltp),
-    do: {:ok, Decimal.new(ltp)}
-
-  defp extract_ltp(%{"ltp" => %Decimal{} = ltp}), do: {:ok, ltp}
-
-  defp extract_ltp(%{"ltp" => ltp}) when is_binary(ltp) or is_integer(ltp),
-    do: {:ok, Decimal.new(ltp)}
-
+  defp extract_ltp(%{ltp: ltp}), do: cast_ltp(ltp)
+  defp extract_ltp(%{"ltp" => ltp}), do: cast_ltp(ltp)
   defp extract_ltp(_), do: :error
+
+  defp cast_ltp(%Decimal{} = ltp), do: {:ok, ltp}
+  defp cast_ltp(ltp) when is_binary(ltp), do: {:ok, Decimal.new(ltp)}
+  defp cast_ltp(ltp) when is_integer(ltp), do: {:ok, Decimal.new(ltp)}
+  defp cast_ltp(ltp) when is_float(ltp), do: {:ok, Decimal.from_float(ltp)}
+  defp cast_ltp(_), do: :error
 
   defp mark_filled(%Order{} = order, _fill_price) do
     attrs = %{
@@ -75,8 +90,10 @@ defmodule Bitflyer.OrderExecutor.Paper do
       exchange_order_id: order.exchange_order_id || "paper:#{order.internal_order_id}"
     }
 
-    case order |> Ash.Changeset.for_update(:update, attrs) |> Ash.update() do
-      {:ok, updated} -> {:ok, updated}
+    case order
+         |> Ash.Changeset.for_update(:update, attrs)
+         |> Ash.update(return_notifications?: true) do
+      {:ok, updated, notifications} -> {:ok, updated, notifications}
       {:error, error} -> {:error, :persist_failed, %{error: error}}
     end
   end

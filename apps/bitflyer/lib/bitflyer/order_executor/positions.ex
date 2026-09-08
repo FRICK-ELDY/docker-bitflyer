@@ -7,8 +7,11 @@ defmodule Bitflyer.OrderExecutor.Positions do
 
   @doc """
   擬似約定を建玉へ反映する（paper 用）。
+
+  トランザクション内では `return_notifications?: true` で通知を返し、
+  呼び出し側がコミット後に `Ash.Notifier.notify/1` する。
   """
-  @spec apply_fill(Order.t(), Decimal.t()) :: :ok | {:error, atom(), map()}
+  @spec apply_fill(Order.t(), Decimal.t()) :: {:ok, list()} | {:error, atom(), map()}
   def apply_fill(%Order{} = order, %Decimal{} = fill_price) do
     trade_mode = order.trade_mode
     product_code = order.product_code
@@ -42,8 +45,8 @@ defmodule Bitflyer.OrderExecutor.Positions do
            size: size,
            average_price: fill_price
          })
-         |> Ash.create() do
-      {:ok, _} -> :ok
+         |> Ash.create(return_notifications?: true) do
+      {:ok, _, notifications} -> {:ok, notifications}
       {:error, error} -> {:error, :persist_failed, %{error: error}}
     end
   end
@@ -66,9 +69,10 @@ defmodule Bitflyer.OrderExecutor.Positions do
         update_position(position, %{size: new_size})
 
       Decimal.equal?(size, position.size) ->
-        case Ash.destroy(position) do
-          :ok -> :ok
-          {:ok, _} -> :ok
+        case Ash.destroy(position, return_notifications?: true) do
+          :ok -> {:ok, []}
+          {:ok, _, notifications} -> {:ok, notifications}
+          {:ok, _} -> {:ok, []}
           {:error, error} -> {:error, :persist_failed, %{error: error}}
         end
 
@@ -84,8 +88,10 @@ defmodule Bitflyer.OrderExecutor.Positions do
   end
 
   defp update_position(%Position{} = position, attrs) do
-    case position |> Ash.Changeset.for_update(:update, attrs) |> Ash.update() do
-      {:ok, _} -> :ok
+    case position
+         |> Ash.Changeset.for_update(:update, attrs)
+         |> Ash.update(return_notifications?: true) do
+      {:ok, _, notifications} -> {:ok, notifications}
       {:error, error} -> {:error, :persist_failed, %{error: error}}
     end
   end
