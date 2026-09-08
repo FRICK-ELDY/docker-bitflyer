@@ -12,6 +12,11 @@ defmodule Bitflyer.Trading.BalanceSnapshot do
   postgres do
     table "balance_snapshots"
     repo Bitflyer.Repo
+
+    custom_indexes do
+      index [:trade_mode, :currency, :captured_at],
+        name: "balance_snapshots_trade_mode_currency_captured_at_index"
+    end
   end
 
   actions do

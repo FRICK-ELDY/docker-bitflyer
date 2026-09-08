@@ -13,6 +13,10 @@ defmodule Bitflyer.Trading.Order do
   postgres do
     table "orders"
     repo Bitflyer.Repo
+
+    custom_indexes do
+      index [:exchange_order_id], name: "orders_exchange_order_id_index"
+    end
   end
 
   actions do
@@ -69,7 +73,7 @@ defmodule Bitflyer.Trading.Order do
       allow_nil? false
       public? true
       default :pending
-      constraints one_of: [:pending, :partially_filled, :filled, :cancelled, :rejected]
+      constraints one_of: [:pending, :partially_filled, :filled, :cancelled, :rejected, :expired]
     end
 
     attribute :order_type, :atom do

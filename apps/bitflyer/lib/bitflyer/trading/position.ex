@@ -3,8 +3,8 @@ defmodule Bitflyer.Trading.Position do
   現在建玉の正本。
 
   銘柄 × 取引モードごとに 1 行（paper と live を同居できる）。
-  サイズと平均単価は Decimal。`side` / `trade_mode` は作成時に固定し、
-  既定の update では size / average_price のみ更新する。
+  サイズと平均単価は Decimal。ドテン等で `side` は更新可、
+  `trade_mode` は作成時に固定する。
   """
   use Ash.Resource,
     otp_app: :bitflyer,
@@ -21,7 +21,7 @@ defmodule Bitflyer.Trading.Position do
       :read,
       :destroy,
       create: [:product_code, :side, :size, :average_price, :trade_mode],
-      update: [:size, :average_price]
+      update: [:side, :size, :average_price]
     ]
   end
 

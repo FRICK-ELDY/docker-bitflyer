@@ -35,10 +35,26 @@ defmodule Bitflyer.Trading.ResourcesTest do
                })
                |> Ash.create()
     end
+
+    test "accepts expired status from exchange lifecycle" do
+      assert {:ok, order} =
+               Order
+               |> Ash.Changeset.for_create(:create, %{
+                 internal_order_id: "ord-expired",
+                 product_code: "FX_BTC_JPY",
+                 side: :buy,
+                 size: Decimal.new("0.01"),
+                 trade_mode: :live,
+                 status: :expired
+               })
+               |> Ash.create()
+
+      assert order.status == :expired
+    end
   end
 
   describe "Position" do
-    test "uniqueness is per product_code and trade_mode; update is size/average_price only" do
+    test "uniqueness is per product_code and trade_mode; side can flip, trade_mode cannot" do
       assert {:ok, paper} =
                Position
                |> Ash.Changeset.for_create(:create, %{
@@ -80,23 +96,23 @@ defmodule Bitflyer.Trading.ResourcesTest do
                |> Ash.Changeset.for_update(:update, %{
                  size: Decimal.new("0.06"),
                  average_price: Decimal.new("4810000"),
-                 side: :sell,
                  trade_mode: :live
                })
                |> Ash.update()
 
-      assert {:ok, updated} =
+      assert {:ok, flipped} =
                paper
                |> Ash.Changeset.for_update(:update, %{
+                 side: :sell,
                  size: Decimal.new("0.06"),
                  average_price: Decimal.new("4810000")
                })
                |> Ash.update()
 
-      assert updated.side == :buy
-      assert updated.trade_mode == :paper
-      assert Decimal.eq?(updated.size, Decimal.new("0.06"))
-      assert Decimal.eq?(updated.average_price, Decimal.new("4810000"))
+      assert flipped.side == :sell
+      assert flipped.trade_mode == :paper
+      assert Decimal.eq?(flipped.size, Decimal.new("0.06"))
+      assert Decimal.eq?(flipped.average_price, Decimal.new("4810000"))
     end
   end
 
