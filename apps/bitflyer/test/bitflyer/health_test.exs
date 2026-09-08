@@ -12,6 +12,7 @@ defmodule Bitflyer.HealthTest do
     assert health.reason == nil
     assert Health.to_json_map(health)["status"] == "ready"
     assert Health.to_json_map(health)["trade_mode"] == "dry_run"
+    refute Map.has_key?(Health.to_json_map(health), "db_error")
   end
 
   test "not_ready remains healthy for compose boot" do
@@ -29,7 +30,25 @@ defmodule Bitflyer.HealthTest do
     refute health.healthy?
     refute health.db
     assert health.reason == :database_unavailable
-    assert Health.to_json_map(health)["db_error"] == "connection refused"
+    assert health.db_error == "connection refused"
+    refute Map.has_key?(Health.to_json_map(health), "db_error")
+  end
+
+  test "non-binary database errors are stringified without crashing" do
+    health = Health.build({:error, %{code: :econnrefused}}, :ready, :dry_run)
+
+    assert health.status == :unavailable
+    refute health.healthy?
+    assert health.db_error == "%{code: :econnrefused}"
+  end
+
+  test "unknown readiness is treated as unavailable" do
+    health = Health.build(:ok, :syncing, :dry_run)
+
+    assert health.status == :unavailable
+    refute health.healthy?
+    assert health.reason == :unknown_readiness
+    assert Health.to_json_map(health)["readiness"] == "unknown::syncing"
   end
 
   test "halted readiness is unhealthy even when db ok" do

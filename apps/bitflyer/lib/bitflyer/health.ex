@@ -7,6 +7,9 @@ defmodule Bitflyer.Health do
   - DB 不可または readiness が halted → 非健全（503）
   - DB 可かつ `:not_ready` / `:ready` → 健全（200）。起動途中の `:not_ready` でも
     Compose healthcheck は通す（Ready 化は boot reconcile の責務）
+
+  公開 JSON（`to_json_map/1`）には DB エラー詳細を載せない（情報漏洩防止）。
+  詳細はスナップショットの `db_error` に残し、コントローラ側でログする。
   """
 
   @type status :: :ready | :not_ready | :halted | :unavailable
@@ -16,7 +19,7 @@ defmodule Bitflyer.Health do
           healthy?: boolean(),
           db: boolean(),
           db_error: String.t() | nil,
-          readiness: Bitflyer.Readiness.state(),
+          readiness: term(),
           trade_mode: Bitflyer.TradeMode.t(),
           reason: atom() | nil
         }
@@ -36,16 +39,14 @@ defmodule Bitflyer.Health do
   @doc """
   DB 結果と readiness からスナップショットを組み立てる（単体テスト用）。
   """
-  @spec build(
-          :ok | {:error, String.t()},
-          Bitflyer.Readiness.state(),
-          Bitflyer.TradeMode.t()
-        ) :: t()
+  @spec build(term(), term(), Bitflyer.TradeMode.t()) :: t()
   def build(db_result, readiness, trade_mode) do
     {db_ok?, db_error} =
       case db_result do
         :ok -> {true, nil}
         {:error, message} when is_binary(message) -> {false, message}
+        {:error, message} -> {false, inspect(message)}
+        other -> {false, "unexpected database result: #{inspect(other)}"}
       end
 
     {status, reason} = classify(db_ok?, readiness)
@@ -62,7 +63,7 @@ defmodule Bitflyer.Health do
   end
 
   @doc """
-  JSON 向けの平らなマップ。
+  公開用 JSON。DB エラー本文は含めない。
   """
   @spec to_json_map(t()) :: map()
   def to_json_map(%{} = health) do
@@ -71,26 +72,24 @@ defmodule Bitflyer.Health do
       "db" => health.db,
       "trade_mode" => Bitflyer.TradeMode.name(health.trade_mode),
       "readiness" => Bitflyer.Readiness.format(health.readiness),
-      "reason" =>
-        case health.reason do
-          nil -> nil
-          reason when is_atom(reason) -> Atom.to_string(reason)
-        end
+      "reason" => reason_to_string(health.reason)
     }
-    |> maybe_put_db_error(health.db_error)
   end
 
   defp classify(false, _readiness), do: {:unavailable, :database_unavailable}
 
   defp classify(true, :ready), do: {:ready, nil}
   defp classify(true, :not_ready), do: {:not_ready, nil}
-  defp classify(true, {:halted, reason}), do: {:halted, reason}
+  defp classify(true, {:halted, reason}) when is_atom(reason), do: {:halted, reason}
+  defp classify(true, {:halted, _reason}), do: {:halted, :invalid_halt_reason}
+  defp classify(true, _other), do: {:unavailable, :unknown_readiness}
 
   defp healthy?(:unavailable), do: false
   defp healthy?(:halted), do: false
   defp healthy?(:ready), do: true
   defp healthy?(:not_ready), do: true
 
-  defp maybe_put_db_error(map, nil), do: map
-  defp maybe_put_db_error(map, message), do: Map.put(map, "db_error", message)
+  defp reason_to_string(nil), do: nil
+  defp reason_to_string(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_to_string(reason), do: inspect(reason)
 end

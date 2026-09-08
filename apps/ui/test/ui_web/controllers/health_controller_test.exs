@@ -46,5 +46,6 @@ defmodule UiWeb.HealthControllerTest do
     assert body["status"] == "halted"
     assert body["db"] == true
     assert body["reason"] == "reconcile_mismatch"
+    refute Map.has_key?(body, "db_error")
   end
 end
