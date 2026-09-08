@@ -1,6 +1,8 @@
 defmodule Bitflyer.TradeModeTest do
   use ExUnit.Case, async: false
 
+  import Bitflyer.TestSupport.ReadinessHelper
+
   alias Bitflyer.Readiness
   alias Bitflyer.TradeMode
 
@@ -115,17 +117,4 @@ defmodule Bitflyer.TradeModeTest do
 
   defp restore_env(key, nil), do: Application.delete_env(:bitflyer, key)
   defp restore_env(key, value), do: Application.put_env(:bitflyer, key, value)
-
-  defp reset_readiness do
-    case Readiness.get() do
-      {:halted, _} ->
-        assert Readiness.clear_halt() == :ok
-
-      :ready ->
-        assert Readiness.mark_not_ready() == :ok
-
-      :not_ready ->
-        :ok
-    end
-  end
 end

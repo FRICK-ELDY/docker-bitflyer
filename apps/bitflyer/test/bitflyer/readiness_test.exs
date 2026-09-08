@@ -1,13 +1,15 @@
 defmodule Bitflyer.ReadinessTest do
   use ExUnit.Case, async: false
 
+  import Bitflyer.TestSupport.ReadinessHelper
+
   alias Bitflyer.Readiness
 
   setup do
-    reset_to_not_ready()
+    reset_readiness()
 
     on_exit(fn ->
-      reset_to_not_ready()
+      reset_readiness()
     end)
 
     :ok
@@ -19,6 +21,12 @@ defmodule Bitflyer.ReadinessTest do
     refute Readiness.allow_orders?()
     assert Readiness.gate() == {:error, :not_ready}
     assert Readiness.format(:not_ready) == "not_ready"
+  end
+
+  test "reads current state from ETS without requiring a write call" do
+    assert Readiness.mark_ready() == :ok
+    assert :ets.lookup_element(Readiness, :state, 2) == :ready
+    assert Readiness.get() == :ready
   end
 
   test "mark_ready opens the gate until mark_not_ready" do
@@ -57,18 +65,5 @@ defmodule Bitflyer.ReadinessTest do
     assert Readiness.clear_halt() == {:error, :not_halted}
     assert Readiness.mark_ready() == :ok
     assert Readiness.clear_halt() == {:error, :not_halted}
-  end
-
-  defp reset_to_not_ready do
-    case Readiness.get() do
-      {:halted, _} ->
-        assert Readiness.clear_halt() == :ok
-
-      :ready ->
-        assert Readiness.mark_not_ready() == :ok
-
-      :not_ready ->
-        :ok
-    end
   end
 end
