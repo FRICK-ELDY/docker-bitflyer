@@ -33,4 +33,9 @@ defmodule Bitflyer.MarketData do
 
   @spec ticker_key(String.t()) :: {:ticker, String.t()}
   def ticker_key(product_code) when is_binary(product_code), do: {:ticker, product_code}
+
+  @doc """
+  gap-fill 用 Task.Supervisor 名。
+  """
+  def task_supervisor, do: Bitflyer.MarketData.TaskSupervisor
 end

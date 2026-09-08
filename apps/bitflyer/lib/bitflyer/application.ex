@@ -12,6 +12,7 @@ defmodule Bitflyer.Application do
         Bitflyer.Repo,
         Bitflyer.Readiness,
         Bitflyer.MarketData.Cache,
+        {Task.Supervisor, name: Bitflyer.MarketData.TaskSupervisor},
         Bitflyer.Startup.Reconciler
       ] ++ market_data_feed()
 

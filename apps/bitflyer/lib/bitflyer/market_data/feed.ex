@@ -159,8 +159,10 @@ defmodule Bitflyer.MarketData.Feed do
         %{state | socket: pid, socket_ref: ref}
 
       {:error, {:already_started, pid}} ->
-        ref = Process.monitor(pid)
-        %{state | socket: pid, socket_ref: ref}
+        # 既存 socket は別 Feed PID 向けのままなので捨てて張り直す
+        if is_pid(pid), do: Process.exit(pid, :shutdown)
+        emit_disconnected({:already_started, pid})
+        schedule_reconnect(%{state | connected?: false, socket: nil, socket_ref: nil})
 
       {:error, reason} ->
         emit_disconnected(reason)
@@ -172,10 +174,7 @@ defmodule Bitflyer.MarketData.Feed do
 
   defp stop_socket(%{socket: pid, socket_ref: ref} = state) do
     if is_reference(ref), do: Process.demonitor(ref, [:flush])
-
-    if is_pid(pid) and Process.alive?(pid) do
-      Process.exit(pid, :shutdown)
-    end
+    if is_pid(pid), do: Process.exit(pid, :shutdown)
 
     %{state | socket: nil, socket_ref: nil}
   end
@@ -211,7 +210,7 @@ defmodule Bitflyer.MarketData.Feed do
     # REST は Feed をブロックしない。結果は Feed 経由で適用し、
     # 開始後に届いた WS より古い穴埋めで上書きしない。
     _ =
-      Task.start(fn ->
+      Task.Supervisor.start_child(MarketData.task_supervisor(), fn ->
         gap_fill_products(rest_client, product_codes, gap_fill_started_at, parent)
       end)
 
