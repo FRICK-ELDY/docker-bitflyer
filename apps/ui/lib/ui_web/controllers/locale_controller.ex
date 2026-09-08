@@ -5,10 +5,7 @@ defmodule UiWeb.LocaleController do
   use UiWeb, :controller
 
   def update(conn, %{"locale" => locale}) do
-    locale =
-      if UiWeb.Plugs.Locale.known_locale?(locale),
-        do: locale,
-        else: UiWeb.Plugs.Locale.default_locale()
+    locale = UiWeb.Plugs.Locale.validate_locale(locale)
 
     conn
     |> put_session("locale", locale)

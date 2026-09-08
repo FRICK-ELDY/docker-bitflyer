@@ -31,10 +31,16 @@ defmodule UiWeb.Plugs.Locale do
   """
   def locales, do: @locales
 
+  @doc """
+  ロケール文字列を検証し、有効ならそのまま、無効なら既定値を返す。
+  """
+  def validate_locale(locale) do
+    if known_locale?(locale), do: locale, else: @default_locale
+  end
+
   defp current_locale(conn) do
-    case get_session(conn, "locale") do
-      locale when locale in @locales -> locale
-      _ -> @default_locale
-    end
+    conn
+    |> get_session("locale")
+    |> validate_locale()
   end
 end
