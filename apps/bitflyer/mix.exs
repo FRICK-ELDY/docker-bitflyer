@@ -32,7 +32,10 @@ defmodule Bitflyer.MixProject do
     [
       {:ash, "~> 3.0"},
       {:ash_postgres, "~> 2.0"},
-      {:telemetry, "~> 1.0"}
+      {:telemetry, "~> 1.0"},
+      {:req, "~> 0.5"},
+      {:jason, "~> 1.2"},
+      {:websockex, "~> 0.4"}
     ]
   end
 end

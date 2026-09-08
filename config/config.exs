@@ -12,6 +12,17 @@ config :bitflyer, Bitflyer.Startup.Reconciler,
 
 config :bitflyer, Bitflyer.MarketData.Cache, default_max_age_ms: 5_000
 
+config :bitflyer, Bitflyer.MarketData,
+  enabled: true,
+  product_codes: ["FX_BTC_JPY"],
+  rest_base_url: "https://api.bitflyer.com",
+  ws_url: "wss://ws.lightstream.bitflyer.com/json-rpc",
+  rest_client: Bitflyer.MarketData.Rest,
+  socket_client: Bitflyer.MarketData.Socket,
+  gap_fill_on_connect?: true,
+  reconnect_base_ms: 500,
+  reconnect_max_ms: 30_000
+
 config :bitflyer, Bitflyer.Risk,
   max_order_size: "1",
   max_position_size: "5",
