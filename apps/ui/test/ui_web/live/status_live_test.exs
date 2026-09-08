@@ -1,7 +1,20 @@
 defmodule UiWeb.StatusLiveTest do
-  use UiWeb.ConnCase, async: true
+  use UiWeb.ConnCase, async: false
 
+  import Bitflyer.TestSupport.ReadinessHelper
   import Phoenix.LiveViewTest
+
+  alias Bitflyer.Readiness
+
+  setup do
+    reset_readiness()
+
+    on_exit(fn ->
+      reset_readiness()
+    end)
+
+    :ok
+  end
 
   test "status page shows app name, trade mode, and db status in English by default", %{
     conn: conn
@@ -28,5 +41,12 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#status-page", "取引モード")
     assert has_element?(view, "#status-page", "Ready 状態")
     assert has_element?(view, "#locale-ja")
+  end
+
+  test "readiness halt reason is visible on the status page", %{conn: conn} do
+    assert Readiness.halt(:reconcile_mismatch) == :ok
+
+    {:ok, view, _html} = live(conn, ~p"/")
+    assert has_element?(view, "#readiness", "halted:reconcile_mismatch")
   end
 end

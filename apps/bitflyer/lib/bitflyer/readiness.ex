@@ -13,8 +13,8 @@ defmodule Bitflyer.Readiness do
   テーブル消失時は `:not_ready`（fail-closed）。
 
   UI・executor・health はすべて `get/0`（または `ready?/0`）を読む。
-  Boot reconcile（improvement-plan #12）が `mark_ready/0` / `halt/1` を呼ぶ想定。
-  現状は起動時 `:not_ready` のまま。
+  Boot reconcile（`Bitflyer.Startup.Reconciler`）が `mark_ready/0` / `halt/1` を呼ぶ。
+  起動直後は `:not_ready`（fail-closed）。不整合時は halted のまま Ready に直接戻さない。
   """
 
   use GenServer

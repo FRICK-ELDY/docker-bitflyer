@@ -66,4 +66,11 @@ defmodule Bitflyer.System do
   def exchange_order_gate do
     Bitflyer.TradeMode.exchange_order_gate()
   end
+
+  @doc """
+  起動・定期と同じ突合をいま実行する。
+  """
+  def reconcile_now do
+    Bitflyer.Startup.Reconciler.run_now()
+  end
 end
