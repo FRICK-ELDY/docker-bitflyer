@@ -34,7 +34,7 @@
 | `app` | `docker_bitflyer` Umbrella（`apps/ui` + `apps/bitflyer`） | `127.0.0.1:4000` → Phoenix |
 | `db` | PostgreSQL | `127.0.0.1:5432` |
 
-起動コマンドの本文は、ToDo 手順 6 が通ってから [README.md](../../../../README.md) の「開発起動」へ書く。未実装の `docker compose up` をここには置かない。
+起動コマンドの本文は [README.md](../../../../README.md) の「開発起動」を正とする。
 
 ## 環境変数（名前のみ）
 
