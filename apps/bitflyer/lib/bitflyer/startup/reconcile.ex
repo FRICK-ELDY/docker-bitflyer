@@ -306,32 +306,18 @@ defmodule Bitflyer.Startup.Reconcile do
   end
 
   defp read_latest_balances(trade_mode) do
-    mode = Atom.to_string(trade_mode)
+    import Ecto.Query
 
-    sql = """
-    SELECT DISTINCT ON (currency) id
-    FROM balance_snapshots
-    WHERE trade_mode = $1
-    ORDER BY currency ASC, captured_at DESC
-    """
+    query =
+      from(b in BalanceSnapshot,
+        where: b.trade_mode == ^trade_mode,
+        distinct: b.currency,
+        order_by: [asc: b.currency, desc: b.captured_at]
+      )
 
-    case Ecto.Adapters.SQL.query(Bitflyer.Repo, sql, [mode]) do
-      {:ok, %{rows: []}} ->
-        {:ok, []}
-
-      {:ok, %{rows: rows}} ->
-        ids = Enum.map(rows, fn [id] -> id end)
-
-        case BalanceSnapshot
-             |> Ash.Query.filter(id in ^ids)
-             |> Ash.read() do
-          {:ok, snapshots} -> {:ok, snapshots}
-          {:error, error} -> {:error, error}
-        end
-
-      {:error, error} ->
-        {:error, error}
-    end
+    {:ok, Bitflyer.Repo.all(query)}
+  rescue
+    error -> {:error, error}
   end
 
   defp read_open_orders(trade_mode) do
