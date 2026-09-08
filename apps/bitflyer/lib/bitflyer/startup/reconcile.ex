@@ -175,36 +175,29 @@ defmodule Bitflyer.Startup.Reconcile do
     end)
   end
 
-  defp position_code(position), do: Map.fetch!(as_map(position), :product_code)
-  defp position_size(position), do: Map.fetch!(as_map(position), :size)
+  defp position_code(position), do: Map.fetch!(position, :product_code)
+  defp position_size(position), do: Map.fetch!(position, :size)
 
   defp position_match?(left, right) do
-    left = as_map(left)
-    right = as_map(right)
-
-    left.side == right.side and
-      Decimal.eq?(left.size, right.size) and
-      Decimal.eq?(left.average_price, right.average_price)
+    Map.fetch!(left, :side) == Map.fetch!(right, :side) and
+      Decimal.eq?(Map.fetch!(left, :size), Map.fetch!(right, :size)) and
+      Decimal.eq?(Map.fetch!(left, :average_price), Map.fetch!(right, :average_price))
   end
 
   defp compare_balances(internal_snaps, external) do
+    # 追跡中の通貨だけ突合する（取引所側のダスト通貨で誤停止しない）
     internal_map = Map.new(internal_snaps, &{balance_currency(&1), &1})
     external_map = Map.new(external, &{balance_currency(&1), &1})
 
-    currencies =
-      MapSet.union(MapSet.new(Map.keys(internal_map)), MapSet.new(Map.keys(external_map)))
-
-    Enum.reduce_while(currencies, :ok, fn currency, :ok ->
-      case {Map.get(internal_map, currency), Map.get(external_map, currency)} do
-        {nil, _} ->
-          {:halt,
-           {:error, :reconcile_mismatch, %{kind: :balance_missing_internal, currency: currency}}}
-
-        {_, nil} ->
+    Enum.reduce_while(Map.keys(internal_map), :ok, fn currency, :ok ->
+      case Map.fetch(external_map, currency) do
+        :error ->
           {:halt,
            {:error, :reconcile_mismatch, %{kind: :balance_missing_exchange, currency: currency}}}
 
-        {left, right} ->
+        {:ok, right} ->
+          left = Map.fetch!(internal_map, currency)
+
           if balance_match?(left, right) do
             {:cont, :ok}
           else
@@ -214,13 +207,11 @@ defmodule Bitflyer.Startup.Reconcile do
     end)
   end
 
-  defp balance_currency(balance), do: Map.fetch!(as_map(balance), :currency)
+  defp balance_currency(balance), do: Map.fetch!(balance, :currency)
 
   defp balance_match?(left, right) do
-    left = as_map(left)
-    right = as_map(right)
-
-    Decimal.eq?(left.amount, right.amount) and Decimal.eq?(left.available, right.available)
+    Decimal.eq?(Map.fetch!(left, :amount), Map.fetch!(right, :amount)) and
+      Decimal.eq?(Map.fetch!(left, :available), Map.fetch!(right, :available))
   end
 
   defp compare_open_orders(internal, external) do
@@ -258,16 +249,13 @@ defmodule Bitflyer.Startup.Reconcile do
     end
   end
 
-  defp order_exchange_id(order), do: Map.get(as_map(order), :exchange_order_id)
+  defp order_exchange_id(order), do: Map.get(order, :exchange_order_id)
 
   defp open_order_match?(left, right) do
-    left = as_map(left)
-    right = as_map(right)
-
-    left.product_code == right.product_code and
-      left.side == right.side and
-      Decimal.eq?(left.size, right.size) and
-      Decimal.eq?(left.filled_size, right.filled_size)
+    Map.fetch!(left, :product_code) == Map.fetch!(right, :product_code) and
+      Map.fetch!(left, :side) == Map.fetch!(right, :side) and
+      Decimal.eq?(Map.fetch!(left, :size), Map.fetch!(right, :size)) and
+      Decimal.eq?(Map.fetch!(left, :filled_size), Map.fetch!(right, :filled_size))
   end
 
   defp read_risk_state do
@@ -327,7 +315,4 @@ defmodule Bitflyer.Startup.Reconcile do
       {:error, error} -> {:error, error}
     end
   end
-
-  defp as_map(%{__struct__: _} = struct), do: Map.from_struct(struct)
-  defp as_map(map) when is_map(map), do: Map.new(map)
 end

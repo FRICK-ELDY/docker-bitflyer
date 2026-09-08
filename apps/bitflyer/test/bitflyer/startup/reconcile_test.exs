@@ -61,6 +61,23 @@ defmodule Bitflyer.Startup.ReconcileTest do
     end
   end
 
+  defmodule DustExchange do
+    @behaviour Bitflyer.Exchange.Client
+
+    @impl true
+    def fetch_reconcile_snapshot do
+      {:ok,
+       %{
+         positions: [],
+         balances: [
+           %{currency: "JPY", amount: Decimal.new("1000000"), available: Decimal.new("1000000")},
+           %{currency: "XYZ", amount: Decimal.new("0.0001"), available: Decimal.new("0.0001")}
+         ],
+         open_orders: []
+       }}
+    end
+  end
+
   setup do
     reset_readiness()
     clear_default_risk_state()
@@ -243,6 +260,32 @@ defmodule Bitflyer.Startup.ReconcileTest do
     assert {:ok, internal} = Reconcile.restore(:dry_run)
     assert [snap] = internal.balance_snapshots
     assert Decimal.eq?(snap.amount, Decimal.new("200"))
+  end
+
+  test "live ignores untracked dust currencies on exchange" do
+    alias Bitflyer.Trading.BalanceSnapshot
+
+    previous = Application.get_env(:bitflyer, :trade_mode)
+    Application.put_env(:bitflyer, :trade_mode, :live)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+    end)
+
+    captured_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, _} =
+             BalanceSnapshot
+             |> Ash.Changeset.for_create(:create, %{
+               currency: "JPY",
+               amount: Decimal.new("1000000"),
+               available: Decimal.new("1000000"),
+               captured_at: captured_at,
+               trade_mode: :live
+             })
+             |> Ash.create()
+
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: DustExchange)
   end
 
   test "halted readiness is not auto-cleared on successful reconcile" do

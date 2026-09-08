@@ -50,7 +50,8 @@ defmodule Bitflyer.Startup.Reconciler do
       interval_ms: Keyword.get(opts, :interval_ms, Keyword.get(env, :interval_ms, 60_000)),
       exchange: Keyword.get(opts, :exchange, Bitflyer.Exchange),
       readiness: Keyword.get(opts, :readiness, Bitflyer.Readiness),
-      booted?: false
+      booted?: false,
+      timer_ref: nil
     }
 
     if state.boot? do
@@ -137,8 +138,9 @@ defmodule Bitflyer.Startup.Reconciler do
       trade_mode: Bitflyer.TradeMode.current()
     })
 
-    persist_risk_halt(reason)
+    # 即時にメモリ上を止め、その後 RiskState を永続化する（persist 失敗でも発注は閉じる）
     _ = state.readiness.halt(reason)
+    persist_risk_halt(reason)
     state
   end
 
@@ -204,12 +206,22 @@ defmodule Bitflyer.Startup.Reconciler do
     end
   end
 
-  defp schedule_periodic(%{interval_ms: :infinity} = state), do: state
-
-  defp schedule_periodic(%{interval_ms: ms} = state) when is_integer(ms) and ms > 0 do
-    Process.send_after(self(), :periodic_reconcile, ms)
-    state
+  defp schedule_periodic(%{interval_ms: :infinity} = state) do
+    cancel_timer(state)
   end
 
-  defp schedule_periodic(state), do: state
+  defp schedule_periodic(%{interval_ms: ms} = state) when is_integer(ms) and ms > 0 do
+    state = cancel_timer(state)
+    timer_ref = Process.send_after(self(), :periodic_reconcile, ms)
+    Map.put(state, :timer_ref, timer_ref)
+  end
+
+  defp schedule_periodic(state), do: cancel_timer(state)
+
+  defp cancel_timer(%{timer_ref: ref} = state) when is_reference(ref) do
+    _ = Process.cancel_timer(ref)
+    %{state | timer_ref: nil}
+  end
+
+  defp cancel_timer(state), do: state
 end
