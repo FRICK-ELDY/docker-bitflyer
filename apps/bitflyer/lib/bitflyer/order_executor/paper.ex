@@ -20,6 +20,9 @@ defmodule Bitflyer.OrderExecutor.Paper do
              else
                {:error, code, meta} when is_atom(code) and is_map(meta) ->
                  Bitflyer.Repo.rollback({code, meta})
+
+               other ->
+                 Bitflyer.Repo.rollback(other)
              end
            end) do
         {:ok, {filled_order, notifications}} ->

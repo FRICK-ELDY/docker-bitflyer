@@ -45,8 +45,8 @@ defmodule Bitflyer.OrderExecutor do
       {:idempotent, %Order{} = order} ->
         {:ok, order, :idempotent}
 
-      {:error, _code, _meta} = error ->
-        error
+      other ->
+        other
     end
   end
 
