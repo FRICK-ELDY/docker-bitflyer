@@ -30,15 +30,14 @@ defmodule Bitflyer.RiskTest do
     assert Readiness.get() == :not_ready
     put_fresh_market()
 
-    assert {:error, :unsynced, _} =
-             Risk.authorize(valid_command(), positions: [], check_persisted_circuit: false)
+    assert {:error, :unsynced, _} = Risk.authorize(valid_command(), positions: [])
   end
 
   test "authorize rejects stale market data" do
     assert Readiness.mark_ready() == :ok
 
     assert {:error, :stale, %{market_key: @market_key}} =
-             Risk.authorize(valid_command(), positions: [], check_persisted_circuit: false)
+             Risk.authorize(valid_command(), positions: [])
   end
 
   test "authorize rejects order size over limit" do
@@ -55,8 +54,7 @@ defmodule Bitflyer.RiskTest do
              Risk.authorize(
                valid_command(%{size: Decimal.new("0.02")}),
                positions: [],
-               limits: limits,
-               check_persisted_circuit: false
+               limits: limits
              )
   end
 
@@ -78,8 +76,7 @@ defmodule Bitflyer.RiskTest do
              Risk.authorize(
                valid_command(%{size: Decimal.new("0.02")}),
                positions: positions,
-               limits: limits,
-               check_persisted_circuit: false
+               limits: limits
              )
   end
 
@@ -87,8 +84,7 @@ defmodule Bitflyer.RiskTest do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
 
-    assert :ok =
-             Risk.authorize(valid_command(), positions: [], check_persisted_circuit: false)
+    assert :ok = Risk.authorize(valid_command(), positions: [])
   end
 
   test "authorize rejects when circuit is open and open_circuit persists RiskState" do
@@ -124,8 +120,7 @@ defmodule Bitflyer.RiskTest do
 
     on_exit(fn -> :telemetry.detach(handler_id) end)
 
-    assert {:error, :unsynced, _} =
-             Risk.authorize(valid_command(), positions: [], check_persisted_circuit: false)
+    assert {:error, :unsynced, _} = Risk.authorize(valid_command(), positions: [])
 
     assert_receive {:telemetry, [:bitflyer, :risk, :rejected], %{count: 1}, metadata}
     assert metadata.rejection_code == :unsynced

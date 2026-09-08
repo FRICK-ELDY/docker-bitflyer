@@ -70,34 +70,23 @@ defmodule Bitflyer.Risk.Circuit do
 
   defp persist_halt(reason) do
     halted_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    reason_str = Atom.to_string(reason)
 
     attrs = %{
       name: @default_name,
       halted: true,
-      reason: reason_str,
+      reason: Atom.to_string(reason),
       halted_at: halted_at
     }
 
     case RiskState
-         |> Ash.Query.filter(name == ^@default_name)
-         |> Ash.read_one() do
-      {:ok, nil} ->
-        case RiskState |> Ash.Changeset.for_create(:create, attrs) |> Ash.create() do
-          {:ok, _} -> :ok
-          {:error, error} -> {:error, error}
-        end
-
-      {:ok, %RiskState{} = risk} ->
-        case risk
-             |> Ash.Changeset.for_update(:update, Map.take(attrs, [:halted, :reason, :halted_at]))
-             |> Ash.update() do
-          {:ok, _} -> :ok
-          {:error, error} -> {:error, error}
-        end
-
-      {:error, error} ->
-        {:error, error}
+         |> Ash.Changeset.for_create(:create, attrs)
+         |> Ash.create(
+           upsert?: true,
+           upsert_identity: :unique_name,
+           upsert_fields: [:halted, :reason, :halted_at]
+         ) do
+      {:ok, _} -> :ok
+      {:error, error} -> {:error, error}
     end
   end
 end

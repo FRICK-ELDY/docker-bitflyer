@@ -29,7 +29,7 @@ defmodule Bitflyer.Risk do
   - `:limits` — `Limits.t()` 上書き
   - `:positions` — 建玉リスト（未指定時は DB から当該銘柄を読む）
   - `:now` — Cache.fresh? 用 monotonic ms
-  - `:check_persisted_circuit` — 既定 true。Ready 時に RiskState も見る
+  - `:check_persisted_circuit` — 既定 false。true のとき Ready でも RiskState を見る（診断用。ホットパスでは使わない）
   """
   @spec authorize(map(), keyword()) :: result()
   def authorize(command, opts \\ []) when is_map(command) do
@@ -84,7 +84,7 @@ defmodule Bitflyer.Risk do
       not match?(%Decimal{}, size) ->
         {:error, :invalid_command, %{field: :size}}
 
-      Decimal.compare(size, 0) != :gt ->
+      not Decimal.positive?(size) ->
         {:error, :invalid_command, %{field: :size}}
 
       is_nil(market_key) ->
@@ -100,7 +100,9 @@ defmodule Bitflyer.Risk do
 
     case readiness.gate() do
       :ok ->
-        if Keyword.get(opts, :check_persisted_circuit, true) and
+        # 実行時の正本は Readiness（ETS）。サーキット開は先に halt する設計のため
+        # 既定では RiskState を読まない（発注ホットパスの DB 往復を避ける）。
+        if Keyword.get(opts, :check_persisted_circuit, false) and
              Circuit.open?(readiness: readiness) do
           {:error, :circuit_open, %{source: :risk_state}}
         else
@@ -130,7 +132,7 @@ defmodule Bitflyer.Risk do
   defp check_order_size(command, limits) do
     size = Map.fetch!(command, :size)
 
-    if Decimal.compare(size, limits.max_order_size) == :gt do
+    if Decimal.gt?(size, limits.max_order_size) do
       {:error, :limit_exceeded,
        %{
          limit: :max_order_size,
@@ -158,7 +160,7 @@ defmodule Bitflyer.Risk do
 
     projected = projected_position_size(positions, product_code, side, size)
 
-    if Decimal.compare(projected, limits.max_position_size) == :gt do
+    if Decimal.gt?(projected, limits.max_position_size) do
       {:error, :limit_exceeded,
        %{
          limit: :max_position_size,
