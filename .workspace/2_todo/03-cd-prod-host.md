@@ -1,6 +1,6 @@
 # ToDo: 本番ホスト向け CD を組み込む
 
-対応する前段: [02-ci-github-actions.md](./02-ci-github-actions.md)
+対応する前段: [02-ci-github-actions.md](../3_archive/02-ci-github-actions.md)
 
 ステータス: 未着手。**CI（02）が緑で運用できる状態になってから**着手する。
 

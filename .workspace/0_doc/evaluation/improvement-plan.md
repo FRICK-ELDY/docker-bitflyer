@@ -72,7 +72,7 @@
 
 | 改善 | 既存文書 |
 |:---|:---|
-| P0 #1–3 | `.workspace/2_todo/02-ci-github-actions.md` |
+| P0 #1–3 | `.workspace/3_archive/02-ci-github-actions.md` |
 | P3 #21 | `.workspace/2_todo/03-cd-prod-host.md` |
 | P2 #15（paper） | `.workspace/1_backlog/paper-trade-adapter.md` |
 | P3 #20 | `.workspace/1_backlog/discord-notify-adapter.md` |

@@ -8,19 +8,58 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 
 ## 現状
 
-開発用 Docker（`app` / `db`）まで置いた段階。Umbrella 本体は [ToDo 手順 4 以降](.workspace/2_todo/01-bootstrap-umbrella-and-docker.md)。
+開発用の骨格は動く。
 
-Phoenix の常時起動手順は、骨格（手順 6）が通ってからここに移す。
+- `docker compose up -d` で `app`（Phoenix）と `db`（PostgreSQL）が上がる
+- UI は `http://127.0.0.1:4000/`（稼働確認用 Status。取引 UI ではない）
+- 品質ゲートはローカルも CI も `mix precommit`
+- 市場データ・戦略・リスク・発注の engine は未実装（`TRADE_MODE` の既定は `dry_run`）
+
+完了した骨格作業は [3_archive/01-bootstrap-umbrella-and-docker.md](.workspace/3_archive/01-bootstrap-umbrella-and-docker.md)。次の本番配布は [2_todo/03-cd-prod-host.md](.workspace/2_todo/03-cd-prod-host.md)。
 
 ## 開発起動
 
+前提: Docker / Compose が使えること。ホストに Elixir は不要。
+
 ```bash
 cp .env.example .env
-docker compose up -d db
-docker compose run --rm app mix --version
+docker compose up -d --build
 ```
 
-`db` は `127.0.0.1:5432`、将来の UI は `127.0.0.1:4000`。ソースは `app` にマウントする。
+初回はイメージビルドと `deps.get` / `ash.setup` で時間がかかる。準備が終わると UI に `http://127.0.0.1:4000/` でアクセスできる。
+
+| サービス | ホスト公開 |
+| --- | --- |
+| `app`（Umbrella） | `127.0.0.1:4000` |
+| `db`（PostgreSQL） | `127.0.0.1:5432` |
+
+ソースは `app` に bind mount する。よく使う操作:
+
+```bash
+docker compose logs -f app
+docker compose restart app
+docker compose down
+```
+
+## 品質ゲート
+
+コミット前・PR 前に、ローカルで次を緑にする。
+
+```bash
+docker compose run --rm app mix precommit
+```
+
+中身は format チェック / warnings-as-errors の compile / test（両アプリ）。`MIX_ENV` は Compose に固定しない（`.env` にも書かない）。`preferred_envs` が `precommit` を `:test` にする。
+
+`ash.setup` は常駐起動（`phx.server`）時だけ走る。空の DB やマイグレーション追加のあとにゲートだけ先に回す場合は、先に次を実行する。
+
+```bash
+docker compose run --rm -e MIX_ENV=test app mix ash.setup --domains Bitflyer.System
+```
+
+（現状の test は開発用 DB を共有する。分離は改善計画の P0 #5。CI はジョブ内で setup してから `precommit` する。）
+
+GitHub Actions も同じ `mix precommit` を PR と `main` で実行する。範囲の詳細は [architecture/ci-cd.md](.workspace/0_doc/architecture/ci-cd.md)。**CI が赤のまま `main` へマージしない。**
 
 ## 環境変数
 
@@ -35,11 +74,14 @@ docker compose run --rm app mix --version
 
 ## よく使う mix
 
+すべてコンテナ内で実行する。
+
 ```bash
 docker compose run --rm app mix --version
+docker compose run --rm app mix precommit
+docker compose run --rm app mix test
+docker compose run --rm app mix setup
 ```
-
-Umbrella 生成後の `mix` は手順 4 以降で追記する。
 
 ## ドキュメント
 
@@ -49,23 +91,25 @@ Umbrella 生成後の `mix` は手順 4 以降で追記する。
 | --- | --- |
 | [`.workspace/0_doc/vision.md`](.workspace/0_doc/vision.md) | 目的と設計原則 |
 | [`.workspace/0_doc/architecture/overview.md`](.workspace/0_doc/architecture/overview.md) | 全体構成とアプリ境界 |
+| [`.workspace/0_doc/architecture/ci-cd.md`](.workspace/0_doc/architecture/ci-cd.md) | CI が保証すること / しないこと |
 | [`.workspace/0_doc/architecture/env/dev.md`](.workspace/0_doc/architecture/env/dev.md) | 開発環境（`app` / `db`、ポート） |
 | [`.workspace/0_doc/architecture/env/prod.md`](.workspace/0_doc/architecture/env/prod.md) | 本番環境 |
-| [`.workspace/0_doc/evaluation/tech-stack.md`](.workspace/0_doc/evaluation/tech-stack.md) | 技術選定の評価 |
-| [`.workspace/2_todo/01-bootstrap-umbrella-and-docker.md`](.workspace/2_todo/01-bootstrap-umbrella-and-docker.md) | 今の ToDo |
+| [`.workspace/0_doc/evaluation/`](.workspace/0_doc/evaluation/) | 技術選定・評価・改善提案 |
+| [`.workspace/2_todo/03-cd-prod-host.md`](.workspace/2_todo/03-cd-prod-host.md) | 今の ToDo（本番 CD） |
+| [`.workspace/3_archive/`](.workspace/3_archive/) | 完了した ToDo（骨格・CI など） |
 | `.workspace/1_backlog/` | まだ着手しない項目 |
-| `.workspace/3_archive/` | 完了・破棄した項目 |
 
 ## これから作るもの
 
-- Compose による開発 / 本番の起動一式
 - 市場データ、戦略、リスク、発注、永続化の各コンポーネント
-- 秘密情報を Git に入れない実行手順
+- 本番用 release / Compose と配備手順（[ToDo 03](.workspace/2_todo/03-cd-prod-host.md)）
+- 秘密情報を Git に入れない本番実行手順
 
-詳細は Vision と Architecture を先に読む。
+詳細は Vision と Architecture を先に読む。改善の優先順位は [improvement-plan.md](.workspace/0_doc/evaluation/improvement-plan.md)。
 
 ## 注意
 
 - API キー、パスフレーズ、本番設定をリポジトリにコミットしない
 - 開発環境の既定は `dry_run` とする。`paper` と `live` は明示する
 - 本番キーに出金権限を付けない
+- `.env` に `MIX_ENV` を書かない（品質ゲートの `preferred_envs` が効かなくなる）
