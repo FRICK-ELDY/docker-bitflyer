@@ -1,9 +1,11 @@
 defmodule Bitflyer.Exchange.Client do
   @moduledoc """
-  取引所スナップショット取得の契約。
+  取引所アダプタの契約。
 
-  live 突合はこの behaviour 経由のみ。未実装クライアントは
-  `Bitflyer.Exchange.Unavailable` を使い、fail-closed で Ready にしない。
+  - 突合: `fetch_reconcile_snapshot/0`
+  - 発注: `place_order/1`（live の order-executor 出口のみが呼ぶ）
+
+  未実装クライアントは `Bitflyer.Exchange.Unavailable`（fail-closed）。
   """
 
   @type position :: %{
@@ -33,5 +35,17 @@ defmodule Bitflyer.Exchange.Client do
           open_orders: [open_order()]
         }
 
+  @type place_order_request :: %{
+          required(:product_code) => String.t(),
+          required(:side) => :buy | :sell,
+          required(:size) => Decimal.t(),
+          required(:order_type) => :limit | :market,
+          required(:internal_order_id) => String.t(),
+          optional(:price) => Decimal.t() | nil
+        }
+
+  @type place_order_result :: %{exchange_order_id: String.t()}
+
   @callback fetch_reconcile_snapshot() :: {:ok, snapshot()} | {:error, term()}
+  @callback place_order(place_order_request()) :: {:ok, place_order_result()} | {:error, term()}
 end

@@ -87,4 +87,11 @@ defmodule Bitflyer.System do
   def authorize_order(command, opts \\ []) do
     Bitflyer.Risk.authorize(command, opts)
   end
+
+  @doc """
+  risk 認可のあと order-executor へ渡す（モード別出口・冪等）。
+  """
+  def submit_order(command, opts \\ []) do
+    Bitflyer.OrderExecutor.submit(command, opts)
+  end
 end
