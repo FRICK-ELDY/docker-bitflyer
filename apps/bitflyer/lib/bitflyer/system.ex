@@ -33,6 +33,13 @@ defmodule Bitflyer.System do
   end
 
   @doc """
+  稼働スナップショット（DB + readiness + trade mode）。
+  """
+  def health(opts \\ []) do
+    Bitflyer.Health.snapshot(opts)
+  end
+
+  @doc """
   Ready 状態の正本（`:not_ready` / `:ready` / `{:halted, reason}`）。
   """
   def readiness do

@@ -15,6 +15,13 @@ defmodule UiWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # 認証・セッション不要。監視と Compose healthcheck 用。
+  scope "/", UiWeb do
+    pipe_through :api
+
+    get "/health", HealthController, :show
+  end
+
   scope "/", UiWeb do
     pipe_through :browser
 
@@ -24,11 +31,6 @@ defmodule UiWeb.Router do
       live "/", StatusLive
     end
   end
-
-  # Other scopes may use custom stacks.
-  # scope "/api", UiWeb do
-  #   pipe_through :api
-  # end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:ui, :dev_routes) do
