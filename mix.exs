@@ -36,7 +36,8 @@ defmodule DockerBitflyer.MixProject do
         "deps.unlock --check-unused",
         "format --check-formatted",
         "compile --warnings-as-errors",
-        "test"
+        # test/ は compile 対象外のため、こちらでも warnings-as-errors にする
+        "test --warnings-as-errors"
       ]
     ]
   end
