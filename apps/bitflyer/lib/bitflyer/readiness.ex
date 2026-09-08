@@ -161,8 +161,12 @@ defmodule Bitflyer.Readiness do
   def handle_call({:halt, reason}, _from, table) when is_atom(reason) do
     from = ets_get(table)
     to = {:halted, reason}
-    ets_put(table, to)
-    emit_changed(from, to, %{reason: reason})
+
+    if from != to do
+      ets_put(table, to)
+      emit_changed(from, to, %{reason: reason})
+    end
+
     {:reply, :ok, table}
   end
 

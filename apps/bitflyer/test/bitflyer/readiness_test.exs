@@ -90,4 +90,27 @@ defmodule Bitflyer.ReadinessTest do
     assert metadata.to == "ready"
     assert metadata.trade_mode == :dry_run
   end
+
+  test "identical halt does not re-emit readiness_changed" do
+    parent = self()
+    handler_id = "readiness-halt-idempotent-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:bitflyer, :readiness, :changed],
+        fn event, measurements, metadata, _config ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert Readiness.halt(:reconcile_mismatch) == :ok
+    assert_receive {:telemetry, [:bitflyer, :readiness, :changed], _, _}
+
+    assert Readiness.halt(:reconcile_mismatch) == :ok
+    refute_receive {:telemetry, [:bitflyer, :readiness, :changed], _, _}, 50
+  end
 end

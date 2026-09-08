@@ -5,7 +5,7 @@ defmodule Bitflyer.Telemetry do
   エンジン実装より先にイベント名を固定する。改名すると過去ログと
   LiveDashboard が繋がらなくなるため、追加はあってもリネームは避ける。
 
-  メタデータは allowlist のみ通し、秘密らしきキーは落とす。
+  メタデータは allowlist のみ通す（秘密キーを allowlist に入れないこと）。
   """
 
   require Logger
@@ -50,18 +50,6 @@ defmodule Bitflyer.Telemetry do
                         :healthy,
                         :count
                       ])
-
-  @secret_key_fragments ~w(
-    secret
-    password
-    token
-    api_key
-    apikey
-    authorization
-    webhook
-    private
-    credential
-  )
 
   @doc """
   定義済みイベント（キー → telemetry イベント名）。
@@ -153,12 +141,5 @@ defmodule Bitflyer.Telemetry do
 
   defp normalize_key(_), do: :error
 
-  defp allowed_metadata_key?(key) do
-    MapSet.member?(@metadata_allowlist, key) and not secret_looking_key?(key)
-  end
-
-  defp secret_looking_key?(key) do
-    name = key |> Atom.to_string() |> String.downcase()
-    Enum.any?(@secret_key_fragments, &String.contains?(name, &1))
-  end
+  defp allowed_metadata_key?(key), do: MapSet.member?(@metadata_allowlist, key)
 end
