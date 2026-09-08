@@ -1,80 +1,80 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-08  
-根拠: [evaluation-2026-09-08.md](./evaluation-2026-09-08.md) / [specific-weaknesses-2026-09-08.md](./specific-weaknesses-2026-09-08.md)
+最終更新: 2026-09-09  
+根拠: [evaluation-2026-09-09.md](./evaluation-2026-09-09.md) / [specific-weaknesses-2026-09-09.md](./specific-weaknesses-2026-09-09.md)
 
-方針: **利益機能より資金保全・品質ゲート・復帰経路を先に直す。** 戦略の中身は縦貫通の後。
-
----
-
-## P0 — 今すぐ（engine より先）
-
-品質ゲートが壊れたまま発注ロジックを書くと、「緑なのに壊れている」を固定する。
-
-| # | 項目 | 具体策 | 完了の見方 |
-|:---:|:---|:---|:---|
-| 1 | ルート `mix precommit` | `mix.exs` に `preferred_envs: [precommit: :test]` と副作用なし alias（`format --check-formatted` / `compile --warnings-as-errors` / `test`）。ui 側の重複・`format` 書き換えをやめる | `docker compose run --rm -e MIX_ENV=test app mix precommit` が両アプリを検査して緑 |
-| 2 | Compose の MIX_ENV 衝突 | `compose.yaml` の固定 `MIX_ENV=dev` を見直し、文書どおりのコマンドが通る形にする | 文書化した 1 コマンドが exit 0 |
-| 3 | GitHub Actions CI | ToDo 02 どおり。Elixir 1.18 / OTP 27、PostgreSQL service、本番シークレットなし | PR で format/compile/test が自動実行 |
-| 4 | README 同期 | 骨格完了を反映。アーカイブへのリンク修正。起動・ゲートコマンドを実測どおりに | 新規参加者が README だけで `compose up` とゲートに到達 |
-| 5 | テスト DB 分離 | `runtime.exs` の test で `_test` DB（または `TEST_DATABASE_URL`） | `MIX_ENV=test` で `docker_bitflyer_dev` を触らない |
+方針: **利益機能より資金保全・復帰・観測を先に直す。** live 接続は下記 P0/P1 の完了まで禁止。戦略の中身は縦貫通の後。
 
 ---
 
-## P1 — 安全の枠（発注の前に置く骨）
+## 消化済み（2026-09-08 計画の P0–P2）
 
-| # | 項目 | 具体策 | 完了の見方 |
-|:---:|:---|:---|:---|
-| 6 | `TradeMode` 型と live 解禁条件 | 許可値以外は起動停止。live は二重明示 + Ready 完了まで halted | 不正 `TRADE_MODE` で起動失敗。live 単独では発注不可 |
-| 7 | Readiness 状態機械 | `:not_ready` / `:ready` / `{:halted, reason}` を単一の正本に | UI・将来の executor・health が同じ状態を読む |
-| 8 | `GET /health` | DB + readiness で 200/503。compose healthcheck を切替 | DB 断で unhealthy |
-| 9 | telemetry / 構造化ログ語彙 | イベント名を先に定数化。秘密は allowlist 外 | LiveDashboard またはログで語彙が見える |
-| 10 | `.dockerignore` | 本番 Dockerfile より先 | ビルドコンテキストに `.env` / `_build` が入らない |
+前回計画の #1–17（品質ゲート、TradeMode、Readiness、health、telemetry、永続 Resource、突合、ETS、risk 骨、executor 出口、market-data、資金保全回帰）はコード上で解決済み。再掲しない。
 
 ---
 
-## P2 — Recoverable / Safety / Idempotent の実装
+## P0 — live 解禁の前に塞ぐ穴（実 client より先）
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 11 | 永続 Resource | Order / Position / BalanceSnapshot / RiskState（Decimal・内部注文 ID 一意） | マイグレーションと Ash Resource が存在 |
-| 12 | Boot reconcile | 復元 → 突合 → 不整合なら Ready にしない | 不整合時は halted のまま UI に理由が出る |
-| 13 | ETS 鮮度 cache | `{value, received_at}` + `fresh?/2` | stale を risk が拒否できる |
-| 14 | risk-manager | fail-closed `authorize/2`、サーキット永続化 | 上限超過・stale・未同期は必ず拒否 |
-| 15 | order-executor | DryRun / Paper / Live 出口。冪等キー | paper/dry_run が発注 REST を呼ばないテストが緑 |
-| 16 | market-data | REST + WebSocket、再接続、穴埋め | 切断後に再購読し、古いデータで発注しない |
-| 17 | 資金保全の回帰テスト | 重複 intent、mode 分離、boot halt、risk 拒否 | CI で必須 |
+| 1 | submission 不明の安全化 | timeout/切断を `rejected` にしない。`submission_unknown`（または同等）+ 即 Readiness halt。確定拒否だけ rejected | 不明結果で halt し、再送しないテストが緑 |
+| 2 | 受注後 ID 永続化失敗 | `exchange_order_id` 更新失敗時も halt。起動突合で回収するまで Ready にしない | persist_failed で発注ゲートが閉じる |
+| 3 | 残高 baseline | live で必須通貨の BalanceSnapshot が無ければ Ready にしない。空リストで compare 成功にしない | 空 DB の live 突合が halt |
+| 4 | risk 迂回の廃止 | `authorize?: false` を本番 API から除去。AuthorizedOrder 型または test 限定注入 | 公開 `submit/2` だけでは risk をスキップできない |
+| 5 | risk limits 完成 | `max_daily_loss` / `max_orders_per_minute` / `max_price_deviation_pct`（+ 可能なら残高） | 各拒否理由のユニット + 回帰が緑 |
 
 ---
 
-## P3 — 運用として回す
+## P1 — 縦貫通と停止・復帰
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 18 | StatusLive の発注可否表示 | readiness / halt reason / 鮮度 / モード色分け | 「今トレードしてよいか」が 1 秒で分かる |
-| 19 | UI 認証・本番 bind | BasicAuth 等 + 公開面最小化。ToDo 03 に明記 | 認証なしで取引詳細を見られない |
-| 20 | Discord 通知アダプタ | 発注経路から独立。失敗しても取引を止めない | 起動/停止/halt が人に届く |
-| 21 | 本番 release Compose | `mix release`、digest 固定、backup/rollback 文書 | 実弾なしで一度上げられる |
-| 22 | deps audit | CI に可視化（最初は fail させなくてもよい） | 既知脆弱性が一覧できる |
+| 6 | strategy の骨 | Behaviour + 固定ルール 1 本。Feed → Strategy → Risk → Executor を dry_run で駆動 | compose up 放置でも dry_run 意図がログに出る（または明示的に no-op でも経路が繋がる） |
+| 7 | グレースフルシャットダウン | `prepare_stop` で発注ゲート閉鎖、子 `shutdown`、Compose `stop_grace_period` | SIGTERM 後に新規 submit が拒否される |
+| 8 | halted 復帰手段 | `mix bitflyer.resume`（再突合成功時のみ clear_halt）。手順を prod.md に記載 | remote console 以外で再開できる |
+| 9 | paper 残高・指値 | 擬似約定で BalanceSnapshot 更新。limit は LTP 交差（簡易で可） | paper 経路で残高行が増える |
+
+---
+
+## P2 — 観測と運用 UI
+
+| # | 項目 | 具体策 | 完了の見方 |
+|:---:|:---|:---|:---|
+| 10 | Discord（または同等）通知 | halt / reconcile_mismatch / disconnect。失敗しても取引を止めない | Webhook 未設定でも起動し、設定時に halt が届く |
+| 11 | StatusLive 発注可否 | `exchange_order_gate`・鮮度・Feed・モード色分けを最上部に | 「今トレードしてよいか」が 1 秒で分かる |
+| 12 | health の外形 | `/live` と `/ready` 分離、または ready に stale/Feed を含める方針を文書+実装 | WS 断を外形監視で検知できる |
+| 13 | telemetry allowlist | `:kind` / `:currency` / `:limit` を通す | mismatch 種別がログに残る |
+| 14 | README 現状同期 | implemented / partial / unavailable をコンポーネント別に | README だけで現状が分かる |
+
+---
+
+## P3 — 本番形と live クライアント
+
+| # | 項目 | 具体策 | 完了の見方 |
+|:---:|:---|:---|:---|
+| 15 | UI 認証・bind | BasicAuth（環境変数）+ 本番 publish 最小化。ToDo 03 に明記 | 認証なしで取引詳細を見られない |
+| 16 | API キー枠 | `.env.example` に `BITFLYER_API_KEY` / `SECRET`。live 時のみ必須。出金権限禁止を文書化 | live でキー欠落時に起動停止 |
+| 17 | 本番 release Compose | `mix release`、非 root、digest 固定、backup/rollback（ToDo 03） | 実弾なしで一度上げられる |
+| 18 | private API client | 署名付き REST。cancel / 照会 / 約定反映。fixture 契約テスト | Unavailable 以外を差し込める |
+| 19 | deps audit | CI で可視化（最初は fail させなくてもよい） | 既知脆弱性が一覧できる |
 
 ---
 
 ## 意図的に後回し（提案のみ）
 
-- 戦略アルゴリズムの高度化
-- プロパティ / モデルベーステストの本格導入
+- 戦略アルゴリズムの高度化・パラメータ UI
+- 板の本格購読・プロパティ / モデルベース試験の本格導入
 - paper Game Day、SBOM / 署名、SLO 数値の精緻化
 - 裁量向け UI、複数取引所、ML 基盤
 
 ---
 
-## 既存 ToDo との対応
+## 既存 ToDo / バックログとの対応
 
 | 改善 | 既存文書 |
 |:---|:---|
-| P0 #1–3 | `.workspace/3_archive/02-ci-github-actions.md` |
-| P3 #21 | `.workspace/2_todo/03-cd-prod-host.md` |
-| P2 #15（paper） | `.workspace/1_backlog/paper-trade-adapter.md` |
-| P3 #20 | `.workspace/1_backlog/discord-notify-adapter.md` |
+| P3 #17 | `.workspace/2_todo/03-cd-prod-host.md` |
+| P2 #10 | `.workspace/1_backlog/discord-notify-adapter.md` |
+| P3 #18（paper 厚みの延長） | `.workspace/1_backlog/paper-trade-adapter.md` |
 
-次回評価では、本計画の P0 / P1 がコード上で解決済みかを対象ファイルの再読で確認する。
+次回評価では、本計画の **P0** がコード上で解決済みかを対象ファイルの再読で確認する。P0 未完了のまま live client を足した場合は重大減点とする。
