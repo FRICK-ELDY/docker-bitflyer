@@ -10,6 +10,7 @@ defmodule Bitflyer.Application do
     children = [
       Bitflyer.Repo,
       Bitflyer.Readiness,
+      Bitflyer.MarketData.Cache,
       Bitflyer.Startup.Reconciler
     ]
 

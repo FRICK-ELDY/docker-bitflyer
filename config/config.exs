@@ -10,6 +10,8 @@ config :bitflyer, Bitflyer.Startup.Reconciler,
   boot?: true,
   interval_ms: 60_000
 
+config :bitflyer, Bitflyer.MarketData.Cache, default_max_age_ms: 5_000
+
 config :ui,
   generators: [timestamp_type: :utc_datetime]
 

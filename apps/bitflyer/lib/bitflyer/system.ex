@@ -73,4 +73,11 @@ defmodule Bitflyer.System do
   def reconcile_now do
     Bitflyer.Startup.Reconciler.run_now()
   end
+
+  @doc """
+  市場データキーが鮮度内か（miss / stale は false）。
+  """
+  def market_data_fresh?(key, max_age_ms \\ Bitflyer.MarketData.Cache.default_max_age_ms()) do
+    Bitflyer.MarketData.Cache.fresh?(key, max_age_ms)
+  end
 end
