@@ -129,6 +129,11 @@ defmodule Bitflyer.MarketData.Feed do
     {:noreply, connect_socket(%{state | reconnect_timer: nil})}
   end
 
+  def handle_info({:gap_fill_tick, key, value, product_code, gap_fill_started_at}, state) do
+    _ = maybe_apply_gap_fill(key, value, product_code, gap_fill_started_at)
+    {:noreply, state}
+  end
+
   def handle_info(_other, state), do: {:noreply, state}
 
   defp handle_disconnect(%{connected?: false, socket: nil} = state, _reason), do: state
@@ -200,23 +205,29 @@ defmodule Bitflyer.MarketData.Feed do
   defp do_gap_fill(state) do
     rest_client = state.rest_client
     product_codes = state.product_codes
+    gap_fill_started_at = Cache.monotonic_ms()
+    parent = self()
 
-    # REST は Feed をブロックしない（WS フレーム処理を止めない）
+    # REST は Feed をブロックしない。結果は Feed 経由で適用し、
+    # 開始後に届いた WS より古い穴埋めで上書きしない。
     _ =
       Task.start(fn ->
-        gap_fill_products(rest_client, product_codes)
+        gap_fill_products(rest_client, product_codes, gap_fill_started_at, parent)
       end)
 
     state
   end
 
-  defp gap_fill_products(rest_client, product_codes) do
+  defp gap_fill_products(rest_client, product_codes, gap_fill_started_at, parent) do
     Enum.each(product_codes, fn product_code ->
       case rest_client.fetch_ticker(product_code) do
         {:ok, body} ->
           case Normalize.from_ticker(body) do
-            {:ok, key, value} -> put_tick(key, value, product_code)
-            :error -> :ok
+            {:ok, key, value} ->
+              send(parent, {:gap_fill_tick, key, value, product_code, gap_fill_started_at})
+
+            :error ->
+              :ok
           end
 
         {:error, reason} ->
@@ -227,6 +238,16 @@ defmodule Bitflyer.MarketData.Feed do
           )
       end
     end)
+  end
+
+  defp maybe_apply_gap_fill(key, value, product_code, gap_fill_started_at) do
+    case Cache.get(key) do
+      {:ok, _current, received_at} when received_at >= gap_fill_started_at ->
+        :ok
+
+      _ ->
+        put_tick(key, value, product_code, received_at: gap_fill_started_at)
+    end
   end
 
   defp ingest_frame(frame) do
@@ -242,8 +263,8 @@ defmodule Bitflyer.MarketData.Feed do
     end
   end
 
-  defp put_tick(key, value, product_code) do
-    _ = Cache.put(key, value)
+  defp put_tick(key, value, product_code, opts \\ []) do
+    _ = Cache.put(key, value, opts)
 
     Bitflyer.Telemetry.execute(
       :market_data_tick,

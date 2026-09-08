@@ -213,4 +213,35 @@ defmodule Bitflyer.MarketData.FeedTest do
 
     assert Cache.fresh?(@market_key, 5_000)
   end
+
+  test "gap fill does not overwrite newer websocket ticks" do
+    feed =
+      start_supervised!(
+        {Feed,
+         name: :"feed-#{System.unique_integer([:positive])}",
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         gap_fill_on_connect?: false,
+         reconnect_base_ms: 50,
+         reconnect_max_ms: 50}
+      )
+
+    _ = :sys.get_state(feed)
+
+    started_at = Cache.monotonic_ms()
+    newer = started_at + 10
+
+    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}, received_at: newer) == :ok
+
+    send(
+      feed,
+      {:gap_fill_tick, @market_key, %{ltp: Decimal.new("100")}, @product, started_at}
+    )
+
+    _ = :sys.get_state(feed)
+
+    assert {:ok, %{ltp: ltp}, ^newer} = Cache.get(@market_key)
+    assert Decimal.equal?(ltp, Decimal.new("5000000"))
+  end
 end
