@@ -16,6 +16,9 @@ defmodule Bitflyer.Startup.ReconcileTest do
     def fetch_reconcile_snapshot do
       {:ok, %{positions: [], balances: [], open_orders: []}}
     end
+
+    @impl true
+    def place_order(_request), do: {:error, :not_used_in_reconcile}
   end
 
   defmodule MismatchExchange do
@@ -37,6 +40,9 @@ defmodule Bitflyer.Startup.ReconcileTest do
          open_orders: []
        }}
     end
+
+    @impl true
+    def place_order(_request), do: {:error, :not_used_in_reconcile}
   end
 
   defmodule AttrMismatchExchange do
@@ -59,6 +65,9 @@ defmodule Bitflyer.Startup.ReconcileTest do
          ]
        }}
     end
+
+    @impl true
+    def place_order(_request), do: {:error, :not_used_in_reconcile}
   end
 
   defmodule DustExchange do
@@ -76,6 +85,9 @@ defmodule Bitflyer.Startup.ReconcileTest do
          open_orders: []
        }}
     end
+
+    @impl true
+    def place_order(_request), do: {:error, :not_used_in_reconcile}
   end
 
   setup do

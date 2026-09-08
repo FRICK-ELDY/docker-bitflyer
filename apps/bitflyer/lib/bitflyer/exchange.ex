@@ -13,6 +13,15 @@ defmodule Bitflyer.Exchange do
     client().fetch_reconcile_snapshot()
   end
 
+  @doc """
+  取引所へ発注する。live order-executor 以外から呼ばないこと。
+  """
+  @spec place_order(Client.place_order_request()) ::
+          {:ok, Client.place_order_result()} | {:error, term()}
+  def place_order(request) when is_map(request) do
+    client().place_order(request)
+  end
+
   defp client do
     Application.get_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
   end
