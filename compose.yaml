@@ -35,7 +35,8 @@ services:
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:-change_me_generate_with_mix_phx_gen_secret}
       PHX_HOST: ${PHX_HOST:-localhost}
       TRADE_MODE: ${TRADE_MODE:-dry_run}
-      MIX_ENV: ${MIX_ENV:-dev}
+      # MIX_ENV は注入しない。未設定時は Mix 既定の dev。
+      # 固定すると preferred_envs（例: mix precommit → test）が効かなくなる。
       DB_HOST: db
       DB_PORT: "5432"
       POSTGRES_USER: postgres
