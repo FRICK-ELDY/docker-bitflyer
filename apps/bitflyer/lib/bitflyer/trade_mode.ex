@@ -99,12 +99,11 @@ defmodule Bitflyer.TradeMode do
   end
 
   @doc """
-  Ready か。正本は Application `:readiness`（`:ready` 以外は未 Ready）。
-  Readiness 状態機械（improvement-plan #7）が更新するまで既定は halted。
+  Ready か。正本は `Bitflyer.Readiness`。
   """
   @spec ready?() :: boolean()
   def ready? do
-    Application.get_env(:bitflyer, :readiness, :not_ready) == :ready
+    Bitflyer.Readiness.ready?()
   end
 
   @doc """
@@ -121,10 +120,18 @@ defmodule Bitflyer.TradeMode do
   @spec exchange_order_gate() :: :ok | {:halted, atom()}
   def exchange_order_gate do
     cond do
-      not live?(current()) -> {:halted, :not_live_mode}
-      not live_confirmed?() -> {:halted, :live_confirm_missing}
-      not ready?() -> {:halted, :not_ready}
-      true -> :ok
+      not live?(current()) ->
+        {:halted, :not_live_mode}
+
+      not live_confirmed?() ->
+        {:halted, :live_confirm_missing}
+
+      true ->
+        case Bitflyer.Readiness.gate() do
+          :ok -> :ok
+          {:error, :not_ready} -> {:halted, :not_ready}
+          {:halted, reason} -> {:halted, reason}
+        end
     end
   end
 

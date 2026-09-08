@@ -8,7 +8,8 @@ defmodule Bitflyer.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      Bitflyer.Repo
+      Bitflyer.Repo,
+      Bitflyer.Readiness
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

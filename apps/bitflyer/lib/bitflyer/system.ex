@@ -33,6 +33,20 @@ defmodule Bitflyer.System do
   end
 
   @doc """
+  Ready 状態の正本（`:not_ready` / `:ready` / `{:halted, reason}`）。
+  """
+  def readiness do
+    Bitflyer.Readiness.get()
+  end
+
+  @doc """
+  Ready か。
+  """
+  def ready? do
+    Bitflyer.Readiness.ready?()
+  end
+
+  @doc """
   取引所への実発注が許可されているか（live + 二重確認 + Ready）。
   """
   def exchange_orders_permitted? do

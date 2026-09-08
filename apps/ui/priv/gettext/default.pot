@@ -11,34 +11,30 @@
 msgid ""
 msgstr ""
 
-#: lib/ui_web/components/core_components.ex:375
-#: lib/ui_web/components/core_components.ex:375
+#: lib/ui_web/components/core_components.ex:381
 #, elixir-autogen, elixir-format
 msgid "Actions"
 msgstr ""
 
-#: lib/ui_web/components/layouts.ex:102
-#: lib/ui_web/components/layouts.ex:102
-#: lib/ui_web/components/layouts.ex:117
-#: lib/ui_web/components/layouts.ex:117
+#: lib/ui_web/components/layouts.ex:103
+#: lib/ui_web/components/layouts.ex:118
 #, elixir-autogen, elixir-format
 msgid "Attempting to reconnect"
 msgstr ""
 
-#: lib/ui_web/live/status_live.ex:36
-#: lib/ui_web/live/status_live.ex:36
+#: lib/ui_web/live/status_live.ex:41
+#: lib/ui_web/live/status_live.ex:41
 #, elixir-autogen, elixir-format
 msgid "Language"
 msgstr ""
 
-#: lib/ui_web/live/status_live.ex:32
-#: lib/ui_web/live/status_live.ex:32
+#: lib/ui_web/live/status_live.ex:34
+#: lib/ui_web/live/status_live.ex:34
 #, elixir-autogen, elixir-format
 msgid "Operational health check. This is not a trading UI."
 msgstr ""
 
-#: lib/ui_web/components/layouts.ex:109
-#: lib/ui_web/components/layouts.ex:109
+#: lib/ui_web/components/layouts.ex:110
 #, elixir-autogen, elixir-format
 msgid "Something went wrong!"
 msgstr ""
@@ -49,32 +45,36 @@ msgstr ""
 msgid "Status"
 msgstr ""
 
-#: lib/ui_web/live/status_live.ex:65
-#: lib/ui_web/live/status_live.ex:65
+#: lib/ui_web/live/status_live.ex:71
+#: lib/ui_web/live/status_live.ex:71
 #, elixir-autogen, elixir-format
 msgid "Trade mode"
 msgstr ""
 
-#: lib/ui_web/components/layouts.ex:94
-#: lib/ui_web/components/layouts.ex:94
+#: lib/ui_web/components/layouts.ex:95
 #, elixir-autogen, elixir-format
 msgid "We can't find the internet"
 msgstr ""
 
-#: lib/ui_web/components/core_components.ex:81
-#: lib/ui_web/components/core_components.ex:81
+#: lib/ui_web/components/core_components.ex:82
 #, elixir-autogen, elixir-format
 msgid "close"
 msgstr ""
 
-#: lib/ui_web/live/status_live.ex:81
-#: lib/ui_web/live/status_live.ex:81
+#: lib/ui_web/live/status_live.ex:97
+#: lib/ui_web/live/status_live.ex:97
 #, elixir-autogen, elixir-format
 msgid "connected"
 msgstr ""
 
-#: lib/ui_web/live/status_live.ex:81
-#: lib/ui_web/live/status_live.ex:81
+#: lib/ui_web/live/status_live.ex:97
+#: lib/ui_web/live/status_live.ex:97
 #, elixir-autogen, elixir-format
 msgid "unavailable"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:79
+#: lib/ui_web/live/status_live.ex:79
+#, elixir-autogen, elixir-format
+msgid "Readiness"
 msgstr ""

@@ -10,9 +10,11 @@ defmodule UiWeb.StatusLiveTest do
 
     assert has_element?(view, "#app-name", "docker_bitflyer")
     assert has_element?(view, "#trade-mode", "dry_run")
+    assert has_element?(view, "#readiness", "not_ready")
     assert has_element?(view, "#db-status-label")
     assert has_element?(view, "#status-page", "Operational health check")
     assert has_element?(view, "#status-page", "Trade mode")
+    assert has_element?(view, "#status-page", "Readiness")
     assert has_element?(view, "#locale-switcher")
   end
 
@@ -24,6 +26,7 @@ defmodule UiWeb.StatusLiveTest do
 
     assert has_element?(view, "#status-page", "運用用の生存確認")
     assert has_element?(view, "#status-page", "取引モード")
+    assert has_element?(view, "#status-page", "Ready 状態")
     assert has_element?(view, "#locale-ja")
   end
 end
