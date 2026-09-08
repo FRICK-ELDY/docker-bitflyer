@@ -63,7 +63,7 @@ jobs:
         run: mix deps.get
 
       - name: Create and migrate test database
-        run: mix ash.setup --domains Bitflyer.System
+        run: mix ash.setup --domains Bitflyer.System,Bitflyer.Trading
 
       - name: Quality gate
         run: mix precommit

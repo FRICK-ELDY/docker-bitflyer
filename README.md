@@ -56,7 +56,7 @@ docker compose run --rm app mix precommit
 `ash.setup` は常駐起動（`phx.server`）時だけ走り、対象は開発用 DB（`docker_bitflyer_dev`）。テストは別 DB（既定 `docker_bitflyer_test`）を使うため、初回やマイグレーション追加のあとは先に次を実行する。
 
 ```bash
-docker compose run --rm -e MIX_ENV=test app mix ash.setup --domains Bitflyer.System
+docker compose run --rm -e MIX_ENV=test app mix ash.setup --domains Bitflyer.System,Bitflyer.Trading
 ```
 
 （上書きしたいときは `TEST_DATABASE_URL` を設定する。CI はジョブ内で setup してから `precommit` する。）

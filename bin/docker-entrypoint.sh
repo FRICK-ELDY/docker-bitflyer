@@ -28,7 +28,7 @@ wait_for_db() {
 run_setup() {
   wait_for_db
   mix deps.get
-  mix ash.setup --domains Bitflyer.System
+  mix ash.setup --domains Bitflyer.System,Bitflyer.Trading
 }
 
 case "${1:-}" in
