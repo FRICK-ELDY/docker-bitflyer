@@ -52,12 +52,38 @@ defmodule UiWeb.Telemetry do
         unit: {:native, :millisecond}
       ),
 
+      # bitFlyer domain vocabulary（正本は Bitflyer.Telemetry）
+      counter("bitflyer.market_data.tick.count"),
+      counter("bitflyer.market_data.disconnected.count"),
+      counter("bitflyer.risk.rejected.count"),
+      counter("bitflyer.order.submitted.count"),
+      counter("bitflyer.order.filled.count"),
+      counter("bitflyer.reconcile.mismatch.count"),
+      counter("bitflyer.circuit.opened.count"),
+      counter("bitflyer.readiness.changed.count",
+        tags: [:to, :trade_mode],
+        tag_values: &bitflyer_tag_values/1
+      ),
+      counter("bitflyer.health.unhealthy.count",
+        tags: [:status, :reason],
+        tag_values: &bitflyer_tag_values/1
+      ),
+
       # VM Metrics
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
       summary("vm.total_run_queue_lengths.total"),
       summary("vm.total_run_queue_lengths.cpu"),
       summary("vm.total_run_queue_lengths.io")
     ]
+  end
+
+  defp bitflyer_tag_values(metadata) do
+    Map.new(metadata, fn
+      {key, nil} -> {key, ""}
+      {key, value} when is_atom(value) -> {key, Atom.to_string(value)}
+      {key, value} when is_binary(value) -> {key, value}
+      {key, value} -> {key, inspect(value)}
+    end)
   end
 
   defp periodic_measurements do

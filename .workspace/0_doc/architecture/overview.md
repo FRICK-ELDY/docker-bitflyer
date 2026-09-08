@@ -142,7 +142,12 @@ Ready 状態の正本は `Bitflyer.Readiness`（`:not_ready` / `:ready` / `{:hal
 
 strategy から API を直接叩かない。market-data の遅延や欠損があるときは、新しい注文を出さない。
 
-## 信頼性
+## 可観測性
+
+- 取引ドメインの telemetry / 構造化ログ語彙の正本は `Bitflyer.Telemetry`
+- イベント例: market_data tick/disconnect、risk rejected、order submitted/filled、reconcile mismatch、circuit opened、readiness changed、health unhealthy
+- メタデータは allowlist のみ。秘密らしきキーは落とす
+- LiveDashboard（`/dev/dashboard`）の metrics に bitflyer カウンタを載せる
 
 - コンテナは `restart: unless-stopped` 相当で自動再起動する
 - ヘルスチェックは「プロセス生存」だけでなく「データ鮮度」と「取引所との同期」を見る
