@@ -1,0 +1,62 @@
+# ビルドコンテキストから除外する（本番 Dockerfile の COPY より先に置く）。
+# 完了条件: .env / _build / deps / .git がイメージ構築コンテキストに入らないこと。
+
+# Mix / Elixir
+_build/
+deps/
+cover/
+doc/
+.tmp/
+tmp/
+.fetch
+erl_crash.dump
+*.ez
+*.beam
+*.plt
+*.plt.hash
+.elixir_ls/
+.lexical/
+.elixir-tools/
+
+# Umbrella 配下に残った場合
+apps/*/_build/
+apps/*/deps/
+apps/*/doc/
+apps/*/cover/
+
+# Phoenix / assets
+apps/*/assets/node_modules/
+apps/*/priv/static/assets/
+apps/*/priv/static/cache_manifest.json
+npm-debug.log
+**/node_modules/
+
+# 秘密情報（.env.example もビルドに不要）
+.env
+.env.*
+*.pem
+*.key
+secrets/
+credentials.json
+
+# Git / IDE / 作業メモ（イメージに不要）
+.git/
+.github/
+.gitignore
+.gitattributes
+.cursor/
+.vscode/
+.idea/
+.workspace/
+**/.DS_Store
+Thumbs.db
+
+# ローカル DB データ
+pgdata/
+postgres-data/
+docker-data/
+*.pgdata
+
+# テスト・カバレッジ成果物
+**/test/reports/
+**/cover/
