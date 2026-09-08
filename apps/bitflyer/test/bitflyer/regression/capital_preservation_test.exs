@@ -108,17 +108,17 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
       assert SpyExchange.place_count() == 0
 
-      assert {:ok, [%Position{size: size}]} =
+      assert {:ok, %Position{size: size}} =
                Position
                |> Ash.Query.filter(product_code == ^@product and trade_mode == :paper)
-               |> Ash.read()
+               |> Ash.read_one()
 
       assert Decimal.equal?(size, Decimal.new("0.01"))
 
-      assert {:ok, [%Order{}]} =
+      assert {:ok, %Order{}} =
                Order
                |> Ash.Query.filter(internal_order_id == "dup-1")
-               |> Ash.read()
+               |> Ash.read_one()
     end
   end
 
