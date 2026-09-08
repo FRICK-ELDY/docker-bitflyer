@@ -1,3 +1,10 @@
 # Shell scripts must stay LF on Windows or `sh` fails with: set: Illegal option -
 *.sh text eol=lf
 bin/* text eol=lf
+
+# Mix format / CI は LF 前提。Windows の autocrlf でゲートが壊れないように固定する
+*.ex text eol=lf
+*.exs text eol=lf
+*.heex text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
