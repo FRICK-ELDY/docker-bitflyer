@@ -10,6 +10,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
 
   トランザクション内では `return_notifications?: true` で通知を返し、
   呼び出し側がコミット後に `Ash.Notifier.notify/1` する。
+  既存建玉は `FOR UPDATE` でロックし、Lost Update を防ぐ。
   """
   @spec apply_fill(Order.t(), Decimal.t()) :: {:ok, list()} | {:error, atom(), map()}
   def apply_fill(%Order{} = order, %Decimal{} = fill_price) do
@@ -33,6 +34,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
   defp find_position(product_code, trade_mode) do
     Position
     |> Ash.Query.filter(product_code == ^product_code and trade_mode == ^trade_mode)
+    |> Ash.Query.lock(:for_update)
     |> Ash.read_one()
   end
 
@@ -46,8 +48,18 @@ defmodule Bitflyer.OrderExecutor.Positions do
            average_price: fill_price
          })
          |> Ash.create(return_notifications?: true) do
-      {:ok, _, notifications} -> {:ok, notifications}
-      {:error, error} -> {:error, :persist_failed, %{error: error}}
+      {:ok, _, notifications} ->
+        {:ok, notifications}
+
+      {:error, error} ->
+        # 同時 create で unique 衝突したらロック付きで再読してマージ
+        case find_position(product_code, trade_mode) do
+          {:ok, %Position{} = position} ->
+            merge_position(position, side, size, fill_price)
+
+          _ ->
+            {:error, :persist_failed, %{error: error}}
+        end
     end
   end
 

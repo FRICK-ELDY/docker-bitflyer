@@ -97,13 +97,14 @@ defmodule Bitflyer.OrderExecutorTest do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
 
-    assert {:ok, %Order{status: :filled, trade_mode: :paper, filled_size: filled}} =
+    assert {:ok, %Order{status: :filled, trade_mode: :paper, filled_size: filled, price: price}} =
              OrderExecutor.submit(valid_command("paper-1"),
                positions: [],
                trade_mode: :paper
              )
 
     assert Decimal.equal?(filled, Decimal.new("0.01"))
+    assert Decimal.equal?(price, Decimal.new("5000000"))
     assert SpyExchange.place_count() == 0
     refute_received {:place_order, _}
 

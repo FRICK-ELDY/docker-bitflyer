@@ -37,7 +37,7 @@ defmodule Bitflyer.Trading.ResourcesTest do
                |> Ash.create()
     end
 
-    test "requires price for limit orders; market forbids price" do
+    test "requires price for limit orders; pending market forbids price" do
       assert {:error, %Ash.Error.Invalid{}} =
                Order
                |> Ash.Changeset.for_create(:create, %{
@@ -76,6 +76,17 @@ defmodule Bitflyer.Trading.ResourcesTest do
                |> Ash.create()
 
       assert is_nil(market.price)
+
+      assert {:ok, filled} =
+               market
+               |> Ash.Changeset.for_update(:update, %{
+                 status: :filled,
+                 filled_size: market.size,
+                 price: Decimal.new("5000000")
+               })
+               |> Ash.update()
+
+      assert Decimal.eq?(filled.price, Decimal.new("5000000"))
     end
 
     test "rejects filled_size greater than size" do

@@ -113,7 +113,10 @@ defmodule Bitflyer.Trading.Order do
 
   validations do
     validate present(:price), where: [attribute_equals(:order_type, :limit)]
-    validate absent(:price), where: [attribute_equals(:order_type, :market)]
+    # 成行は発注時 price なし。約定後は fill 価格を price に残してよい
+    validate absent(:price),
+      where: [attribute_equals(:order_type, :market), attribute_equals(:status, :pending)]
+
     validate compare(:filled_size, less_than_or_equal_to: :size)
   end
 

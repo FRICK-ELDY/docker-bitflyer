@@ -88,10 +88,12 @@ defmodule Bitflyer.OrderExecutor.Paper do
   defp cast_ltp(ltp) when is_float(ltp), do: {:ok, Decimal.from_float(ltp)}
   defp cast_ltp(_), do: :error
 
-  defp mark_filled(%Order{} = order, _fill_price) do
+  defp mark_filled(%Order{} = order, fill_price) do
     attrs = %{
       status: :filled,
       filled_size: order.size,
+      # limit は指値を維持。market は約定価格を残す
+      price: order.price || fill_price,
       exchange_order_id: order.exchange_order_id || "paper:#{order.internal_order_id}"
     }
 

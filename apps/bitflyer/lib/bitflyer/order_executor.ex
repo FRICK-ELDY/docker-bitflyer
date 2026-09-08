@@ -73,13 +73,16 @@ defmodule Bitflyer.OrderExecutor do
       order_type not in [:limit, :market] ->
         {:error, :invalid_command, %{field: :order_type}}
 
-      order_type == :limit and not match?(%Decimal{}, Map.get(command, :price)) ->
+      order_type == :limit and not valid_limit_price?(Map.get(command, :price)) ->
         {:error, :invalid_command, %{field: :price}}
 
       true ->
         :ok
     end
   end
+
+  defp valid_limit_price?(%Decimal{} = price), do: Decimal.positive?(price)
+  defp valid_limit_price?(_), do: false
 
   defp maybe_authorize(command, opts) do
     if Keyword.get(opts, :authorize?, true) do
