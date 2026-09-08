@@ -30,8 +30,51 @@ defmodule Bitflyer.Trading.ResourcesTest do
                  internal_order_id: "ord-001",
                  product_code: "FX_BTC_JPY",
                  side: :sell,
+                 price: Decimal.new("5100000"),
                  size: Decimal.new("0.02"),
                  trade_mode: :paper
+               })
+               |> Ash.create()
+    end
+
+    test "requires price for limit orders; market may omit price" do
+      assert {:error, %Ash.Error.Invalid{}} =
+               Order
+               |> Ash.Changeset.for_create(:create, %{
+                 internal_order_id: "ord-limit-no-price",
+                 product_code: "FX_BTC_JPY",
+                 side: :buy,
+                 order_type: :limit,
+                 size: Decimal.new("0.01"),
+                 trade_mode: :dry_run
+               })
+               |> Ash.create()
+
+      assert {:ok, market} =
+               Order
+               |> Ash.Changeset.for_create(:create, %{
+                 internal_order_id: "ord-market",
+                 product_code: "FX_BTC_JPY",
+                 side: :buy,
+                 order_type: :market,
+                 size: Decimal.new("0.01"),
+                 trade_mode: :dry_run
+               })
+               |> Ash.create()
+
+      assert is_nil(market.price)
+    end
+
+    test "rejects non-positive size" do
+      assert {:error, %Ash.Error.Invalid{}} =
+               Order
+               |> Ash.Changeset.for_create(:create, %{
+                 internal_order_id: "ord-neg-size",
+                 product_code: "FX_BTC_JPY",
+                 side: :buy,
+                 price: Decimal.new("5000000"),
+                 size: Decimal.new("0"),
+                 trade_mode: :dry_run
                })
                |> Ash.create()
     end
@@ -43,6 +86,7 @@ defmodule Bitflyer.Trading.ResourcesTest do
                  internal_order_id: "ord-expired",
                  product_code: "FX_BTC_JPY",
                  side: :buy,
+                 price: Decimal.new("5000000"),
                  size: Decimal.new("0.01"),
                  trade_mode: :live,
                  status: :expired
@@ -137,8 +181,16 @@ defmodule Bitflyer.Trading.ResourcesTest do
   end
 
   describe "RiskState" do
-    test "persists halt reason with unique name" do
+    test "persists halt reason with unique name; halted requires reason and halted_at" do
       halted_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      assert {:error, %Ash.Error.Invalid{}} =
+               RiskState
+               |> Ash.Changeset.for_create(:create, %{
+                 name: "incomplete",
+                 halted: true
+               })
+               |> Ash.create()
 
       assert {:ok, state} =
                RiskState

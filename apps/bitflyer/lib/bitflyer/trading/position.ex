@@ -42,11 +42,13 @@ defmodule Bitflyer.Trading.Position do
     attribute :size, :decimal do
       allow_nil? false
       public? true
+      constraints greater_than: 0
     end
 
     attribute :average_price, :decimal do
       allow_nil? false
       public? true
+      constraints greater_than: 0
     end
 
     attribute :trade_mode, :atom do

@@ -91,12 +91,14 @@ defmodule Bitflyer.Trading.Order do
     attribute :size, :decimal do
       allow_nil? false
       public? true
+      constraints greater_than: 0
     end
 
     attribute :filled_size, :decimal do
       allow_nil? false
       public? true
       default Decimal.new("0")
+      constraints min: 0
     end
 
     attribute :trade_mode, :atom do
@@ -107,6 +109,10 @@ defmodule Bitflyer.Trading.Order do
 
     create_timestamp :inserted_at
     update_timestamp :updated_at
+  end
+
+  validations do
+    validate present(:price), where: [attribute_equals(:order_type, :limit)]
   end
 
   identities do

@@ -53,6 +53,11 @@ defmodule Bitflyer.Trading.RiskState do
     update_timestamp :updated_at
   end
 
+  validations do
+    validate present(:reason), where: [attribute_equals(:halted, true)]
+    validate present(:halted_at), where: [attribute_equals(:halted, true)]
+  end
+
   identities do
     identity :unique_name, [:name]
   end
