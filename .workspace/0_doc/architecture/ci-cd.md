@@ -14,7 +14,7 @@ PR と `main` への push で、ローカルと同じ品質ゲートを自動実
 | test | `mix test --warnings-as-errors`（PostgreSQL 必須） |
 | 未使用 deps | `mix deps.unlock --check-unused` |
 | ランタイム | Elixir / OTP は開発用 `Dockerfile` と揃える（現状 1.18.3 / 27） |
-| DB | GitHub Actions の `postgres:16-alpine` service。接続はジョブの `DATABASE_URL` のみ |
+| DB | GitHub Actions の `postgres:16-alpine` service。接続はジョブの `TEST_DATABASE_URL`（なければ `DATABASE_URL` から `*_test` を導出） |
 
 ローカル（Compose）では次と同等とする。
 

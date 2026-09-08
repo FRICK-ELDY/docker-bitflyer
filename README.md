@@ -51,13 +51,13 @@ docker compose run --rm app mix precommit
 
 中身は format チェック / warnings-as-errors の compile / test（両アプリ）。`MIX_ENV` は Compose に固定しない（`.env` にも書かない）。`preferred_envs` が `precommit` を `:test` にする。
 
-`ash.setup` は常駐起動（`phx.server`）時だけ走る。空の DB やマイグレーション追加のあとにゲートだけ先に回す場合は、先に次を実行する。
+`ash.setup` は常駐起動（`phx.server`）時だけ走り、対象は開発用 DB（`docker_bitflyer_dev`）。テストは別 DB（既定 `docker_bitflyer_test`）を使うため、初回やマイグレーション追加のあとは先に次を実行する。
 
 ```bash
 docker compose run --rm -e MIX_ENV=test app mix ash.setup --domains Bitflyer.System
 ```
 
-（現状の test は開発用 DB を共有する。分離は改善計画の P0 #5。CI はジョブ内で setup してから `precommit` する。）
+（上書きしたいときは `TEST_DATABASE_URL` を設定する。CI はジョブ内で setup してから `precommit` する。）
 
 GitHub Actions も同じ `mix precommit` を PR と `main` で実行する。範囲の詳細は [architecture/ci-cd.md](.workspace/0_doc/architecture/ci-cd.md)。**CI が赤のまま `main` へマージしない。**
 
@@ -67,7 +67,8 @@ GitHub Actions も同じ `mix precommit` を PR と `main` で実行する。範
 
 | 名前 | 既定の意味 |
 | --- | --- |
-| `DATABASE_URL` | Compose 内ホスト `db` 向け |
+| `DATABASE_URL` | Compose 内ホスト `db` 向け（開発用 DB） |
+| `TEST_DATABASE_URL` | 任意。未設定時は `DATABASE_URL` の DB 名を `*_test` に寄せる |
 | `SECRET_KEY_BASE` | Phoenix 用（後で生成し直す） |
 | `PHX_HOST` | `localhost` |
 | `TRADE_MODE` | `dry_run` |

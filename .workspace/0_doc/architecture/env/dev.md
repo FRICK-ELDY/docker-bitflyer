@@ -42,7 +42,8 @@
 
 | 名前 | 意味 |
 | --- | --- |
-| `DATABASE_URL` | PostgreSQL 接続。Compose 内部ではホスト名 `db` |
+| `DATABASE_URL` | PostgreSQL 接続。Compose 内部ではホスト名 `db`（開発用） |
+| `TEST_DATABASE_URL` | 任意。未設定時は `MIX_ENV=test` で DB 名を `*_test` に寄せる |
 | `SECRET_KEY_BASE` | Phoenix 用 |
 | `PHX_HOST` | 開発は `localhost` |
 | `TRADE_MODE` | 既定 `dry_run`。`paper` / `live` は明示 |

@@ -32,7 +32,9 @@ jobs:
 
     env:
       MIX_ENV: test
-      DATABASE_URL: ecto://postgres:postgres@localhost:5432/docker_bitflyer_ci
+      # 開発用 URL の形にしておくと、未設定時の *_test 寄せと揃う。実体は TEST_DATABASE_URL。
+      DATABASE_URL: ecto://postgres:postgres@localhost:5432/docker_bitflyer_dev
+      TEST_DATABASE_URL: ecto://postgres:postgres@localhost:5432/docker_bitflyer_ci
       TRADE_MODE: dry_run
 
     steps:

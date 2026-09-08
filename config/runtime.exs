@@ -14,6 +14,38 @@ database_url =
     For example: ecto://USER:PASS@HOST/DATABASE
     """
 
+# test は開発 DB を触らない。TEST_DATABASE_URL 優先、未設定なら DB 名を *_test に寄せる。
+database_url =
+  case config_env() do
+    :test ->
+      case System.get_env("TEST_DATABASE_URL") do
+        url when is_binary(url) and url != "" ->
+          url
+
+        _ ->
+          uri = URI.parse(database_url)
+          db_name = uri.path |> to_string() |> String.trim_leading("/")
+
+          test_name =
+            cond do
+              String.ends_with?(db_name, "_test") ->
+                db_name
+
+              String.ends_with?(db_name, "_dev") ->
+                String.replace_suffix(db_name, "_dev", "_test")
+
+              true ->
+                db_name <> "_test"
+            end
+
+          partition = System.get_env("MIX_TEST_PARTITION") || ""
+          URI.to_string(%{uri | path: "/#{test_name}#{partition}"})
+      end
+
+    _ ->
+      database_url
+  end
+
 repo_config = [
   url: database_url,
   pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
