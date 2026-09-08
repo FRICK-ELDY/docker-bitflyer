@@ -129,7 +129,14 @@ defmodule Bitflyer.MarketData.Feed do
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info(:reconnect, state) do
-    {:noreply, connect_socket(%{state | reconnect_timer: nil})}
+    state = %{state | reconnect_timer: nil}
+
+    # mailbox に残った :reconnect が、確立済み接続を落とさないようにする
+    if state.connected? or not is_nil(state.socket) do
+      {:noreply, state}
+    else
+      {:noreply, connect_socket(state)}
+    end
   end
 
   def handle_info({:gap_fill_tick, key, value, product_code, gap_fill_started_at}, state) do
