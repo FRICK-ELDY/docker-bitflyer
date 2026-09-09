@@ -119,7 +119,7 @@ discord_webhook =
 
 config :bitflyer, Bitflyer.Observe.Discord, webhook_url: discord_webhook
 
-# UI BasicAuth。prod は必須。dev/test は両方揃ったときだけ有効。
+# UI BasicAuth。prod は必須。dev は両方揃ったときだけ有効（test は既定オフ）。
 ui_basic_user = System.get_env("UI_BASIC_AUTH_USERNAME")
 ui_basic_pass = System.get_env("UI_BASIC_AUTH_PASSWORD")
 
@@ -138,6 +138,10 @@ ui_basic_enabled? =
         /health* stays unauthenticated; Status UI requires BasicAuth.
         """
       end
+
+    :test ->
+      # runtime.exs は test.exs の後に走る。.env の資格情報で StatusLive 等が 401 にならないよう固定オフ。
+      false
 
     _ ->
       ui_basic_present?
