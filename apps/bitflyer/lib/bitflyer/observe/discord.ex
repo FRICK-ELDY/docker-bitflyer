@@ -56,6 +56,9 @@ defmodule Bitflyer.Observe.Discord do
 
   @impl true
   def init(opts) do
+    # Supervisor 停止時に terminate/2 で telemetry を detach するため必須。
+    Process.flag(:trap_exit, true)
+
     cfg = config()
     webhook_url = Keyword.get(opts, :webhook_url, Keyword.get(cfg, :webhook_url))
 
@@ -180,6 +183,8 @@ defmodule Bitflyer.Observe.Discord do
   defp safe_readiness do
     try do
       Bitflyer.Readiness.format(Bitflyer.Readiness.get())
+    rescue
+      _ -> "unknown"
     catch
       :exit, _ -> "unknown"
     end

@@ -166,4 +166,32 @@ defmodule Bitflyer.Observe.DiscordTest do
     assert Readiness.halt(:reconcile_mismatch) == :ok
     refute_receive {:discord_post, _, _}, 100
   end
+
+  test "supervisor stop detaches telemetry handlers via terminate" do
+    name = :"discord-detach-#{System.unique_integer([:positive])}"
+
+    pid =
+      start_supervised!(
+        {Discord,
+         name: name,
+         webhook_url: "https://discord.example/hook",
+         attach?: true,
+         cooldown_ms: 0,
+         http_client: CapturingHTTP}
+      )
+
+    handler_id = "bitflyer-observe-discord-#{:erlang.phash2(pid)}"
+
+    assert Enum.any?(
+             :telemetry.list_handlers([:bitflyer, :reconcile, :mismatch]),
+             &(&1.id == handler_id)
+           )
+
+    assert :ok = stop_supervised(Discord)
+
+    refute Enum.any?(
+             :telemetry.list_handlers([:bitflyer, :reconcile, :mismatch]),
+             &(&1.id == handler_id)
+           )
+  end
 end
