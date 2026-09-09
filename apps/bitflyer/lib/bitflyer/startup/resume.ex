@@ -16,26 +16,22 @@ defmodule Bitflyer.Startup.Resume do
 
   ## Options
   - `:trade_mode` / `:exchange` / `:required_balance_currencies` — `Reconcile.run/1` へ転送
-  - `:readiness` — 既定 `Bitflyer.Readiness`
+  - `:readiness` — 既定 `Bitflyer.Readiness`（Reconcile には渡さない）
   """
   @spec run(keyword()) :: result()
   def run(opts \\ []) do
     readiness = Keyword.get(opts, :readiness, Bitflyer.Readiness)
 
-    cond do
-      match?({:halted, _}, readiness.get()) ->
-        do_resume(opts)
-
-      Circuit.open?(readiness: readiness) ->
-        do_resume(opts)
-
-      true ->
-        {:error, :not_halted}
+    if Circuit.open?(readiness: readiness) do
+      do_resume(opts)
+    else
+      {:error, :not_halted}
     end
   end
 
   defp do_resume(opts) do
     readiness = Keyword.get(opts, :readiness, Bitflyer.Readiness)
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
 
     halt_reason =
       case readiness.get() do
@@ -45,24 +41,25 @@ defmodule Bitflyer.Startup.Resume do
 
     reconcile_opts =
       opts
-      |> Keyword.take([:trade_mode, :exchange, :required_balance_currencies])
+      |> Keyword.delete(:readiness)
       |> Keyword.put(:skip_persisted_risk?, true)
+      |> Keyword.put(:trade_mode, trade_mode)
 
     case Reconcile.run(reconcile_opts) do
       {:ok, _internal} ->
-        finish_resume(halt_reason, opts)
+        finish_resume(halt_reason, trade_mode, opts)
 
       {:error, reason, details} ->
         Bitflyer.Telemetry.log(:warning, "resume reconcile failed", %{
           reason: reason,
-          trade_mode: Bitflyer.TradeMode.current()
+          trade_mode: trade_mode
         })
 
         {:error, reason, details}
     end
   end
 
-  defp finish_resume(halt_reason, opts) do
+  defp finish_resume(halt_reason, trade_mode, opts) do
     readiness = Keyword.get(opts, :readiness, Bitflyer.Readiness)
     circuit_opts = Keyword.take(opts, [:readiness])
 
@@ -71,7 +68,7 @@ defmodule Bitflyer.Startup.Resume do
       Bitflyer.Telemetry.log(:info, "resume succeeded", %{
         reason: halt_reason,
         readiness: "ready",
-        trade_mode: Bitflyer.TradeMode.current()
+        trade_mode: trade_mode
       })
 
       :ok
@@ -79,7 +76,7 @@ defmodule Bitflyer.Startup.Resume do
       {:error, error} ->
         Bitflyer.Telemetry.log(:error, "resume close/ready failed", %{
           reason: :resume_finalize_failed,
-          trade_mode: Bitflyer.TradeMode.current()
+          trade_mode: trade_mode
         })
 
         {:error, :resume_finalize_failed, %{detail: error}}
