@@ -55,7 +55,7 @@
 | 15 | UI 認証・bind | BasicAuth（環境変数）+ 本番 publish 最小化。ToDo 03 に明記 | 認証なしで取引詳細を見られない |
 | 16 | API キー枠 | `.env.example` に `BITFLYER_API_KEY` / `SECRET`。live 時のみ必須。出金権限禁止を文書化 | live でキー欠落時に起動停止 |
 | 17 | 本番 release Compose | `mix release`、非 root、digest 固定、backup/rollback（ToDo 03） | **完了**（`Dockerfile.prod` / `compose.prod.yaml` / GHCR CD） |
-| 18 | private API client | 署名付き REST。cancel / 照会 / 約定反映。fixture 契約テスト | Unavailable 以外を差し込める |
+| 18 | private API client | 署名付き REST。cancel / 照会 / 約定反映。fixture 契約テスト | **完了**（`Exchange.Rest`。live 残高は getbalance 突合正本・fill は建玉のみ。cancel 前 fill 同期。認可前同期） |
 | 19 | deps audit | CI で可視化（最初は fail させなくてもよい） | 既知脆弱性が一覧できる |
 
 ---

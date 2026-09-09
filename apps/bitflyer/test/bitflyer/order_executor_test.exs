@@ -43,6 +43,33 @@ defmodule Bitflyer.OrderExecutorTest do
       end
     end
 
+    @impl true
+    def cancel_order(request) do
+      case Process.whereis(__MODULE__) do
+        nil -> :ok
+        pid -> send(pid, {:cancel_order, request})
+      end
+
+      :ok
+    end
+
+    @impl true
+    def fetch_order(%{exchange_order_id: id}) do
+      {:ok,
+       %{
+         exchange_order_id: id,
+         product_code: "FX_BTC_JPY",
+         side: :buy,
+         size: Decimal.new("1"),
+         filled_size: Decimal.new("0"),
+         average_price: nil,
+         status: :active
+       }}
+    end
+
+    @impl true
+    def fetch_executions(_request), do: {:ok, []}
+
     def start_agents do
       {:ok, _} = Agent.start_link(fn -> 0 end, name: __MODULE__.Counter)
       {:ok, _} = Agent.start_link(fn -> :success end, name: __MODULE__.NextResult)
@@ -540,6 +567,43 @@ defmodule Bitflyer.OrderExecutorTest do
              |> Ash.read_one()
 
     assert SpyExchange.place_count() == 0
+  end
+
+  test "dry_run cancel marks cancelled without place_order" do
+    Application.put_env(:bitflyer, :trade_mode, :dry_run)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:ok, order} =
+             OrderExecutor.submit(valid_command("cancel-dry-1"),
+               positions: [],
+               trade_mode: :dry_run
+             )
+
+    assert order.status == :pending
+
+    assert {:ok, cancelled} = OrderExecutor.cancel(order)
+    assert cancelled.status == :cancelled
+    assert SpyExchange.place_count() == 0
+  end
+
+  test "live cancel calls exchange cancel_order when gated" do
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:ok, order} =
+             OrderExecutor.submit(valid_command("cancel-live-1"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert order.exchange_order_id == "ex-cancel-live-1"
+
+    assert {:ok, updated} = OrderExecutor.cancel(order)
+    assert updated.status == :pending
+    assert_received {:cancel_order, %{exchange_order_id: "ex-cancel-live-1"}}
   end
 
   defp valid_command(internal_order_id, overrides \\ %{}) do

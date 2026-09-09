@@ -146,10 +146,26 @@ defmodule Bitflyer.Startup.Reconcile do
     :ok
   end
 
-  defp reconcile_mode(%{trade_mode: :live} = internal, exchange, required) do
+  defp reconcile_mode(%{trade_mode: :live} = _internal, exchange, required) do
+    # 突合前に約定を建玉へ反映（残高は getbalance 突合の正本。fill では書き換えない）
+    with :ok <- sync_live_fills(exchange),
+         {:ok, internal} <- restore(:live),
+         {:ok, snapshot} <- fetch_live_snapshot(exchange) do
+      compare_with_exchange(internal, snapshot, required)
+    end
+  end
+
+  defp sync_live_fills(exchange) do
+    case Bitflyer.OrderExecutor.LiveFills.sync_open_orders(exchange: exchange) do
+      :ok -> :ok
+      {:error, reason, meta} -> {:error, reason, meta}
+    end
+  end
+
+  defp fetch_live_snapshot(exchange) do
     case exchange.fetch_reconcile_snapshot() do
       {:ok, snapshot} ->
-        compare_with_exchange(internal, snapshot, required)
+        {:ok, snapshot}
 
       {:error, :exchange_unavailable} ->
         {:error, :exchange_unavailable, %{trade_mode: :live}}

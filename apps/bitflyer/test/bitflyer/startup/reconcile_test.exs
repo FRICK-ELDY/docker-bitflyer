@@ -14,6 +14,7 @@ defmodule Bitflyer.Startup.ReconcileTest do
 
   defmodule EmptyExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot do
@@ -26,6 +27,7 @@ defmodule Bitflyer.Startup.ReconcileTest do
 
   defmodule MatchingBalancesExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot do
@@ -50,6 +52,7 @@ defmodule Bitflyer.Startup.ReconcileTest do
 
   defmodule MismatchExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot do
@@ -109,10 +112,34 @@ defmodule Bitflyer.Startup.ReconcileTest do
 
     @impl true
     def place_order(_request), do: {:error, :not_used_in_reconcile}
+
+    @impl true
+    def cancel_order(_request), do: {:error, :not_used_in_reconcile}
+
+    # 突合前の LiveFills 用。ACTIVE のまま返し、filled 差分は載せない
+    @impl true
+    def fetch_order(%{exchange_order_id: "ex-1"}) do
+      {:ok,
+       %{
+         exchange_order_id: "ex-1",
+         product_code: "FX_BTC_JPY",
+         side: :buy,
+         size: Decimal.new("0.01"),
+         filled_size: Decimal.new("0"),
+         average_price: nil,
+         status: :active
+       }}
+    end
+
+    def fetch_order(_), do: {:error, :order_not_found}
+
+    @impl true
+    def fetch_executions(_request), do: {:ok, []}
   end
 
   defmodule DustExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot do

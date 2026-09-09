@@ -8,7 +8,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 
 ## 現状
 
-開発用 Compose で常駐起動できる。`TRADE_MODE` の既定は `dry_run`。本番相当は `Dockerfile.prod` + `compose.prod.yaml`（release・非 root）。live 実発注の署名付き private API は未着手。
+開発用 Compose で常駐起動できる。`TRADE_MODE` の既定は `dry_run`。本番相当は `Dockerfile.prod` + `compose.prod.yaml`（release・非 root）。live 実発注は署名付き `Bitflyer.Exchange.Rest`（キーあり時に差し込み。既定は `Unavailable`）。
 
 起動・観測の要点:
 
@@ -37,7 +37,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | UI StatusLive | implemented | 発注可否・Feed・鮮度・モード色分け |
 | CI（`mix precommit` / GitHub Actions） | implemented | PR と `main` |
 | CD（GHCR push） | implemented | `v*` タグ / `workflow_dispatch`。digest を Compose に固定 |
-| private bitFlyer API（署名付き REST） | unavailable | 既定は `Exchange.Unavailable`。キー枠（`BITFLYER_API_*`）は live 時必須 |
+| private bitFlyer API（署名付き REST） | implemented | `Exchange.Rest`。cancel / 照会 / 約定反映。live+キーで差し込み。既定は Unavailable |
 | UI 認証（BasicAuth） | implemented | `UI_BASIC_AUTH_*`。prod 必須。`/health*` は対象外 |
 | 本番 release Compose | implemented | `Dockerfile.prod` / `compose.prod.yaml` / backup・rollback 手順 |
 
@@ -146,13 +146,13 @@ GitHub Actions も同じ `mix precommit` を PR と `main` で実行する。範
 | 取得できる情報 | 主なパス | 本リポ |
 | --- | --- | --- |
 | API キーの権限一覧 | `GET /v1/me/getpermissions` | — |
-| 資産残高 | `GET /v1/me/getbalance` | 突合予定（client #18） |
+| 資産残高 | `GET /v1/me/getbalance` | Rest 突合 |
 | 証拠金の状態 | `GET /v1/me/getcollateral` | — |
 | 通貨別証拠金 | `GET /v1/me/getcollateralaccounts` | — |
-| 注文一覧（未約定含む） | `GET /v1/me/getchildorders` | 突合予定 |
+| 注文一覧（未約定含む） | `GET /v1/me/getchildorders` | Rest 突合・照会 |
 | 親注文一覧 / 詳細 | `GET /v1/me/getparentorders` 等 | 使わない想定 |
-| 自分の約定一覧 | `GET /v1/me/getexecutions` | 約定反映予定 |
-| 建玉一覧（CFD / FX） | `GET /v1/me/getpositions` | 突合予定 |
+| 自分の約定一覧 | `GET /v1/me/getexecutions` | Rest 約定反映 |
+| 建玉一覧（CFD / FX） | `GET /v1/me/getpositions` | Rest 突合 |
 | 残高履歴 | `GET /v1/me/getbalancehistory` | — |
 | 証拠金変動履歴 | `GET /v1/me/getcollateralhistory` | — |
 | 取引手数料 | `GET /v1/me/gettradingcommission` | — |
@@ -201,7 +201,8 @@ docker compose run --rm app mix setup
 
 ## これから作るもの
 
-- 署名付き private API client（cancel / 照会 / 約定反映）
+- deps audit（CI 可視化）
+- 戦略アルゴリズムの高度化
 
 詳細は Vision と Architecture を先に読む。改善の優先順位は [improvement-plan.md](.workspace/0_doc/evaluation/improvement-plan.md)。
 ## 注意

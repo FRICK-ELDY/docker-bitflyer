@@ -1,0 +1,16 @@
+[
+  {
+    "product_code": "FX_BTC_JPY",
+    "side": "BUY",
+    "price": 36000,
+    "size": 0.01,
+    "commission": 0,
+    "swap_point_accumulate": 0,
+    "require_collateral": 1200,
+    "open_date": "2015-11-03T10:04:45.011",
+    "leverage": 3,
+    "pnl": 0,
+    "sfd": 0,
+    "funding_fees": 0
+  }
+]

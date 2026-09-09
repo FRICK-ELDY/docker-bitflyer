@@ -1,0 +1,29 @@
+defmodule Bitflyer.TestSupport.ExchangeClientStubs do
+  @moduledoc false
+
+  # Behaviour 追加 callback の共通スタブ（テスト用クライアント向け）
+  # fetch_order は ACTIVE・未約定を返し、認可前/発注後の LiveFills が黙って成功するようにする。
+  defmacro __using__(_opts) do
+    quote do
+      @impl true
+      def cancel_order(_request), do: {:error, :not_used_in_test}
+
+      @impl true
+      def fetch_order(%{exchange_order_id: id}) do
+        {:ok,
+         %{
+           exchange_order_id: id,
+           product_code: "FX_BTC_JPY",
+           side: :buy,
+           size: Decimal.new("1"),
+           filled_size: Decimal.new("0"),
+           average_price: nil,
+           status: :active
+         }}
+      end
+
+      @impl true
+      def fetch_executions(_request), do: {:ok, []}
+    end
+  end
+end
