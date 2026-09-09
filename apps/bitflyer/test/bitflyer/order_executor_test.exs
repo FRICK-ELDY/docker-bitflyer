@@ -10,7 +10,7 @@ defmodule Bitflyer.OrderExecutorTest do
   alias Bitflyer.MarketData.Cache
   alias Bitflyer.OrderExecutor
   alias Bitflyer.Readiness
-  alias Bitflyer.Trading.{Order, Position, RiskState}
+  alias Bitflyer.Trading.{BalanceSnapshot, Order, Position, RiskState}
 
   @market_key {:ticker, "FX_BTC_JPY"}
 
@@ -140,6 +140,164 @@ defmodule Bitflyer.OrderExecutorTest do
              |> Ash.read_one()
 
     assert Decimal.equal?(size, Decimal.new("0.01"))
+
+    assert {:ok, balances} =
+             BalanceSnapshot
+             |> Ash.Query.filter(trade_mode == :paper)
+             |> Ash.read()
+
+    assert length(balances) == 2
+    by_currency = Map.new(balances, &{&1.currency, &1.amount})
+    assert Decimal.equal?(by_currency["BTC"], Decimal.new("0.01"))
+    assert Decimal.equal?(by_currency["JPY"], Decimal.new("-50000"))
+  end
+
+  test "paper limit fills when LTP crosses and grows balance rows" do
+    Application.put_env(:bitflyer, :trade_mode, :paper)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_paper_balance!("JPY", "1000000")
+
+    assert {:ok, %Order{status: :filled}} =
+             OrderExecutor.submit(
+               valid_command("paper-limit-cross", %{
+                 order_type: :limit,
+                 price: Decimal.new("5100000"),
+                 side: :buy
+               }),
+               positions: [],
+               trade_mode: :paper
+             )
+
+    assert {:ok, jpy_rows} =
+             BalanceSnapshot
+             |> Ash.Query.filter(trade_mode == :paper and currency == "JPY")
+             |> Ash.Query.sort(captured_at: :desc)
+             |> Ash.read()
+
+    assert length(jpy_rows) >= 2
+    assert Decimal.equal?(hd(jpy_rows).amount, Decimal.new("949000"))
+  end
+
+  test "paper limit stays pending when LTP does not cross" do
+    Application.put_env(:bitflyer, :trade_mode, :paper)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:ok, before} =
+             BalanceSnapshot
+             |> Ash.Query.filter(trade_mode == :paper)
+             |> Ash.read()
+
+    assert {:ok, %Order{status: :pending}} =
+             OrderExecutor.submit(
+               valid_command("paper-limit-open", %{
+                 order_type: :limit,
+                 price: Decimal.new("4900000"),
+                 side: :buy
+               }),
+               positions: [],
+               trade_mode: :paper
+             )
+
+    assert {:ok, nil} =
+             Position
+             |> Ash.Query.filter(product_code == "FX_BTC_JPY" and trade_mode == :paper)
+             |> Ash.read_one()
+
+    assert {:ok, after_balances} =
+             BalanceSnapshot
+             |> Ash.Query.filter(trade_mode == :paper)
+             |> Ash.read()
+
+    assert length(after_balances) == length(before)
+  end
+
+  test "concurrent paper fills serialize balance appends without lost update" do
+    Application.put_env(:bitflyer, :trade_mode, :paper)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_paper_balance!("JPY", "1000000")
+    seed_paper_balance!("BTC", "0")
+
+    results =
+      1..2
+      |> Enum.map(fn i ->
+        Task.async(fn ->
+          OrderExecutor.submit(valid_command("paper-concurrent-#{i}"),
+            positions: [],
+            trade_mode: :paper
+          )
+        end)
+      end)
+      |> Task.await_many(15_000)
+
+    assert Enum.all?(results, &match?({:ok, %Order{status: :filled}}, &1))
+
+    assert {:ok, %BalanceSnapshot{amount: jpy}} =
+             BalanceSnapshot
+             |> Ash.Query.filter(trade_mode == :paper and currency == "JPY")
+             |> Ash.Query.sort(captured_at: :desc, id: :desc)
+             |> Ash.Query.limit(1)
+             |> Ash.read_one()
+
+    assert {:ok, %BalanceSnapshot{amount: btc}} =
+             BalanceSnapshot
+             |> Ash.Query.filter(trade_mode == :paper and currency == "BTC")
+             |> Ash.Query.sort(captured_at: :desc, id: :desc)
+             |> Ash.Query.limit(1)
+             |> Ash.read_one()
+
+    # 1_000_000 - 2 * (0.01 * 5_000_000)
+    assert Decimal.equal?(jpy, Decimal.new("900000"))
+    assert Decimal.equal?(btc, Decimal.new("0.02"))
+  end
+
+  test "concurrent buy and sell paper fills avoid balance lock deadlock" do
+    Application.put_env(:bitflyer, :trade_mode, :paper)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_paper_balance!("JPY", "1000000")
+    seed_paper_balance!("BTC", "0.01")
+
+    results =
+      [
+        Task.async(fn ->
+          OrderExecutor.submit(
+            valid_command("paper-deadlock-buy", %{side: :buy}),
+            positions: [],
+            trade_mode: :paper
+          )
+        end),
+        Task.async(fn ->
+          OrderExecutor.submit(
+            valid_command("paper-deadlock-sell", %{side: :sell}),
+            positions: [],
+            trade_mode: :paper
+          )
+        end)
+      ]
+      |> Task.await_many(15_000)
+
+    assert Enum.all?(results, &match?({:ok, %Order{status: :filled}}, &1))
+
+    assert {:ok, %BalanceSnapshot{amount: jpy}} =
+             BalanceSnapshot
+             |> Ash.Query.filter(trade_mode == :paper and currency == "JPY")
+             |> Ash.Query.sort(captured_at: :desc, id: :desc)
+             |> Ash.Query.limit(1)
+             |> Ash.read_one()
+
+    assert {:ok, %BalanceSnapshot{amount: btc}} =
+             BalanceSnapshot
+             |> Ash.Query.filter(trade_mode == :paper and currency == "BTC")
+             |> Ash.Query.sort(captured_at: :desc, id: :desc)
+             |> Ash.Query.limit(1)
+             |> Ash.read_one()
+
+    # buy と sell が同サイズ・同価格ならネットは初期残高に戻る
+    assert Decimal.equal?(jpy, Decimal.new("1000000"))
+    assert Decimal.equal?(btc, Decimal.new("0.01"))
   end
 
   test "idempotent submit does not call place_order again" do
@@ -400,6 +558,22 @@ defmodule Bitflyer.OrderExecutorTest do
 
   defp put_fresh_market do
     assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+  end
+
+  defp seed_paper_balance!(currency, amount) do
+    captured_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    amount = Decimal.new(amount)
+
+    assert {:ok, _} =
+             BalanceSnapshot
+             |> Ash.Changeset.for_create(:create, %{
+               currency: currency,
+               amount: amount,
+               available: amount,
+               captured_at: captured_at,
+               trade_mode: :paper
+             })
+             |> Ash.create()
   end
 
   defp clear_default_risk_state do

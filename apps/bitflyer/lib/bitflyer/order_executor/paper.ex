@@ -2,61 +2,104 @@ defmodule Bitflyer.OrderExecutor.Paper do
   @moduledoc false
 
   alias Bitflyer.MarketData.Cache
-  alias Bitflyer.OrderExecutor.Positions
+  alias Bitflyer.OrderExecutor.{Balances, Positions}
   alias Bitflyer.Trading.Order
 
   @doc """
-  取引所 REST を呼ばず、キャッシュ価格で即時擬似約定し建玉を更新する。
+  取引所 REST を呼ばず、キャッシュ価格で擬似約定し建玉・残高を更新する。
 
-  注文の filled 更新と建玉反映は同一トランザクションで行い、片側だけ成功しないようにする。
+  - market: LTP で即時全量約定
+  - limit: LTP が指値に交差したときだけ約定（未交差は pending のまま）
+
+  注文・建玉・残高の更新は同一トランザクションで行い、片側だけ成功しないようにする。
   """
   @spec execute(Order.t(), map(), keyword()) :: {:ok, Order.t()} | {:error, atom(), map()}
   def execute(%Order{} = order, command, opts) do
-    with {:ok, fill_price} <- fill_price(order, command, opts) do
-      case Bitflyer.Repo.transaction(fn ->
-             with {:ok, filled_order, order_notifications} <- mark_filled(order, fill_price),
-                  {:ok, position_notifications} <- Positions.apply_fill(filled_order, fill_price) do
-               {filled_order, order_notifications ++ position_notifications}
-             else
-               {:error, code, meta} when is_atom(code) and is_map(meta) ->
-                 Bitflyer.Repo.rollback({code, meta})
+    with {:ok, decision} <- decide_fill(order, command, opts) do
+      case decision do
+        :leave_pending ->
+          {:ok, order}
 
-               other ->
-                 Bitflyer.Repo.rollback(other)
-             end
-           end) do
-        {:ok, {filled_order, notifications}} ->
-          _ = Ash.Notifier.notify(notifications)
-
-          Bitflyer.Telemetry.execute(
-            :order_filled,
-            %{count: 1},
-            %{
-              internal_order_id: filled_order.internal_order_id,
-              exchange_order_id: filled_order.exchange_order_id,
-              product_code: filled_order.product_code,
-              side: filled_order.side,
-              trade_mode: :paper,
-              status: :filled
-            }
-          )
-
-          {:ok, filled_order}
-
-        {:error, {code, meta}} when is_atom(code) and is_map(meta) ->
-          {:error, code, meta}
-
-        {:error, error} ->
-          {:error, :persist_failed, %{error: error}}
+        {:fill, fill_price} ->
+          apply_fill_transaction(order, fill_price)
       end
     end
   end
 
-  defp fill_price(%Order{order_type: :limit, price: %Decimal{} = price}, _command, _opts) do
-    {:ok, price}
+  defp apply_fill_transaction(%Order{} = order, fill_price) do
+    case Bitflyer.Repo.transaction(fn ->
+           with {:ok, filled_order, order_notifications} <- mark_filled(order, fill_price),
+                {:ok, position_notifications} <- Positions.apply_fill(filled_order, fill_price),
+                {:ok, balance_notifications} <- Balances.apply_fill(filled_order, fill_price) do
+             {filled_order,
+              order_notifications ++ position_notifications ++ balance_notifications}
+           else
+             {:error, code, meta} when is_atom(code) and is_map(meta) ->
+               Bitflyer.Repo.rollback({code, meta})
+
+             other ->
+               Bitflyer.Repo.rollback(other)
+           end
+         end) do
+      {:ok, {filled_order, notifications}} ->
+        _ = Ash.Notifier.notify(notifications)
+
+        Bitflyer.Telemetry.execute(
+          :order_filled,
+          %{count: 1},
+          %{
+            internal_order_id: filled_order.internal_order_id,
+            exchange_order_id: filled_order.exchange_order_id,
+            product_code: filled_order.product_code,
+            side: filled_order.side,
+            trade_mode: :paper,
+            status: :filled
+          }
+        )
+
+        {:ok, filled_order}
+
+      {:error, {code, meta}} when is_atom(code) and is_map(meta) ->
+        {:error, code, meta}
+
+      {:error, error} ->
+        {:error, :persist_failed, %{error: error}}
+    end
   end
 
-  defp fill_price(%Order{order_type: :market}, command, opts) do
+  defp decide_fill(%Order{order_type: :market} = _order, command, opts) do
+    with {:ok, ltp} <- fetch_ltp(command, opts) do
+      {:ok, {:fill, ltp}}
+    end
+  end
+
+  defp decide_fill(
+         %Order{order_type: :limit, price: %Decimal{} = price, side: side},
+         command,
+         opts
+       ) do
+    with {:ok, ltp} <- fetch_ltp(command, opts) do
+      if limit_crossed?(side, price, ltp) do
+        {:ok, {:fill, price}}
+      else
+        {:ok, :leave_pending}
+      end
+    end
+  end
+
+  defp decide_fill(%Order{}, _command, _opts) do
+    {:error, :invalid_command, %{field: :price}}
+  end
+
+  defp limit_crossed?(:buy, limit_price, ltp) do
+    Decimal.compare(ltp, limit_price) != :gt
+  end
+
+  defp limit_crossed?(:sell, limit_price, ltp) do
+    Decimal.compare(ltp, limit_price) != :lt
+  end
+
+  defp fetch_ltp(command, opts) do
     case Map.fetch(command, :market_key) do
       {:ok, key} ->
         server = Keyword.get(opts, :server, Cache)
@@ -77,18 +120,23 @@ defmodule Bitflyer.OrderExecutor.Paper do
     end
   end
 
-  defp fill_price(%Order{}, _command, _opts) do
-    {:error, :invalid_command, %{field: :price}}
-  end
-
   defp extract_ltp(%{ltp: ltp}), do: cast_ltp(ltp)
   defp extract_ltp(%{"ltp" => ltp}), do: cast_ltp(ltp)
   defp extract_ltp(_), do: :error
 
-  defp cast_ltp(%Decimal{} = ltp), do: {:ok, ltp}
-  defp cast_ltp(ltp) when is_binary(ltp), do: {:ok, Decimal.new(ltp)}
-  defp cast_ltp(ltp) when is_integer(ltp), do: {:ok, Decimal.new(ltp)}
-  defp cast_ltp(ltp) when is_float(ltp), do: {:ok, Decimal.from_float(ltp)}
+  defp cast_ltp(%Decimal{} = ltp) do
+    if Decimal.positive?(ltp), do: {:ok, ltp}, else: :error
+  end
+
+  defp cast_ltp(ltp) when is_binary(ltp) do
+    case Decimal.parse(ltp) do
+      {decimal, ""} -> cast_ltp(decimal)
+      _ -> :error
+    end
+  end
+
+  defp cast_ltp(ltp) when is_integer(ltp), do: cast_ltp(Decimal.new(ltp))
+  defp cast_ltp(ltp) when is_float(ltp), do: cast_ltp(Decimal.from_float(ltp))
   defp cast_ltp(_), do: :error
 
   defp mark_filled(%Order{} = order, fill_price) do
