@@ -25,9 +25,12 @@ fi
 
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-docker_bitflyer_prod}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
 
 echo "Backing up ${POSTGRES_DB} via compose service db -> ${OUT_FILE}"
-docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" exec -T db \
+# コンテナ内でもパスワード認証が必要な構成に備え PGPASSWORD を渡す（unix socket trust でも無害）
+docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" exec -T \
+  -e "PGPASSWORD=${POSTGRES_PASSWORD}" db \
   pg_dump -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" --no-owner --format=plain \
   | gzip -c > "${OUT_FILE}"
 

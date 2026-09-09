@@ -19,6 +19,14 @@ require_env_file() {
   fi
 }
 
+load_env_file() {
+  # compose の --env-file はシェル変数には入らない。APP_IMAGE / APP_HOST_PORT 用に取り込む。
+  # shellcheck disable=SC1090
+  set -a
+  source "${ENV_FILE}"
+  set +a
+}
+
 compose() {
   docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" "$@"
 }
@@ -29,18 +37,25 @@ record_current_image() {
   if [[ -n "${id}" ]]; then
     mkdir -p .deploy
     echo "${id}" > .deploy/previous-app-image-id
-    docker image inspect --format '{{index .RepoDigests 0}}{{"\n"}}{{index .RepoTags 0}}' "${id}" \
-      > .deploy/previous-app-image.txt 2>/dev/null || true
+    # ローカル build は RepoDigests が空になり得る。index 0 は範囲外になるので range で書く。
+    docker image inspect --format \
+      '{{range .RepoDigests}}{{println .}}{{end}}{{range .RepoTags}}{{println .}}{{end}}' \
+      "${id}" > .deploy/previous-app-image.txt 2>/dev/null || true
     echo "Recorded previous app image -> .deploy/previous-app-image.txt"
   fi
 }
 
 wait_healthy() {
-  echo "Waiting for app healthy..."
+  # APP_HOST_PORT 例: 127.0.0.1:4001 → ホスト側ヘルスは 4001
+  local host_port="${APP_HOST_PORT:-127.0.0.1:4000}"
+  local port="${host_port##*:}"
+  port="${port:-4000}"
+
+  echo "Waiting for app healthy on 127.0.0.1:${port}..."
   local i=0
   while [[ "$i" -lt 60 ]]; do
     if compose ps --status running | grep -q app; then
-      if curl -fsS "http://127.0.0.1:4000/health/live" >/dev/null 2>&1; then
+      if curl -fsS "http://127.0.0.1:${port}/health/live" >/dev/null 2>&1; then
         echo "app /health/live OK"
         return 0
       fi
@@ -54,6 +69,7 @@ wait_healthy() {
 }
 
 require_env_file
+load_env_file
 
 case "${MODE}" in
   deploy)
