@@ -48,6 +48,8 @@
 | `PHX_HOST` | 開発は `localhost` |
 | `TRADE_MODE` | 既定 `dry_run`。許可は `dry_run` / `paper` / `live` のみ（不正値は起動停止） |
 | `BITFLYER_LIVE_CONFIRM` | `live` 実発注の二重確認。UTC 当日の `YYYY-MM-DD`。未設定・不一致なら発注は halted |
+| `BITFLYER_API_KEY` | Private API key。`TRADE_MODE=live` 時必須。値は Git に入れない |
+| `BITFLYER_API_SECRET` | Private API secret。同上。出金権限付きキーは使わない |
 
 ## 起動の前提
 

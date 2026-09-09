@@ -52,7 +52,7 @@
   - `PHX_HTTP_IP` の既定は `127.0.0.1`。VLAN / ホストポートで出す場合は意図をコメントし、ACL と併用する
 - [ ] `db` は名前付きボリュームまたはホスト永続ディスク。バックアップ方針への参照をコメントまたは文書に残す
 - [ ] `app` はレジストリのイメージタグを参照する。`:latest` だけに頼らない運用（タグ or digest）を決める
-- [ ] `.env.example` に本番で使う名前を足す（値は入れない）。`TRADE_MODE` の本番既定は文書で明示する（`UI_BASIC_AUTH_*` / `PHX_HTTP_IP` は既に example あり）
+- [ ] `.env.example` に本番で使う名前を足す（値は入れない）。`TRADE_MODE` の本番既定は文書で明示する（`UI_BASIC_AUTH_*` / `PHX_HTTP_IP` / `BITFLYER_API_*` は既に example あり）
 
 完了: シークレットをホストに置いた前提で、Compose ファイルだけ見れば起動構成が追える。認証なしで Status の取引詳細を見られない。
 

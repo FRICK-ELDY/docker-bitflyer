@@ -19,6 +19,9 @@ config :logger, level: :warning
 # UI BasicAuth はテスト既定オフ（個別テストで Application.put_env する）
 config :ui, :basic_auth, enabled: false, username: "", password: ""
 
+# bitFlyer API キーはテスト既定空（runtime も :test では live 必須チェックをしない）
+config :bitflyer, :exchange_api, api_key: "", api_secret: ""
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

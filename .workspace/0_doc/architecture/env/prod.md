@@ -23,6 +23,15 @@
 | 公開ポート | 管理 UI や DB を不用意に公開しない |
 | UI 認証 | `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` 必須（`:browser` のみ。`/health*` は認証なし） |
 | HTTP bind | 既定 `PHX_HTTP_IP=127.0.0.1`。VLAN 越しに出すときだけ明示変更 |
+| API キー | `BITFLYER_API_KEY` / `BITFLYER_API_SECRET`。`TRADE_MODE=live` 時必須（欠落は起動停止） |
+
+## bitFlyer API キー
+
+- 環境変数名は上記で固定。ホスト側シークレットのみ。Git・イメージ・ログに出さない
+- `dry_run` / `paper` では省略可。`live` では両方揃っていないと起動しない
+- 権限は取引に必要な参照・発注のみ。**出金・送付権限は付けない**（Vision / overview と同旨）
+- 開発用キーと本番キーを混在させない
+- 署名付き REST client 本体は別項（improvement-plan #18）。現状の既定 adapter は `Exchange.Unavailable`
 
 ## UI 公開面
 

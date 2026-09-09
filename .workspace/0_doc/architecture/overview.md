@@ -170,6 +170,7 @@ strategy から API を直接叩かない。market-data の遅延や欠損があ
 ## セキュリティ
 
 - API キーは環境変数またはシークレットストアから注入する。イメージや Git に埋め込まない
+- 名前は `BITFLYER_API_KEY` / `BITFLYER_API_SECRET` で固定。`TRADE_MODE=live` のときのみ起動時必須
 - ビルドコンテキストは `.dockerignore` で `.env` / `_build` / `deps` / `.git` 等を除外する（本番 Dockerfile の `COPY` 時に混入するのを防ぐ）
 - 本番キーは出金権限を付けない
 - 開発用キーと本番キーを混在させない
