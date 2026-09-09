@@ -57,6 +57,7 @@ defmodule Bitflyer.OrderExecutor.Live.CancelTest do
       id: CancelExchange.Counter,
       start: {Agent, :start_link, [fn -> 0 end, [name: CancelExchange.Counter]]}
     })
+
     Process.register(self(), CancelExchange)
 
     on_exit(fn ->
