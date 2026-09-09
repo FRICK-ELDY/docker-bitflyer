@@ -91,6 +91,7 @@ flowchart LR
 | cache | ETS（鮮度付き。単一ノードでは Redis を置かない） |
 | observe（ログ・メトリクス） | `apps/bitflyer` |
 | observe（画面） | `apps/ui` |
+| observe（Discord 通知） | `apps/bitflyer` 内アダプタ（`Bitflyer.Observe.Discord`）。Incoming Webhook。Bot / 第3アプリは作らない |
 
 Ash は永続状態（注文、建玉、残高スナップショット、リスク停止状態、パラメータ履歴）にだけ使う。板・Ticker・判定ループは ETS または GenServer に置き、ホットパスから Resource を呼ばない。価格と数量は Decimal にする。
 
@@ -156,6 +157,7 @@ strategy から API を直接叩かない。market-data の遅延や欠損があ
 - イベント例: market_data tick/disconnect、risk rejected、order submitted/filled、reconcile mismatch、circuit opened、readiness changed、health unhealthy
 - メタデータは allowlist のみ。秘密らしきキーは落とす
 - LiveDashboard（`/dev/dashboard`）の metrics に bitflyer カウンタを載せる
+- Discord 通知は observe のアダプタ（`Bitflyer.Observe.Discord`）。`DISCORD_WEBHOOK_URL`（Incoming Webhook）が有るときだけ、halt / reconcile_mismatch / disconnect を送る。未設定・送信失敗でも発注経路は止めない。Webhook URL はログ・メッセージ本文に出さない
 
 - コンテナは `restart: unless-stopped` 相当で自動再起動する
 - ヘルスチェックは「プロセス生存」だけでなく「データ鮮度」と「取引所との同期」を見る

@@ -1,6 +1,6 @@
 # 要望: Discord 通知（observe のアダプタ）
 
-ステータス: 未着手。Umbrella の骨格（[01-bootstrap-umbrella-and-docker.md](../2_todo/01-bootstrap-umbrella-and-docker.md)）のあとに着手する。
+ステータス: 実装済み（Incoming Webhook。`Bitflyer.Observe.Discord`）。Bot は使わない。
 
 ## 背景
 

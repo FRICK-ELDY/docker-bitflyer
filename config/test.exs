@@ -39,3 +39,8 @@ config :bitflyer, Bitflyer.MarketData,
   socket_client: Bitflyer.MarketData.Socket.Local
 
 config :bitflyer, Bitflyer.Strategy, enabled: false
+
+# 実 Webhook を叩かない。個別テストは start_supervised で注入する。
+config :bitflyer, Bitflyer.Observe.Discord,
+  webhook_url: nil,
+  attach?: false

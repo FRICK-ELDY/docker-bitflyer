@@ -107,6 +107,18 @@ config :bitflyer,
   trade_mode: trade_mode,
   live_confirmed: live_confirmed
 
+discord_webhook =
+  case System.get_env("DISCORD_WEBHOOK_URL") do
+    url when is_binary(url) ->
+      trimmed = String.trim(url)
+      if trimmed == "", do: nil, else: trimmed
+
+    _ ->
+      nil
+  end
+
+config :bitflyer, Bitflyer.Observe.Discord, webhook_url: discord_webhook
+
 # ## Using releases
 #
 # If you use `mix release`, you need to explicitly enable the server
