@@ -8,6 +8,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   - boot reconcile halt → 発注不可
   - risk 拒否が executor 経由でも永続化・REST を起こさない
   - live submission 不明（timeout）→ halt・再送禁止
+  - live exchange_order_id 永続化失敗 → halt・再送禁止
   """
 
   use Bitflyer.DataCase, async: false
@@ -373,6 +374,35 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
                Order
                |> Ash.Query.filter(internal_order_id == "unknown-2")
                |> Ash.read_one()
+    end
+  end
+
+  describe "persist failed" do
+    test "live exchange_order_id persist failure halts and blocks further REST" do
+      Application.put_env(:bitflyer, :trade_mode, :live)
+      Application.put_env(:bitflyer, :live_confirmed, true)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market()
+
+      persist_fail = fn _order, _id -> {:error, :forced_persist_failure} end
+
+      assert {:error, :persist_failed, %{exchange_order_id: "ex-persist-halt-1"}} =
+               OrderExecutor.submit(command("persist-halt-1"),
+                 trade_mode: :live,
+                 positions: [],
+                 persist_exchange_order_id: persist_fail
+               )
+
+      assert SpyExchange.place_count() == 1
+      assert Readiness.get() == {:halted, :persist_failed}
+
+      assert {:error, :circuit_open, _} =
+               OrderExecutor.submit(command("persist-halt-2"),
+                 trade_mode: :live,
+                 positions: []
+               )
+
+      assert SpyExchange.place_count() == 1
     end
   end
 

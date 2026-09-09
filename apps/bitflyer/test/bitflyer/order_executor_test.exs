@@ -290,6 +290,62 @@ defmodule Bitflyer.OrderExecutorTest do
     assert SpyExchange.place_count() == 2
   end
 
+  test "live persist failure after place_order halts and blocks further submits" do
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    persist_fail = fn _order, _exchange_order_id ->
+      {:error, :forced_persist_failure}
+    end
+
+    assert {:error, :persist_failed,
+            %{
+              internal_order_id: "live-persist-1",
+              exchange_order_id: "ex-live-persist-1"
+            }} =
+             OrderExecutor.submit(valid_command("live-persist-1"),
+               positions: [],
+               trade_mode: :live,
+               persist_exchange_order_id: persist_fail
+             )
+
+    assert SpyExchange.place_count() == 1
+    assert Readiness.get() == {:halted, :persist_failed}
+
+    assert {:ok, %RiskState{halted: true, reason: "persist_failed"}} =
+             RiskState
+             |> Ash.Query.filter(name == "default")
+             |> Ash.read_one()
+
+    # 取引所 ID は失われたまま（pending・exchange_order_id nil）
+    assert {:ok, %Order{status: :pending, exchange_order_id: nil}} =
+             Order
+             |> Ash.Query.filter(internal_order_id == "live-persist-1")
+             |> Ash.read_one()
+
+    # 同一 ID・別 ID ともゲート閉鎖で拒否（再 REST しない）
+    assert {:error, :circuit_open, _} =
+             OrderExecutor.submit(valid_command("live-persist-1"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert {:error, :circuit_open, _} =
+             OrderExecutor.submit(valid_command("live-persist-2"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert SpyExchange.place_count() == 1
+
+    assert {:ok, nil} =
+             Order
+             |> Ash.Query.filter(internal_order_id == "live-persist-2")
+             |> Ash.read_one()
+  end
+
   test "risk rejection prevents order persistence" do
     Application.put_env(:bitflyer, :trade_mode, :dry_run)
     assert Readiness.get() == :not_ready

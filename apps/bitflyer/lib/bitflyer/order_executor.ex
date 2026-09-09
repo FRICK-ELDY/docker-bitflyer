@@ -29,6 +29,7 @@ defmodule Bitflyer.OrderExecutor do
   - Risk.authorize/2 と同じオプション（`:positions`, `:limits`, `:now`, `:server` 等）
   - `:trade_mode` — 出口上書き（既定は `TradeMode.current/0`）
   - `:authorize?` — 既定 true。false のとき risk をスキップ（テスト用）
+  - `:persist_exchange_order_id` — live のみ。受注 ID 永続化の差し替え（テスト用）
   """
   @spec submit(map(), keyword()) :: result()
   def submit(command, opts \\ []) when is_map(command) do
