@@ -59,7 +59,7 @@ defmodule Bitflyer.Strategy.Runner do
 
     state = %{
       module: Keyword.get_lazy(opts, :module, &Strategy.module/0),
-      params: Keyword.get_lazy(opts, :params, &Strategy.params/0),
+      params: normalize_params(Keyword.get_lazy(opts, :params, &Strategy.params/0)),
       throttle_ms: Keyword.get(opts, :throttle_ms, Strategy.throttle_ms()),
       # ロード完了まで nil。tick を無視して起動レースでの二重評価を防ぐ
       submitted: submitted,
@@ -110,6 +110,9 @@ defmodule Bitflyer.Strategy.Runner do
   defp submitted_boot(false), do: {MapSet.new(), false}
   defp submitted_boot(:pending), do: {nil, false}
 
+  defp normalize_params(params) when is_map(params), do: params
+  defp normalize_params(params) when is_list(params), do: Map.new(params)
+
   # monotonic 時刻は負になり得るため、未評価は 0 ではなくキー欠如で表す
   defp throttled?(%{throttle_ms: throttle_ms, last_evaluated: last_evaluated}, product_code, now) do
     case Map.fetch(last_evaluated, product_code) do
@@ -124,10 +127,19 @@ defmodule Bitflyer.Strategy.Runner do
         commands = state.module.evaluate(market, [], state.params)
 
         pending_commands =
-          Enum.reject(commands, fn command ->
+          Enum.filter(commands, fn command ->
             case command_id(command) do
-              {:ok, id} -> MapSet.member?(state.submitted, id)
-              :error -> false
+              {:ok, id} ->
+                not MapSet.member?(state.submitted, id)
+
+              :error ->
+                Bitflyer.Telemetry.log(
+                  :error,
+                  "strategy evaluated command without a valid internal_order_id",
+                  %{command: inspect(command)}
+                )
+
+                false
             end
           end)
 
@@ -291,31 +303,7 @@ defmodule Bitflyer.Strategy.Runner do
         |> MapSet.new()
 
       {:error, error} ->
-        Bitflyer.Telemetry.log(
-          :warning,
-          "strategy runner failed to load submitted order ids",
-          %{error: inspect(error)}
-        )
-
-        MapSet.new()
+        raise "failed to load submitted order ids: #{inspect(error)}"
     end
-  rescue
-    error ->
-      Bitflyer.Telemetry.log(
-        :warning,
-        "strategy runner failed to load submitted order ids",
-        %{error: Exception.message(error)}
-      )
-
-      MapSet.new()
-  catch
-    :exit, reason ->
-      Bitflyer.Telemetry.log(
-        :warning,
-        "strategy runner failed to load submitted order ids",
-        %{error: inspect(reason)}
-      )
-
-      MapSet.new()
   end
 end

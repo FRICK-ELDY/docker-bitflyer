@@ -200,4 +200,46 @@ defmodule Bitflyer.Strategy.RunnerTest do
              |> Ash.Query.filter(internal_order_id == "strategy-invalid-once-FX_BTC_JPY")
              |> Ash.read()
   end
+
+  test "commands without internal_order_id are dropped without submit" do
+    stop_supervised(Runner)
+
+    Application.put_env(:bitflyer, Bitflyer.Strategy,
+      enabled: true,
+      module: Bitflyer.TestSupport.MissingIdStrategy,
+      params: []
+    )
+
+    # DB ロードなし（他テストの order id を submitted に載せない）
+    {:ok, _pid} = start_supervised({Runner, [throttle_ms: 0, load_submitted?: false]})
+    assert %{submitted: submitted} = :sys.get_state(Runner)
+    assert submitted == MapSet.new()
+
+    assert Readiness.mark_ready() == :ok
+    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert {:ok, before_orders} = Ash.read(Order)
+
+    assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
+    state = :sys.get_state(Runner)
+
+    assert state.submitted == MapSet.new()
+    assert {:ok, after_orders} = Ash.read(Order)
+    assert length(after_orders) == length(before_orders)
+  end
+
+  test "keyword params from start opts are normalized to a map" do
+    stop_supervised(Runner)
+
+    {:ok, _pid} =
+      start_supervised(
+        {Runner,
+         [
+           throttle_ms: 0,
+           load_submitted?: false,
+           params: [size: "0.02", side: :sell]
+         ]}
+      )
+
+    assert %{params: %{size: "0.02", side: :sell}} = :sys.get_state(Runner)
+  end
 end
