@@ -244,17 +244,14 @@ defmodule Bitflyer.Startup.Reconcile do
     end
   end
 
-  defp ensure_balance_baseline(_internal_map, []), do: :ok
-
   defp ensure_balance_baseline(internal_map, required) when is_list(required) do
-    Enum.reduce_while(required, :ok, fn currency, :ok ->
-      if Map.has_key?(internal_map, currency) do
-        {:cont, :ok}
-      else
-        {:halt,
-         {:error, :reconcile_mismatch, %{kind: :balance_baseline_missing, currency: currency}}}
-      end
-    end)
+    case Enum.find(required, fn currency -> not Map.has_key?(internal_map, currency) end) do
+      nil ->
+        :ok
+
+      currency ->
+        {:error, :reconcile_mismatch, %{kind: :balance_baseline_missing, currency: currency}}
+    end
   end
 
   defp balance_currency(balance), do: Map.fetch!(balance, :currency)
