@@ -101,6 +101,59 @@ GitHub Actions も同じ `mix precommit` を PR と `main` で実行する。範
 | `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` | Status UI。prod 必須。dev は両方揃ったときだけ有効 |
 | `PHX_HTTP_IP` | prod のみ。既定 `127.0.0.1`（公開面最小化） |
 
+## bitFlyer API で取得できる情報
+
+公式: [HTTP / Realtime API ドキュメント](https://api.bitflyer.jp/docs/api)。エンドポイントは `https://api.bitflyer.com/v1/`。Realtime は `wss://ws.lightstream.bitflyer.com/json-rpc`。
+
+一覧は取引所側が提供する取得系の要約。本リポジトリが全部を実装しているわけではない（現状の利用は下表の「本リポ」列）。
+
+### HTTP Public（認証不要）
+
+| 取得できる情報 | 主なパス | 本リポ |
+| --- | --- | --- |
+| マーケット一覧（`product_code` / 現物・CFD） | `GET /v1/markets` | — |
+| 板（bids / asks / mid） | `GET /v1/board` | — |
+| Ticker（LTP・出来高など） | `GET /v1/ticker` | market-data（gap-fill） |
+| 約定履歴（市場） | `GET /v1/executions` | — |
+| 板の状態（通常 / BUSY 等） | `GET /v1/getboardstate` | — |
+| 取引所の稼働状態 | `GET /v1/gethealth` | — |
+| ファンディングレート | `GET /v1/getfundingrate` | — |
+| ファンディングレート履歴 | `GET /v1/getfundingratehistory` | — |
+| 法人アカウント最大レバレッジ | `GET /v1/getcorporateleverage` | — |
+| チャット | `GET /v1/getchats` | — |
+
+### HTTP Private（`BITFLYER_API_*`・権限が必要）
+
+| 取得できる情報 | 主なパス | 本リポ |
+| --- | --- | --- |
+| API キーの権限一覧 | `GET /v1/me/getpermissions` | — |
+| 資産残高 | `GET /v1/me/getbalance` | 突合予定（client #18） |
+| 証拠金の状態 | `GET /v1/me/getcollateral` | — |
+| 通貨別証拠金 | `GET /v1/me/getcollateralaccounts` | — |
+| 注文一覧（未約定含む） | `GET /v1/me/getchildorders` | 突合予定 |
+| 親注文一覧 / 詳細 | `GET /v1/me/getparentorders` 等 | 使わない想定 |
+| 自分の約定一覧 | `GET /v1/me/getexecutions` | 約定反映予定 |
+| 建玉一覧（CFD / FX） | `GET /v1/me/getpositions` | 突合予定 |
+| 残高履歴 | `GET /v1/me/getbalancehistory` | — |
+| 証拠金変動履歴 | `GET /v1/me/getcollateralhistory` | — |
+| 取引手数料 | `GET /v1/me/gettradingcommission` | — |
+| 預入アドレス / コイン入出金履歴 | `GET /v1/me/getaddresses` 等 | 使わない（出金権限禁止） |
+| 銀行口座 / 入出金履歴 | `GET /v1/me/getbankaccounts` 等 | 使わない |
+
+発注・取消・出金などは取得ではなく操作 API（`sendchildorder` / `cancelchildorder` 等）。本システムの live 出口で使うのは発注・取消側。**出金 API は使わない。**
+
+### Realtime（WebSocket）
+
+公開チャネル例（`product_code` 付き）:
+
+| チャネル | 内容 | 本リポ |
+| --- | --- | --- |
+| `lightning_ticker_*` | Ticker 更新 | market-data Feed |
+| `lightning_board_snapshot_*` / `lightning_board_*` | 板スナップショット / 差分 | — |
+| `lightning_executions_*` | 市場の約定ストリーム | — |
+
+注文イベント受信など Private のリアルタイムは API キー権限「注文のイベントを受信」が必要。現状の Feed は公開 ticker のみ。
+
 ## よく使う mix
 
 すべてコンテナ内で実行する。

@@ -25,6 +25,14 @@ defmodule Bitflyer.Exchange.CredentialsTest do
     assert Credentials.api_secret() == ""
   end
 
+  test "present? is false when configured values are nil" do
+    Application.put_env(:bitflyer, :exchange_api, api_key: nil, api_secret: nil)
+
+    refute Credentials.present?()
+    assert Credentials.api_key() == ""
+    assert Credentials.api_secret() == ""
+  end
+
   test "present? is true when both key and secret are set" do
     Application.put_env(:bitflyer, :exchange_api,
       api_key: "test-key",

@@ -8,21 +8,26 @@ defmodule Bitflyer.Exchange.Credentials do
   """
 
   @spec api_key() :: String.t()
-  def api_key do
-    :bitflyer
-    |> Application.get_env(:exchange_api, [])
-    |> Keyword.get(:api_key, "")
-  end
+  def api_key, do: get_credential(:api_key)
 
   @spec api_secret() :: String.t()
-  def api_secret do
-    :bitflyer
-    |> Application.get_env(:exchange_api, [])
-    |> Keyword.get(:api_secret, "")
-  end
+  def api_secret, do: get_credential(:api_secret)
 
   @spec present?() :: boolean()
   def present? do
     api_key() != "" and api_secret() != ""
+  end
+
+  defp get_credential(key) do
+    case Application.get_env(:bitflyer, :exchange_api) do
+      opts when is_list(opts) ->
+        case Keyword.get(opts, key) do
+          val when is_binary(val) -> val
+          _ -> ""
+        end
+
+      _ ->
+        ""
+    end
   end
 end
