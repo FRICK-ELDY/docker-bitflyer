@@ -46,5 +46,8 @@ config :bitflyer, Bitflyer.MarketData,
 
 config :bitflyer, Bitflyer.Strategy, enabled: false
 
+# Risk のテスト注入（:daily_loss 等）を許可。本番 config では無効のまま。
+config :bitflyer, Bitflyer.Risk, allow_test_injections: true
+
 # 実 Webhook を叩かない。個別テストは start_supervised で注入する。
 config :bitflyer, Bitflyer.Observe.Discord, webhook_url: nil

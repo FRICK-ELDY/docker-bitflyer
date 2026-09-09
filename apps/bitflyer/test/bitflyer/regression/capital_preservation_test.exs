@@ -12,6 +12,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   - live 空 BalanceSnapshot → baseline missing で halt
   - 公開 submit は authorize?: false でも risk を迂回できない
   - risk limits（価格逸脱・頻度・日次損失・残高）拒否で永続化・REST しない
+  - paper/live の Fill→DailyLoss→halt 縦貫通（注入なし）
   """
 
   use Bitflyer.DataCase, async: false
@@ -20,6 +21,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
   import Bitflyer.TestSupport.MarketDataCacheHelper
   import Bitflyer.TestSupport.OrderRateHelper
+  import Bitflyer.TestSupport.DailyLossHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
   alias Bitflyer.MarketData.Cache
@@ -49,6 +51,30 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
     def start_counter, do: Agent.start_link(fn -> 0 end, name: __MODULE__.Counter)
     def place_count, do: Agent.get(__MODULE__.Counter, & &1)
+  end
+
+  defmodule LossFillExchange do
+    @behaviour Bitflyer.Exchange.Client
+
+    @impl true
+    def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
+
+    @impl true
+    def place_order(_), do: {:error, :not_used}
+
+    @impl true
+    def cancel_order(_), do: {:error, :not_used}
+
+    @impl true
+    def fetch_order(%{exchange_order_id: id}) do
+      case Process.get({:fill_order, id}) do
+        nil -> {:error, :order_not_found}
+        info -> {:ok, info}
+      end
+    end
+
+    @impl true
+    def fetch_executions(_), do: {:ok, []}
   end
 
   defmodule MismatchExchange do
@@ -102,6 +128,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
     reset_readiness()
     reset_market_data_cache()
     reset_order_rate()
+    reset_daily_loss()
     clear_default_risk_state()
 
     previous_mode = Application.get_env(:bitflyer, :trade_mode, :dry_run)
@@ -115,6 +142,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       reset_readiness()
       reset_market_data_cache()
       reset_order_rate()
+      reset_daily_loss()
       clear_default_risk_state()
       Application.put_env(:bitflyer, :trade_mode, previous_mode)
       Application.put_env(:bitflyer, :exchange_client, previous_client)
@@ -451,6 +479,128 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert SpyExchange.place_count() == 0
     end
 
+    test "paper fill→DailyLoss→halt without daily_loss injection" do
+      Application.put_env(:bitflyer, :trade_mode, :paper)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market(Decimal.new("5000000"))
+
+      # 建玉 0.1 @ 5M。決済 0.1 @ 3.999M → 実現損 100_100 > 100_000
+      assert {:ok, %Order{status: :filled}} =
+               OrderExecutor.submit(
+                 command("paper-loss-open", %{size: Decimal.new("0.1")}),
+                 trade_mode: :paper,
+                 limits: %{
+                   max_daily_loss: Decimal.new("100000"),
+                   max_order_size: Decimal.new("1")
+                 }
+               )
+
+      put_fresh_market(Decimal.new("3999000"))
+
+      assert {:ok, %Order{status: :filled}} =
+               OrderExecutor.submit(
+                 command("paper-loss-close", %{side: :sell, size: Decimal.new("0.1")}),
+                 trade_mode: :paper,
+                 limits: %{
+                   max_daily_loss: Decimal.new("100000"),
+                   max_order_size: Decimal.new("1")
+                 }
+               )
+
+      assert {:ok, loss} = Bitflyer.Risk.DailyLoss.get(:paper)
+      assert Decimal.gt?(loss, Decimal.new("100000"))
+
+      put_fresh_market(Decimal.new("5000000"))
+
+      assert {:error, :limit_exceeded, %{limit: :max_daily_loss}} =
+               OrderExecutor.submit(command("paper-loss-next"),
+                 trade_mode: :paper,
+                 limits: %{max_daily_loss: Decimal.new("100000")}
+               )
+
+      assert SpyExchange.place_count() == 0
+      assert Readiness.get() == {:halted, :daily_loss_exceeded}
+    end
+
+    test "live fill→DailyLoss→halt without daily_loss injection" do
+      Application.put_env(:bitflyer, :trade_mode, :live)
+      Application.put_env(:bitflyer, :live_confirmed, true)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market()
+
+      {:ok, open_order} =
+        Order
+        |> Ash.Changeset.for_create(:create, %{
+          internal_order_id: "live-loss-open",
+          exchange_order_id: "JRF-loss-open",
+          product_code: @product,
+          side: :buy,
+          status: :pending,
+          order_type: :market,
+          size: Decimal.new("0.1"),
+          filled_size: Decimal.new("0"),
+          trade_mode: :live
+        })
+        |> Ash.create()
+
+      Process.put({:fill_order, "JRF-loss-open"}, %{
+        exchange_order_id: "JRF-loss-open",
+        product_code: @product,
+        side: :buy,
+        size: Decimal.new("0.1"),
+        filled_size: Decimal.new("0.1"),
+        average_price: Decimal.new("5000000"),
+        status: :completed
+      })
+
+      assert {:ok, _} =
+               Bitflyer.OrderExecutor.LiveFills.sync_order(open_order, exchange: LossFillExchange)
+
+      {:ok, close_order} =
+        Order
+        |> Ash.Changeset.for_create(:create, %{
+          internal_order_id: "live-loss-close",
+          exchange_order_id: "JRF-loss-close",
+          product_code: @product,
+          side: :sell,
+          status: :pending,
+          order_type: :market,
+          size: Decimal.new("0.1"),
+          filled_size: Decimal.new("0"),
+          trade_mode: :live
+        })
+        |> Ash.create()
+
+      Process.put({:fill_order, "JRF-loss-close"}, %{
+        exchange_order_id: "JRF-loss-close",
+        product_code: @product,
+        side: :sell,
+        size: Decimal.new("0.1"),
+        filled_size: Decimal.new("0.1"),
+        average_price: Decimal.new("3999000"),
+        status: :completed
+      })
+
+      assert {:ok, _} =
+               Bitflyer.OrderExecutor.LiveFills.sync_order(close_order,
+                 exchange: LossFillExchange
+               )
+
+      assert {:ok, loss} = Bitflyer.Risk.DailyLoss.get(:live)
+      assert Decimal.gt?(loss, Decimal.new("100000"))
+
+      assert {:error, :limit_exceeded, %{limit: :max_daily_loss}} =
+               OrderExecutor.submit(command("live-loss-next"),
+                 trade_mode: :live,
+                 positions: [],
+                 exchange: LossFillExchange,
+                 limits: %{max_daily_loss: Decimal.new("100000")}
+               )
+
+      assert SpyExchange.place_count() == 0
+      assert Readiness.get() == {:halted, :daily_loss_exceeded}
+    end
+
     test "insufficient balance rejects submit without persistence" do
       Application.put_env(:bitflyer, :trade_mode, :dry_run)
       assert Readiness.mark_ready() == :ok
@@ -563,8 +713,8 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
     )
   end
 
-  defp put_fresh_market do
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+  defp put_fresh_market(ltp \\ Decimal.new("5000000")) do
+    assert Cache.put(@market_key, %{ltp: ltp}) == :ok
   end
 
   defp clear_default_risk_state do

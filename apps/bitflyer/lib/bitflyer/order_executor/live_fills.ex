@@ -224,43 +224,46 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
     # 差分サイズだけ建玉へ。残高は live では更新しない（getbalance 突合が正本）
     delta_order = %{order | size: delta, filled_size: delta}
 
-    case Bitflyer.Repo.transaction(fn ->
-           with {:ok, updated, order_notifications} <-
-                  update_order(order, %{status: status, filled_size: new_filled}),
-                {:ok, position_notifications} <- Positions.apply_fill(delta_order, fill_price) do
-             {updated, order_notifications ++ position_notifications}
-           else
-             {:error, code, meta} when is_atom(code) and is_map(meta) ->
-               Bitflyer.Repo.rollback({code, meta})
+    Bitflyer.OrderExecutor.DailyLossSync.around_fill(:live, fn ->
+      case Bitflyer.Repo.transaction(fn ->
+             with {:ok, updated, order_notifications} <-
+                    update_order(order, %{status: status, filled_size: new_filled}),
+                  {:ok, position_notifications, _fill_meta} <-
+                    Positions.apply_fill(delta_order, fill_price) do
+               {updated, order_notifications ++ position_notifications}
+             else
+               {:error, code, meta} when is_atom(code) and is_map(meta) ->
+                 Bitflyer.Repo.rollback({code, meta})
 
-             other ->
-               Bitflyer.Repo.rollback(other)
-           end
-         end) do
-      {:ok, {updated, notifications}} ->
-        _ = Ash.Notifier.notify(notifications)
+               other ->
+                 Bitflyer.Repo.rollback(other)
+             end
+           end) do
+        {:ok, {updated, notifications}} ->
+          _ = Ash.Notifier.notify(notifications)
 
-        Bitflyer.Telemetry.execute(
-          :order_filled,
-          %{count: 1},
-          %{
-            internal_order_id: updated.internal_order_id,
-            exchange_order_id: updated.exchange_order_id,
-            product_code: updated.product_code,
-            side: updated.side,
-            trade_mode: :live,
-            status: updated.status
-          }
-        )
+          Bitflyer.Telemetry.execute(
+            :order_filled,
+            %{count: 1},
+            %{
+              internal_order_id: updated.internal_order_id,
+              exchange_order_id: updated.exchange_order_id,
+              product_code: updated.product_code,
+              side: updated.side,
+              trade_mode: :live,
+              status: updated.status
+            }
+          )
 
-        {:ok, updated}
+          {:ok, updated}
 
-      {:error, {code, meta}} when is_atom(code) and is_map(meta) ->
-        {:error, code, meta}
+        {:error, {code, meta}} when is_atom(code) and is_map(meta) ->
+          {:error, code, meta}
 
-      {:error, error} ->
-        {:error, :persist_failed, %{error: error}}
-    end
+        {:error, error} ->
+          {:error, :persist_failed, %{error: error}}
+      end
+    end)
   end
 
   defp status_after_fill(order_size, filled_size, remote_status) do

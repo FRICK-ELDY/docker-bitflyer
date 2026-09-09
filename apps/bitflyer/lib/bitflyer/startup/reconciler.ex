@@ -101,6 +101,28 @@ defmodule Bitflyer.Startup.Reconciler do
   end
 
   defp apply_result({:ok, _internal}, state) do
+    # barrier 中は synced にしない（force も使わない）
+    daily_loss_result = Bitflyer.Risk.DailyLoss.reload()
+
+    case daily_loss_result do
+      :ok ->
+        :ok
+
+      {:ok, :deferred} ->
+        Bitflyer.Telemetry.log(
+          :info,
+          "daily loss reload deferred (fill in flight); not marking ready from unsynced",
+          %{trade_mode: Bitflyer.TradeMode.current()}
+        )
+
+      {:error, reason} ->
+        Bitflyer.Telemetry.log(
+          :error,
+          "daily loss reload after reconcile failed; authorize stays unsynced",
+          %{reason: inspect(reason), trade_mode: Bitflyer.TradeMode.current()}
+        )
+    end
+
     case state.readiness.get() do
       {:halted, _} ->
         # 手動 clear_halt 待ち。自動では Ready に戻さない。
@@ -122,21 +144,26 @@ defmodule Bitflyer.Startup.Reconciler do
         end
 
       :not_ready ->
-        case ensure_risk_cleared() do
-          :ok ->
-            case state.readiness.mark_ready() do
-              :ok -> state
-              {:error, _} -> state
-            end
+        # DailyLoss が synced でない間は Ready にしない（Ready と発注可否のずれを防ぐ）
+        if daily_loss_synced?(daily_loss_result) do
+          case ensure_risk_cleared() do
+            :ok ->
+              case state.readiness.mark_ready() do
+                :ok -> state
+                {:error, _} -> state
+              end
 
-          {:error, error} ->
-            Bitflyer.Telemetry.log(
-              :error,
-              "Failed to ensure risk cleared, keeping not_ready: #{inspect(error)}",
-              %{reason: :risk_persist_failed, trade_mode: Bitflyer.TradeMode.current()}
-            )
+            {:error, error} ->
+              Bitflyer.Telemetry.log(
+                :error,
+                "Failed to ensure risk cleared, keeping not_ready: #{inspect(error)}",
+                %{reason: :risk_persist_failed, trade_mode: Bitflyer.TradeMode.current()}
+              )
 
-            state
+              state
+          end
+        else
+          state
         end
     end
   end
@@ -186,6 +213,9 @@ defmodule Bitflyer.Startup.Reconciler do
 
     state
   end
+
+  defp daily_loss_synced?(:ok), do: true
+  defp daily_loss_synced?(_), do: false
 
   defp ensure_risk_cleared do
     case RiskState

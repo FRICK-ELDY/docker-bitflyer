@@ -11,7 +11,7 @@
 
 前回計画の P0 #1–#4、P1 全般、P2 全般、P3 #15–#19（UI 認証、API キー枠、本番 release、Exchange.Rest、deps audit）はコード上で解決済み。再掲しない。
 
-**未消化として持ち越すもの:** 旧 P0 #5（risk limits の実効化）。比較関数はあるが本番注入が無い。
+**未消化として持ち越すもの:** 旧 P0 #5 のうち残高検査（#2）。日次損失（本計画 #1）は Fill + DailyLoss ETS で解決済み。
 
 ---
 
@@ -19,7 +19,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 1 | 日次損失の実効化 | Fill/建玉から当日損失の正本を作る。`Risk.authorize` に必須注入。未計測は `0` ではなく `:unsynced` | live 経路で損失超過が halt する回帰が緑。README risk 行を正直化 |
+| 1 | ~~日次損失の実効化~~ **済** | Fill 正本 + invalidate→reload fail-closed。突合/resume で再同期。縦貫通回帰あり。含み損はスコープ外（実現のみ） | live/paper で Fill→DailyLoss→halt が緑。README risk 行を partial に正直化 |
 | 2 | 残高検査の実効化 | OrderRate 同型の ETS キャッシュ。live 突合 / paper fill で更新。必要通貨欠落は fail-closed | 未注入・欠落で認可拒否のテストが緑 |
 | 3 | 両建て建玉突合 | 外部 `{product_code,side}` をネット建玉へ正規化（または内部 side 別）。順序反転 fixture | buy+sell 並存でも同じ Ready/halt 判定 |
 | 4 | live 既定の安全化 | prod/live で Strategy 既定 `enabled: false`。live 専用上限を明示必須。FixedOnce の自動成行を live で止める | live+confirm だけでは意図が出ない |

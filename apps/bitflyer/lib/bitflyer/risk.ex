@@ -8,14 +8,15 @@ defmodule Bitflyer.Risk do
 
   検査: 同期 → 鮮度 → 注文サイズ → 建玉 → 価格逸脱 → 発注頻度 → 日次損失 → 残高（任意）。
 
-  発注ホットパスでは RiskState・発注頻度・残高のために DB 往復しない。
-  頻度は `Risk.OrderRate`（ETS）、残高は `:balances` 注入時のみ検査する。
+  発注ホットパスでは RiskState・発注頻度・日次損失・残高のために DB 往復しない。
+  頻度は `Risk.OrderRate`（ETS）、日次損失は `Risk.DailyLoss`（ETS / Fill 正本）。
+  残高は `:balances` 注入時のみ検査する。
   """
 
   require Ash.Query
 
   alias Bitflyer.MarketData.Cache
-  alias Bitflyer.Risk.{Circuit, Limits, OrderRate}
+  alias Bitflyer.Risk.{Circuit, DailyLoss, Limits, OrderRate}
   alias Bitflyer.Trading.{Position, Product}
 
   @type rejection_code ::
@@ -37,7 +38,7 @@ defmodule Bitflyer.Risk do
   - `:now` / `:server` — Cache.fresh?/3・LTP 取得へ転送
   - `:check_persisted_circuit` — 既定 false。true のとき Ready でも RiskState を見る
   - `:recent_order_count` — 直近 1 分の発注件数（テスト注入。未指定時は OrderRate ETS）
-  - `:daily_loss` — 当日損失額（正の Decimal / 数値文字列。テスト注入）
+  - `:daily_loss` — 当日損失額（テスト注入。`allow_test_injections: true` のときのみ。未指定時は DailyLoss ETS）
   - `:balances` — 残高マップまたはリスト（未指定時は残高検査スキップ。ホットパスで DB しない）
   - `:now` — Cache / OrderRate 用 monotonic ms（テスト注入）
   """
@@ -266,7 +267,7 @@ defmodule Bitflyer.Risk do
         end
 
       {:error, _error} ->
-        {:error, :unsynced, %{reason: :daily_loss_load_failed}}
+        {:error, :unsynced, %{reason: :daily_loss_unsynced}}
     end
   end
 
@@ -410,23 +411,47 @@ defmodule Bitflyer.Risk do
   defp resolve_daily_loss(opts) do
     case Keyword.fetch(opts, :daily_loss) do
       {:ok, raw_loss} ->
-        case to_decimal(raw_loss) do
-          %Decimal{} = loss ->
-            if Decimal.compare(loss, Decimal.new(0)) == :lt do
-              {:error, :invalid_daily_loss}
-            else
-              {:ok, loss}
-            end
+        if test_injections_allowed?() do
+          case to_decimal(raw_loss) do
+            %Decimal{} = loss ->
+              if Decimal.compare(loss, Decimal.new(0)) == :lt do
+                {:error, :invalid_daily_loss}
+              else
+                {:ok, loss}
+              end
 
-          nil ->
-            {:error, :invalid_daily_loss}
+            nil ->
+              {:error, :invalid_daily_loss}
+          end
+        else
+          # 本番経路では注入を無視し ETS 正本を使う（0 注入による迂回を防ぐ）
+          resolve_daily_loss(Keyword.delete(opts, :daily_loss))
         end
 
       :error ->
-        # 損失計測の正本が無い間は 0（未知の損失を捏造しない）。
-        # 明示注入または将来の Fill / Balance 差分で上書きする。
-        {:ok, Decimal.new(0)}
+        trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+
+        daily_loss_opts =
+          case Keyword.fetch(opts, :daily_loss_server) do
+            {:ok, server} -> [server: server]
+            :error -> []
+          end
+          |> Keyword.merge(Keyword.take(opts, [:now_dt]))
+
+        case DailyLoss.get(trade_mode, daily_loss_opts) do
+          {:ok, %Decimal{} = loss} ->
+            {:ok, loss}
+
+          {:error, :unsynced} ->
+            {:error, :unsynced}
+        end
     end
+  end
+
+  defp test_injections_allowed? do
+    :bitflyer
+    |> Application.get_env(Bitflyer.Risk, [])
+    |> Keyword.get(:allow_test_injections, false) == true
   end
 
   defp fetch_balances(opts) do
