@@ -129,6 +129,20 @@ defmodule Bitflyer.OperationalStatusTest do
     assert feed.reconnect_attempt == 0
   end
 
+  test "feed_snapshot coerces non-boolean connected? to false" do
+    feed =
+      OperationalStatus.feed_snapshot(
+        feed_enabled?: true,
+        feed_status: %{
+          connected?: "yes",
+          subscribe_count: 0,
+          reconnect_attempt: 0
+        }
+      )
+
+    refute feed.connected?
+  end
+
   test "feed_snapshot marks missing process as unavailable" do
     feed =
       OperationalStatus.feed_snapshot(

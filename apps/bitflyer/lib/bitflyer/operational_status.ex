@@ -138,19 +138,14 @@ defmodule Bitflyer.OperationalStatus do
   def feed_snapshot(opts \\ []) do
     enabled? = Keyword.get_lazy(opts, :feed_enabled?, &MarketData.enabled?/0)
 
-    if not enabled? do
-      %{
-        enabled?: false,
-        available?: false,
-        connected?: false,
-        subscribe_count: 0,
-        reconnect_attempt: 0
-      }
-    else
-      opts
-      |> Keyword.get_lazy(:feed_status, &safe_feed_status/0)
-      |> normalize_feed(true)
-    end
+    status =
+      if enabled? do
+        Keyword.get_lazy(opts, :feed_status, &safe_feed_status/0)
+      else
+        :unavailable
+      end
+
+    normalize_feed(status, enabled?)
   end
 
   defp classify(readiness, trade_mode, market_data, live_confirmed?) do
