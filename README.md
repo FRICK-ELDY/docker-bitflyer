@@ -8,16 +8,37 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 
 ## 現状
 
-開発用の骨格は動く。
+開発用 Compose で常駐起動できる。`TRADE_MODE` の既定は `dry_run`。live 実発注に必要な署名付き private API・UI 認証・本番 release は未着手。
+
+起動・観測の要点:
 
 - `docker compose up -d` で `app`（Phoenix）と `db`（PostgreSQL）が上がる
 - UI は `http://127.0.0.1:4000/`（稼働確認用 Status。取引 UI ではない）
-- 稼働 API: `GET /health/live`（プロセス生存・Compose healthcheck）、`GET /health/ready`（DB + Ready + Feed/鮮度。WS 断検知）、`GET /health`（従来互換）
+- 稼働 API: `GET /health/live`（プロセス生存・Compose healthcheck）、`GET /health/ready`（DB + Ready + Feed/鮮度）、`GET /health`（従来互換）
 - 品質ゲートはローカルも CI も `mix precommit`
-- `.dockerignore` で `.env` / `_build` / `deps` 等をビルドコンテキストから除外（本番イメージへの混入防止）
-- 市場データ・戦略・リスク・発注の engine は未実装（`TRADE_MODE` の既定は `dry_run`）
 
-完了した骨格作業は [3_archive/01-bootstrap-umbrella-and-docker.md](.workspace/3_archive/01-bootstrap-umbrella-and-docker.md)。次の本番配布は [2_todo/03-cd-prod-host.md](.workspace/2_todo/03-cd-prod-host.md)。
+### コンポーネント別
+
+| コンポーネント | 状態 | メモ |
+| --- | --- | --- |
+| market-data（Feed / Cache / 再接続 / gap-fill） | implemented | ETS 鮮度。stale は risk / `/health/ready` で拒否・検知 |
+| strategy（Behaviour / Runner / FixedOnce） | implemented | 縦貫通の骨。高度なアルゴリズムは後続 |
+| risk-manager（limits / circuit / 鮮度） | implemented | サイズ・建玉・損失・頻度・価格逸脱・残高 |
+| order-executor（dry_run / paper / live 出口） | implemented | 冪等キーあり。live 出口はゲート通過時のみ REST |
+| datastore（Ash: Order / Position / Balance / RiskState） | implemented | `Bitflyer.Repo` に閉じる |
+| cache（ETS） | implemented | 単一ノード前提。Redis なし |
+| TradeMode | implemented | `dry_run` / `paper` / `live` + `BITFLYER_LIVE_CONFIRM` |
+| Readiness / 突合 / resume | implemented | boot・定期突合。`mix bitflyer.resume` |
+| observe — telemetry / 構造化ログ | implemented | allowlist（`:kind` / `:currency` / `:limit` 含む） |
+| observe — Discord 通知 | implemented | Incoming Webhook。未設定でも起動。発注は止めない |
+| observe — health | implemented | `/health/live`・`/health/ready`・`/health` |
+| UI StatusLive | implemented | 発注可否・Feed・鮮度・モード色分け |
+| CI（`mix precommit` / GitHub Actions） | implemented | PR と `main` |
+| private bitFlyer API（署名付き REST） | unavailable | 既定は `Exchange.Unavailable` |
+| UI 認証（BasicAuth 等） | unavailable | browser scope は未認証 |
+| 本番 release Compose | unavailable | 開発用 `Dockerfile` / `compose.yaml` のみ（[ToDo 03](.workspace/2_todo/03-cd-prod-host.md)） |
+
+完了した骨格・CI は [3_archive/](.workspace/3_archive/)。改善の優先順位は [improvement-plan.md](.workspace/0_doc/evaluation/improvement-plan.md)。
 
 ## 開発起動
 
@@ -74,6 +95,7 @@ GitHub Actions も同じ `mix precommit` を PR と `main` で実行する。範
 | `SECRET_KEY_BASE` | Phoenix 用（後で生成し直す） |
 | `PHX_HOST` | `localhost` |
 | `TRADE_MODE` | `dry_run` |
+| `BITFLYER_LIVE_CONFIRM` | live 時のみ。UTC 当日 `YYYY-MM-DD` |
 | `DISCORD_WEBHOOK_URL` | 任意。Discord Incoming Webhook。未設定でも起動する |
 
 ## よく使う mix
@@ -105,7 +127,8 @@ docker compose run --rm app mix setup
 
 ## これから作るもの
 
-- 市場データ、戦略、リスク、発注、永続化の各コンポーネント
+- 署名付き private API client（cancel / 照会 / 約定反映）
+- UI 認証と本番公開面の最小化
 - 本番用 release / Compose と配備手順（[ToDo 03](.workspace/2_todo/03-cd-prod-host.md)）
 - 秘密情報を Git に入れない本番実行手順
 
