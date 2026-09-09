@@ -179,6 +179,41 @@ defmodule Bitflyer.RiskTest do
     assert metadata.rejection_code == :unsynced
   end
 
+  test "authorize emits limit name on limit_exceeded telemetry" do
+    parent = self()
+    handler_id = "risk-limit-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:bitflyer, :risk, :rejected],
+        fn event, measurements, metadata, _config ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :limit_exceeded, %{limit: :max_order_size}} =
+             Risk.authorize(
+               valid_command(%{size: Decimal.new("100")}),
+               positions: [],
+               limits: %{
+                 max_order_size: Decimal.new("1"),
+                 max_position_size: Decimal.new("5"),
+                 market_data_max_age_ms: 5_000
+               }
+             )
+
+    assert_receive {:telemetry, [:bitflyer, :risk, :rejected], %{count: 1}, metadata}
+    assert metadata.rejection_code == :limit_exceeded
+    assert metadata.limit == :max_order_size
+  end
+
   test "authorize rejects limit price far from LTP" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()

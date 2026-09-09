@@ -531,13 +531,16 @@ defmodule Bitflyer.Risk do
     Bitflyer.Telemetry.execute(
       :risk_rejected,
       %{count: 1},
-      %{
-        rejection_code: code,
-        reason: code,
-        trade_mode: Bitflyer.TradeMode.current(),
-        product_code: Map.get(command, :product_code) || Map.get(meta, :product_code),
-        side: Map.get(command, :side)
-      }
+      Map.merge(
+        %{
+          rejection_code: code,
+          reason: code,
+          trade_mode: Bitflyer.TradeMode.current(),
+          product_code: Map.get(command, :product_code) || Map.get(meta, :product_code),
+          side: Map.get(command, :side)
+        },
+        Map.take(meta, [:limit, :currency, :kind])
+      )
     )
   end
 end
