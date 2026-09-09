@@ -82,6 +82,13 @@ defmodule Bitflyer.System do
   end
 
   @doc """
+  halted からの手動復帰。再突合成功時のみサーキット解除 → Ready。
+  """
+  def resume(opts \\ []) do
+    Bitflyer.Startup.Resume.run(opts)
+  end
+
+  @doc """
   市場データキーが鮮度内か（miss / stale は false）。
   """
   def market_data_fresh?(key, max_age_ms \\ Bitflyer.MarketData.Cache.default_max_age_ms()) do

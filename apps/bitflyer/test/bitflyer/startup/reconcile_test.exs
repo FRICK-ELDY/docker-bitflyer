@@ -170,6 +170,9 @@ defmodule Bitflyer.Startup.ReconcileTest do
     assert Readiness.get() == {:halted, :reconcile_mismatch}
     assert Readiness.format(Readiness.get()) == "halted:reconcile_mismatch"
     refute Readiness.ready?()
+
+    assert {:ok, _} =
+             Reconcile.run(trade_mode: :dry_run, skip_persisted_risk?: true)
   end
 
   test "paper mode treats internal state as source of truth" do
