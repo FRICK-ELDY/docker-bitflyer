@@ -379,7 +379,8 @@ defmodule Bitflyer.Risk do
   defp extract_ltp(_), do: nil
 
   defp price_deviation_pct(%Decimal{} = price, %Decimal{} = ltp) do
-    if Decimal.eq?(ltp, 0) do
+    # LTP が 0 以下だと除算結果が不正になり上限比較をすり抜ける
+    if Decimal.compare(ltp, 0) != :gt do
       Decimal.new("100")
     else
       price
@@ -414,23 +415,26 @@ defmodule Bitflyer.Risk do
 
     case Order
          |> Ash.Query.filter(trade_mode == ^trade_mode and inserted_at >= ^since)
-         |> Ash.read() do
-      {:ok, orders} -> {:ok, length(orders)}
+         |> Ash.count() do
+      {:ok, count} -> {:ok, count}
       {:error, error} -> {:error, error}
     end
   end
 
   defp resolve_daily_loss(opts) do
     case Keyword.fetch(opts, :daily_loss) do
-      {:ok, %Decimal{} = loss} ->
-        if Decimal.compare(loss, 0) == :lt do
-          {:error, :invalid_daily_loss}
-        else
-          {:ok, loss}
-        end
+      {:ok, raw_loss} ->
+        case to_decimal(raw_loss) do
+          %Decimal{} = loss ->
+            if Decimal.compare(loss, 0) == :lt do
+              {:error, :invalid_daily_loss}
+            else
+              {:ok, loss}
+            end
 
-      {:ok, _} ->
-        {:error, :invalid_daily_loss}
+          nil ->
+            {:error, :invalid_daily_loss}
+        end
 
       :error ->
         # 損失計測の正本が無い間は 0（未知の損失を捏造しない）。
@@ -464,20 +468,44 @@ defmodule Bitflyer.Risk do
   end
 
   defp balance_map(balances) when is_map(balances) do
-    Map.new(balances, fn
-      {currency, %{available: %Decimal{} = available}} -> {currency, available}
-      {currency, %Decimal{} = available} -> {currency, available}
-      {currency, available} when is_binary(available) -> {currency, Decimal.new(available)}
+    balances
+    |> Enum.map(fn {currency, value} ->
+      available =
+        case value do
+          %{available: val} -> to_decimal(val)
+          %{"available" => val} -> to_decimal(val)
+          val -> to_decimal(val)
+        end
+
+      {currency, available}
     end)
+    |> Enum.reject(fn {currency, available} -> is_nil(currency) or is_nil(available) end)
+    |> Map.new()
   end
 
   defp balance_map(balances) when is_list(balances) do
-    Map.new(balances, fn balance ->
-      currency = Map.fetch!(balance, :currency)
+    balances
+    |> Enum.map(fn balance ->
+      currency = Map.get(balance, :currency) || Map.get(balance, "currency")
       available = Map.get(balance, :available) || Map.get(balance, "available")
-      {currency, available}
+      {currency, to_decimal(available)}
     end)
+    |> Enum.reject(fn {currency, available} -> is_nil(currency) or is_nil(available) end)
+    |> Map.new()
   end
+
+  defp to_decimal(%Decimal{} = d), do: d
+
+  defp to_decimal(raw) when is_binary(raw) do
+    case Decimal.parse(raw) do
+      {decimal, ""} -> decimal
+      _ -> nil
+    end
+  end
+
+  defp to_decimal(raw) when is_integer(raw), do: Decimal.new(raw)
+  defp to_decimal(raw) when is_float(raw), do: Decimal.from_float(raw)
+  defp to_decimal(_), do: nil
 
   defp quote_currency("FX_BTC_JPY"), do: "JPY"
   defp quote_currency("BTC_JPY"), do: "JPY"

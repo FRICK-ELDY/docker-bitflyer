@@ -259,6 +259,33 @@ defmodule Bitflyer.RiskTest do
     assert Risk.circuit_open?()
   end
 
+  test "authorize accepts string daily_loss and rejects non-positive LTP deviation path" do
+    assert Readiness.mark_ready() == :ok
+    assert Cache.put(@market_key, %{ltp: Decimal.new("0")}) == :ok
+
+    assert {:error, :limit_exceeded, %{limit: :max_price_deviation_pct}} =
+             Risk.authorize(
+               valid_command(%{
+                 order_type: :limit,
+                 price: Decimal.new("1"),
+                 size: Decimal.new("0.01")
+               }),
+               positions: [],
+               limits: %{max_price_deviation_pct: Decimal.new("1")}
+             )
+
+    reset_readiness()
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :limit_exceeded, %{limit: :max_daily_loss}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               daily_loss: "150000",
+               limits: %{max_daily_loss: "100000"}
+             )
+  end
+
   test "authorize rejects buy when available quote balance is insufficient" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
