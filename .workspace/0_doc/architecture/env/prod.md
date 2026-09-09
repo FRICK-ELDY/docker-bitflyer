@@ -77,8 +77,9 @@
 
 ### halted の見え方
 
-- `GET /health` が 503、またはレスポンスの readiness が `halted:...`
+- `GET /health/ready` または `GET /health` が 503、またはレスポンスの readiness が `halted:...`
 - 新規 submit は拒否される（`:circuit_open` / `:unsynced`）
+- Feed 切断・市場データ stale は `GET /health/ready` が 503（`reason` が `feed_disconnected` / `stale_market_data` 等）。Compose の `/health/live` は落とさない
 
 ### 再開（`mix bitflyer.resume`）
 
@@ -99,7 +100,7 @@ remote console だけに頼らず、再突合成功時のみ halt を外す。
    ```
 
    起動突合が通り Ready になる。同一 BEAM 上なら IEx で `Bitflyer.System.resume()` でもよい。
-4. `GET /health` で readiness が `ready` であることを確認する
+4. `GET /health/ready` で status が `ready` であることを確認する（従来の `GET /health` でも readiness は確認可）
 
 やってはいけないこと: 突合せず `clear_halt` / RiskState だけを手で書き換えて再開する。
 

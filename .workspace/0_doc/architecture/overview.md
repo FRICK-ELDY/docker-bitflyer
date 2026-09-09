@@ -130,7 +130,15 @@ Ash は永続状態（注文、建玉、残高スナップショット、リス�
 
 Ready 状態の正本は `Bitflyer.Readiness`（`:not_ready` / `:ready` / `{:halted, reason}`）。UI・executor・health は同じ状態を読む。起動直後は `:not_ready`（fail-closed）。不整合時は `halt/1` し、Ready へ直接は戻さない。
 
-稼働 API は `GET /health`（JSON）。DB 断または readiness halted のとき 503、それ以外（起動中の `:not_ready` 含む）は 200。Compose の healthcheck もこのパスを見る。
+稼働 API（JSON）:
+
+| パス | 役割 | 200 の条件 | 主な用途 |
+| --- | --- | --- | --- |
+| `GET /health/live` | liveness | プロセスが応答できる（常時） | Compose healthcheck / 再起動判定 |
+| `GET /health/ready` | readiness | DB 可 + Readiness `:ready` +（MarketData 有効時は Feed 接続かつ全銘柄鮮度） | 外部監視。WS 断・stale を 503 で検知 |
+| `GET /health` | 従来互換 | DB 可かつ halted でない（起動中 `:not_ready` 含む） | 既存ツール向け |
+
+LiveView Socket が Endpoint で `/live` を使うため、liveness は `/health/live` とする。Compose の healthcheck は `/health/live` を見る（WS 断でコンテナ再起動しない）。盲目運転の検知は `/health/ready` を監視する。
 
 ## 発注経路
 

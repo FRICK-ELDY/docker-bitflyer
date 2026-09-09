@@ -1,11 +1,30 @@
 defmodule UiWeb.HealthController do
   @moduledoc """
-  認証不要の稼働エンドポイント。Compose healthcheck と外部監視の共通入口。
+  認証不要の稼働エンドポイント。
+
+  - `GET /health/live` — プロセス生存（Compose healthcheck）
+  - `GET /health/ready` — 外形 readiness（DB / halt / Feed / stale）
+  - `GET /health` — 従来互換（DB + halt。起動中 not_ready は 200）
   """
   use UiWeb, :controller
 
+  def live(conn, _params) do
+    health = Bitflyer.System.health_live()
+
+    conn
+    |> put_status(200)
+    |> json(Bitflyer.Health.to_json_map(health))
+  end
+
+  def ready(conn, _params) do
+    respond(conn, Bitflyer.System.health_ready())
+  end
+
   def show(conn, _params) do
-    health = Bitflyer.System.health()
+    respond(conn, Bitflyer.System.health())
+  end
+
+  defp respond(conn, health) do
     status_code = if health.healthy?, do: 200, else: 503
 
     if not health.healthy? do

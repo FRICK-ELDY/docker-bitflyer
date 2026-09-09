@@ -16,9 +16,12 @@ defmodule UiWeb.Router do
   end
 
   # 認証・セッション不要。監視と Compose healthcheck 用。
+  # LiveView Socket が /live を使うため、liveness は /health/live。
   scope "/", UiWeb do
     pipe_through :api
 
+    get "/health/live", HealthController, :live
+    get "/health/ready", HealthController, :ready
     get "/health", HealthController, :show
   end
 

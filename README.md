@@ -12,7 +12,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 
 - `docker compose up -d` で `app`（Phoenix）と `db`（PostgreSQL）が上がる
 - UI は `http://127.0.0.1:4000/`（稼働確認用 Status。取引 UI ではない）
-- 稼働 API は `GET /health`（DB + readiness。Compose healthcheck もここを見る）
+- 稼働 API: `GET /health/live`（プロセス生存・Compose healthcheck）、`GET /health/ready`（DB + Ready + Feed/鮮度。WS 断検知）、`GET /health`（従来互換）
 - 品質ゲートはローカルも CI も `mix precommit`
 - `.dockerignore` で `.env` / `_build` / `deps` 等をビルドコンテキストから除外（本番イメージへの混入防止）
 - 市場データ・戦略・リスク・発注の engine は未実装（`TRADE_MODE` の既定は `dry_run`）
