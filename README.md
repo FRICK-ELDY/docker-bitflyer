@@ -34,7 +34,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | observe — health | implemented | `/health/live`・`/health/ready`・`/health` |
 | UI StatusLive | implemented | 発注可否・Feed・鮮度・モード色分け |
 | CI（`mix precommit` / GitHub Actions） | implemented | PR と `main` |
-| private bitFlyer API（署名付き REST） | unavailable | 既定は `Exchange.Unavailable` |
+| private bitFlyer API（署名付き REST） | unavailable | 既定は `Exchange.Unavailable`。キー枠（`BITFLYER_API_*`）は live 時必須 |
 | UI 認証（BasicAuth） | implemented | `UI_BASIC_AUTH_*`。prod 必須。`/health*` は対象外 |
 | 本番 release Compose | unavailable | 開発用 `Dockerfile` / `compose.yaml` のみ（[ToDo 03](.workspace/2_todo/03-cd-prod-host.md)） |
 
@@ -96,6 +96,7 @@ GitHub Actions も同じ `mix precommit` を PR と `main` で実行する。範
 | `PHX_HOST` | `localhost` |
 | `TRADE_MODE` | `dry_run` |
 | `BITFLYER_LIVE_CONFIRM` | live 時のみ。UTC 当日 `YYYY-MM-DD` |
+| `BITFLYER_API_KEY` / `BITFLYER_API_SECRET` | Private API。`TRADE_MODE=live` 時のみ必須。出金権限は付けない |
 | `DISCORD_WEBHOOK_URL` | 任意。Discord Incoming Webhook。未設定でも起動する |
 | `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` | Status UI。prod 必須。dev は両方揃ったときだけ有効 |
 | `PHX_HTTP_IP` | prod のみ。既定 `127.0.0.1`（公開面最小化） |
@@ -139,5 +140,5 @@ docker compose run --rm app mix setup
 
 - API キー、パスフレーズ、本番設定をリポジトリにコミットしない
 - 開発環境の既定は `dry_run` とする。`paper` と `live` は明示する
-- 本番キーに出金権限を付けない
+- 本番キーに出金権限を付けない（`BITFLYER_API_*` 発行時）
 - `.env` に `MIX_ENV` を書かない（品質ゲートの `preferred_envs` が効かなくなる）

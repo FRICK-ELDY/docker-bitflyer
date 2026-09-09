@@ -1,6 +1,8 @@
 defmodule Bitflyer.Exchange do
   @moduledoc """
   取引所アダプタの入口。実装は `:exchange_client` で差し替える。
+
+  資格情報は `Bitflyer.Exchange.Credentials`（`BITFLYER_API_KEY` / `BITFLYER_API_SECRET`）。
   """
 
   alias Bitflyer.Exchange.Client

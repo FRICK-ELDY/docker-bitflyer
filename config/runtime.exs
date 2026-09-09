@@ -107,6 +107,46 @@ config :bitflyer,
   trade_mode: trade_mode,
   live_confirmed: live_confirmed
 
+# bitFlyer Private API 資格情報。名前は固定。値は Git / イメージ / ログに出さない。
+# TRADE_MODE=live のときのみ必須（:test は除く。.env の live でテスト起動を止めない）。
+# 署名付き client 本体は未実装（Exchange.Unavailable）。枠だけ先に固定する。
+# 出金権限付きキーは運用禁止（文書の正: overview / prod.md）。
+bitflyer_api_key =
+  case System.get_env("BITFLYER_API_KEY") do
+    nil -> ""
+    val -> String.trim(val)
+  end
+
+bitflyer_api_secret =
+  case System.get_env("BITFLYER_API_SECRET") do
+    nil -> ""
+    val -> String.trim(val)
+  end
+
+bitflyer_api_present? = bitflyer_api_key != "" and bitflyer_api_secret != ""
+
+if trade_mode == :live and config_env() != :test and not bitflyer_api_present? do
+  raise """
+  BITFLYER_API_KEY and BITFLYER_API_SECRET are required when TRADE_MODE=live.
+  Issue keys from bitFlyer Lightning developer page without withdrawal permission.
+  dry_run / paper may omit keys.
+  """
+end
+
+{exchange_api_key, exchange_api_secret} =
+  case config_env() do
+    :test ->
+      # runtime は test.exs の後。.env のキーがテストに漏れないよう空にする。
+      {"", ""}
+
+    _ ->
+      {bitflyer_api_key, bitflyer_api_secret}
+  end
+
+config :bitflyer, :exchange_api,
+  api_key: exchange_api_key,
+  api_secret: exchange_api_secret
+
 discord_webhook =
   case System.get_env("DISCORD_WEBHOOK_URL") do
     url when is_binary(url) ->
