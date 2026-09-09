@@ -9,7 +9,7 @@ defmodule Bitflyer.OrderExecutorTest do
   alias Bitflyer.MarketData.Cache
   alias Bitflyer.OrderExecutor
   alias Bitflyer.Readiness
-  alias Bitflyer.Trading.{Order, Position}
+  alias Bitflyer.Trading.{Order, Position, RiskState}
 
   @market_key {:ticker, "FX_BTC_JPY"}
 
@@ -29,38 +29,61 @@ defmodule Bitflyer.OrderExecutorTest do
       end
 
       Agent.update(__MODULE__.Counter, fn count -> count + 1 end)
-      {:ok, %{exchange_order_id: "ex-" <> request.internal_order_id}}
+
+      case Agent.get(__MODULE__.NextResult, & &1) do
+        {:ok, result} ->
+          {:ok, result}
+
+        {:error, reason} ->
+          {:error, reason}
+
+        :success ->
+          {:ok, %{exchange_order_id: "ex-" <> request.internal_order_id}}
+      end
     end
 
-    def start_counter do
-      Agent.start_link(fn -> 0 end, name: __MODULE__.Counter)
+    def start_agents do
+      {:ok, _} = Agent.start_link(fn -> 0 end, name: __MODULE__.Counter)
+      {:ok, _} = Agent.start_link(fn -> :success end, name: __MODULE__.NextResult)
+      :ok
+    end
+
+    def stop_agents do
+      if Process.whereis(__MODULE__.Counter), do: Agent.stop(__MODULE__.Counter)
+      if Process.whereis(__MODULE__.NextResult), do: Agent.stop(__MODULE__.NextResult)
     end
 
     def place_count do
       Agent.get(__MODULE__.Counter, & &1)
+    end
+
+    def set_next_result(result) do
+      Agent.update(__MODULE__.NextResult, fn _ -> result end)
     end
   end
 
   setup do
     reset_readiness()
     reset_market_data_cache()
+    clear_default_risk_state()
 
     previous_mode = Application.get_env(:bitflyer, :trade_mode, :dry_run)
     previous_client = Application.get_env(:bitflyer, :exchange_client)
     previous_confirm = Application.get_env(:bitflyer, :live_confirmed)
 
-    {:ok, _} = SpyExchange.start_counter()
+    :ok = SpyExchange.start_agents()
     Process.register(self(), SpyExchange)
     Application.put_env(:bitflyer, :exchange_client, SpyExchange)
 
     on_exit(fn ->
       reset_readiness()
       reset_market_data_cache()
+      clear_default_risk_state()
       Application.put_env(:bitflyer, :trade_mode, previous_mode)
       Application.put_env(:bitflyer, :exchange_client, previous_client)
       Application.put_env(:bitflyer, :live_confirmed, previous_confirm)
 
-      if Process.whereis(SpyExchange.Counter), do: Agent.stop(SpyExchange.Counter)
+      SpyExchange.stop_agents()
 
       if Process.whereis(SpyExchange) == self() do
         Process.unregister(SpyExchange)
@@ -166,6 +189,107 @@ defmodule Bitflyer.OrderExecutorTest do
     assert_received {:place_order, %{internal_order_id: "live-ok-1"}}
   end
 
+  test "live timeout marks submission_unknown, halts, and blocks further submits" do
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    SpyExchange.set_next_result({:error, :timeout})
+
+    assert {:error, :submission_unknown, %{reason: :timeout}} =
+             OrderExecutor.submit(valid_command("live-timeout-1"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert SpyExchange.place_count() == 1
+
+    assert {:ok, %Order{status: :submission_unknown}} =
+             Order
+             |> Ash.Query.filter(internal_order_id == "live-timeout-1")
+             |> Ash.read_one()
+
+    assert Readiness.get() == {:halted, :submission_unknown}
+
+    assert {:ok, %RiskState{halted: true, reason: "submission_unknown"}} =
+             RiskState
+             |> Ash.Query.filter(name == "default")
+             |> Ash.read_one()
+
+    # 別 internal_order_id でも再送しない（ゲート閉鎖）
+    SpyExchange.set_next_result(:success)
+
+    assert {:error, :circuit_open, _} =
+             OrderExecutor.submit(valid_command("live-timeout-2"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert SpyExchange.place_count() == 1
+
+    assert {:ok, nil} =
+             Order
+             |> Ash.Query.filter(internal_order_id == "live-timeout-2")
+             |> Ash.read_one()
+  end
+
+  test "live disconnect marks submission_unknown and does not treat as rejected" do
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    SpyExchange.set_next_result({:error, :disconnected})
+
+    assert {:error, :submission_unknown, %{reason: :disconnected}} =
+             OrderExecutor.submit(valid_command("live-disc-1"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert {:ok, %Order{status: :submission_unknown}} =
+             Order
+             |> Ash.Query.filter(internal_order_id == "live-disc-1")
+             |> Ash.read_one()
+
+    assert Readiness.get() == {:halted, :submission_unknown}
+  end
+
+  test "live definite exchange rejection stays rejected without halt" do
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    SpyExchange.set_next_result({:error, :rejected_by_exchange})
+
+    assert {:error, :exchange_error, %{reason: :rejected_by_exchange}} =
+             OrderExecutor.submit(valid_command("live-rej-1"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert {:ok, %Order{status: :rejected}} =
+             Order
+             |> Ash.Query.filter(internal_order_id == "live-rej-1")
+             |> Ash.read_one()
+
+    assert Readiness.get() == :ready
+    assert SpyExchange.place_count() == 1
+
+    # 確定拒否後は別 intent の再発注が可能（halt していない）
+    SpyExchange.set_next_result(:success)
+
+    assert {:ok, %Order{status: :pending}} =
+             OrderExecutor.submit(valid_command("live-rej-2"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert SpyExchange.place_count() == 2
+  end
+
   test "risk rejection prevents order persistence" do
     Application.put_env(:bitflyer, :trade_mode, :dry_run)
     assert Readiness.get() == :not_ready
@@ -197,5 +321,15 @@ defmodule Bitflyer.OrderExecutorTest do
 
   defp put_fresh_market do
     assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+  end
+
+  defp clear_default_risk_state do
+    case RiskState
+         |> Ash.Query.filter(name == "default")
+         |> Ash.read_one() do
+      {:ok, nil} -> :ok
+      {:ok, risk} -> Ash.destroy!(risk)
+      {:error, _} -> :ok
+    end
   end
 end

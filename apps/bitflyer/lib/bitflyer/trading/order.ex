@@ -73,7 +73,17 @@ defmodule Bitflyer.Trading.Order do
       allow_nil? false
       public? true
       default :pending
-      constraints one_of: [:pending, :partially_filled, :filled, :cancelled, :rejected, :expired]
+
+      constraints one_of: [
+                    :pending,
+                    :partially_filled,
+                    :filled,
+                    :cancelled,
+                    :rejected,
+                    :expired,
+                    # 取引所へ送ったか不明（timeout / 切断等）。再送禁止・halt 前提
+                    :submission_unknown
+                  ]
     end
 
     attribute :order_type, :atom do
