@@ -292,6 +292,8 @@ defmodule Bitflyer.MarketData.Feed do
       %{product_code: product_code, status: :ok}
     )
 
+    _ = Bitflyer.Strategy.Runner.notify_tick(key, value)
+
     :ok
   end
 

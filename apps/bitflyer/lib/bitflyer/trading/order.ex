@@ -16,6 +16,7 @@ defmodule Bitflyer.Trading.Order do
 
     custom_indexes do
       index [:exchange_order_id], name: "orders_exchange_order_id_index"
+      index [:inserted_at], name: "orders_inserted_at_index"
     end
   end
 
