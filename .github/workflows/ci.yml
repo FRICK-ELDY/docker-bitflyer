@@ -65,20 +65,25 @@ jobs:
         run: mix deps.get
 
       # ゲートではない。脆弱性・ツール失敗のどちらでも非0になる。artifact で区別する。
+      # advisory 取得は 1 回（json）に限定する。
       - name: Dependency audit (visibility only)
         id: deps_audit
         continue-on-error: true
         run: |
           mkdir -p tmp
           set +e
-          mix deps.audit --format=human | tee tmp/deps-audit.txt
-          human_exit=${PIPESTATUS[0]}
-          mix deps.audit --format=json > tmp/deps-audit.json 2> tmp/deps-audit-json.stderr
+          mix deps.audit --format=json > tmp/deps-audit.json 2> tmp/deps-audit.stderr
           json_exit=$?
+          # ログに結果を出す（再実行しない）
+          if [ -s tmp/deps-audit.json ]; then
+            cat tmp/deps-audit.json
+          fi
+          if [ -s tmp/deps-audit.stderr ]; then
+            cat tmp/deps-audit.stderr >&2
+          fi
           {
-            echo "human_exit=${human_exit}"
             echo "json_exit=${json_exit}"
-            if [ "${human_exit}" -eq 0 ]; then
+            if [ "${json_exit}" -eq 0 ] && [ -s tmp/deps-audit.json ] && grep -q '"pass":true' tmp/deps-audit.json; then
               echo "outcome=clean"
             elif [ -s tmp/deps-audit.json ] && grep -q '"pass":false' tmp/deps-audit.json; then
               echo "outcome=vulnerabilities_found"
@@ -86,10 +91,10 @@ jobs:
               echo "outcome=audit_tool_or_fetch_failed"
             fi
           } | tee tmp/deps-audit-meta.txt
-          if [ "${human_exit}" -ne 0 ]; then
-            echo "::warning::mix deps.audit exited ${human_exit} (see artifact deps-audit-report / tmp/deps-audit-meta.txt). CI green does not mean no advisories."
+          if [ "${json_exit}" -ne 0 ]; then
+            echo "::warning::mix deps.audit exited ${json_exit} (see artifact deps-audit-report / tmp/deps-audit-meta.txt). CI green does not mean no advisories."
           fi
-          exit "${human_exit}"
+          exit "${json_exit}"
 
       - name: Upload dependency audit report
         if: always()
@@ -97,9 +102,8 @@ jobs:
         with:
           name: deps-audit-report
           path: |
-            tmp/deps-audit.txt
             tmp/deps-audit.json
-            tmp/deps-audit-json.stderr
+            tmp/deps-audit.stderr
             tmp/deps-audit-meta.txt
           if-no-files-found: warn
           retention-days: 30

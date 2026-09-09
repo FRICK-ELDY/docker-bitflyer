@@ -30,12 +30,12 @@ docker compose run --rm app mix precommit
 
 | 項目 | 内容 |
 | --- | --- |
-| コマンド | `mix deps.audit`（human + json） |
+| コマンド | `mix deps.audit --format=json`（1 回のみ） |
 | ジョブへの影響 | 落とさない（ステップは黄になり得る） |
-| 成果物 | artifact `deps-audit-report`（`tmp/deps-audit*.{txt,json}` と `deps-audit-meta.txt`） |
+| 成果物 | artifact `deps-audit-report`（`deps-audit.json` / `deps-audit.stderr` / `deps-audit-meta.txt`） |
 | ローカル再現 | `docker compose run --rm app mix deps.audit` |
 
-`deps-audit-meta.txt` の `outcome` で次を区別する。
+`deps-audit-meta.txt` の `outcome` で次を区別する（`json_exit=0` かつ `"pass":true` のときだけ `clean`）。
 
 - `clean` — 既知脆弱性なし（タスク成功）
 - `vulnerabilities_found` — advisory 検出（レポートを読む）
