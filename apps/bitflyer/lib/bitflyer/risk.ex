@@ -16,7 +16,7 @@ defmodule Bitflyer.Risk do
 
   alias Bitflyer.MarketData.Cache
   alias Bitflyer.Risk.{Circuit, Limits, OrderRate}
-  alias Bitflyer.Trading.Position
+  alias Bitflyer.Trading.{Position, Product}
 
   @type rejection_code ::
           :invalid_command
@@ -481,28 +481,8 @@ defmodule Bitflyer.Risk do
   defp to_decimal(raw) when is_float(raw), do: Decimal.from_float(raw)
   defp to_decimal(_), do: nil
 
-  defp quote_currency("FX_BTC_JPY"), do: "JPY"
-  defp quote_currency("BTC_JPY"), do: "JPY"
-
-  defp quote_currency(product_code) when is_binary(product_code) do
-    product_code
-    |> String.split("_")
-    |> List.last()
-    |> String.split("-")
-    |> List.first()
-  end
-
-  defp base_currency("FX_BTC_JPY"), do: "BTC"
-  defp base_currency("BTC_JPY"), do: "BTC"
-
-  defp base_currency(product_code) when is_binary(product_code) do
-    parts = String.split(product_code, "_")
-
-    parts
-    |> Enum.at(max(length(parts) - 2, 0))
-    |> String.split("-")
-    |> List.first()
-  end
+  defp quote_currency(product_code), do: Product.quote_currency(product_code)
+  defp base_currency(product_code), do: Product.base_currency(product_code)
 
   defp fetch_positions(product_code, opts) do
     case Keyword.fetch(opts, :positions) do
