@@ -26,6 +26,8 @@ services:
     entrypoint: ["sh", "/app/bin/docker-entrypoint.sh"]
     command: ["mix", "phx.server"]
     restart: unless-stopped
+    # Application.prep_stop → 子 shutdown(30s) と揃える
+    stop_grace_period: 30s
     volumes:
       - .:/app
       - mix_deps:/app/deps
