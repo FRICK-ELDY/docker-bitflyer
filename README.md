@@ -128,7 +128,7 @@ docker compose run --rm app mix setup
 ## これから作るもの
 
 - 署名付き private API client（cancel / 照会 / 約定反映）
-- UI 認証と本番 publish の最小化
+- UI 認証と本番公開面の最小化
 - 本番用 release / Compose と配備手順（[ToDo 03](.workspace/2_todo/03-cd-prod-host.md)）
 - 秘密情報を Git に入れない本番実行手順
 
