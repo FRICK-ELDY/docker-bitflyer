@@ -46,8 +46,13 @@ defmodule Bitflyer.Observe.Discord do
   @doc """
   テスト用。手動で通知を積む。
   """
+  @spec notify(atom(), map()) :: :ok
+  def notify(kind, metadata) when is_atom(kind) and is_map(metadata) do
+    notify(@name, kind, metadata)
+  end
+
   @spec notify(GenServer.server(), atom(), map()) :: :ok
-  def notify(server \\ @name, kind, metadata) when is_atom(kind) and is_map(metadata) do
+  def notify(server, kind, metadata) when is_atom(kind) and is_map(metadata) do
     GenServer.cast(server, {:notify, kind, metadata})
   end
 
