@@ -109,19 +109,42 @@ defmodule Bitflyer.Observe.Discord do
       Telemetry.log(:debug, "discord notify suppressed (cooldown)", %{reason: kind})
       state
     else
-      content = format_message(kind, metadata)
-      result = deliver(state.http_client, state.webhook_url, content)
+      try do
+        content = format_message(kind, metadata)
 
-      case result do
-        :ok ->
-          %{state | last_sent_at: Map.put(state.last_sent_at, kind, now)}
+        case deliver(state.http_client, state.webhook_url, content) do
+          :ok ->
+            mark_sent(state, kind, now)
 
-        {:error, reason} ->
-          # URL はログに出さない。通知失敗で取引は止めない。
-          Telemetry.log(:error, "discord notify failed: #{inspect(reason)}", %{reason: kind})
-          state
+          {:error, reason} ->
+            # URL はログに出さない。失敗時も cooldown して連打で GenServer を埋めない。
+            Telemetry.log(:error, "discord notify failed: #{inspect(reason)}", %{reason: kind})
+            mark_sent(state, kind, now)
+        end
+      rescue
+        error ->
+          Telemetry.log(
+            :error,
+            "discord notify failed during formatting: #{Exception.message(error)}",
+            %{reason: kind}
+          )
+
+          mark_sent(state, kind, now)
+      catch
+        kind_caught, reason ->
+          Telemetry.log(
+            :error,
+            "discord notify failed during formatting: #{inspect({kind_caught, reason})}",
+            %{reason: kind}
+          )
+
+          mark_sent(state, kind, now)
       end
     end
+  end
+
+  defp mark_sent(state, kind, now) do
+    %{state | last_sent_at: Map.put(state.last_sent_at, kind, now)}
   end
 
   defp deliver(client, url, content) do

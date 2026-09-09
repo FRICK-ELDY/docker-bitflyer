@@ -6,7 +6,7 @@ defmodule Bitflyer.Observe.Discord.HTTP do
   """
   @spec post_json(String.t(), map()) :: :ok | {:error, term()}
   def post_json(url, body) when is_binary(url) and is_map(body) do
-    case Req.post(url, json: body, receive_timeout: 5_000) do
+    case Req.post(url, json: body, receive_timeout: 5_000, retry: false) do
       {:ok, %Req.Response{status: status}} when status in 200..299 ->
         :ok
 

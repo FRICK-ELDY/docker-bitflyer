@@ -99,7 +99,7 @@ defmodule Bitflyer.Observe.DiscordTest do
     refute_receive {:discord_post, _, _}, 100
   end
 
-  test "http failure is logged and does not stop the notifier" do
+  test "http failure is logged, keeps process alive, and still applies cooldown" do
     name = :"discord-fail-#{System.unique_integer([:positive])}"
 
     pid =
@@ -108,10 +108,16 @@ defmodule Bitflyer.Observe.DiscordTest do
          name: name,
          webhook_url: "https://discord.example/hook",
          attach?: false,
-         cooldown_ms: 0,
+         cooldown_ms: 60_000,
          http_client: FailingHTTP}
       )
 
+    assert :ok =
+             Discord.notify(pid, :reconcile_mismatch, %{kind: :balance_mismatch, currency: "JPY"})
+
+    assert Process.alive?(pid)
+
+    # 失敗後も last_sent_at を進めるので、連打で HTTP を繰り返さない
     assert :ok =
              Discord.notify(pid, :reconcile_mismatch, %{kind: :balance_mismatch, currency: "JPY"})
 
