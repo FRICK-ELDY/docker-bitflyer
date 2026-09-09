@@ -32,6 +32,10 @@ npm-debug.log
 .env.*
 !.env.example
 
+# 本番デプロイ記録・バックアップ（ホスト側）
+/.deploy/
+/backups/
+
 # API キー・証明書
 *.pem
 *.key

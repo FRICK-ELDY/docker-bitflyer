@@ -133,3 +133,72 @@ remote console だけに頼らず、再突合成功時のみ halt を外す。
 - 未検証の戦略パラメータ変更
 - 開発用モックや開発キーの混入
 - 監視なしでの連続稼働
+
+## 実行形（release Compose）
+
+| ファイル | 役割 |
+| --- | --- |
+| `Dockerfile.prod` | multi-stage `mix release`（非 root・assets digest） |
+| `compose.prod.yaml` | 本番相当の `app` / `db`。開発用 `compose.yaml` と混線しない |
+| `.env.prod` | ホスト側シークレットのみ（Git に入れない） |
+| `bin/deploy-prod.sh` | pull/build → up → `/health/live` 待ち。rollback サブコマンドあり |
+| `bin/backup-db.sh` | `pg_dump` → `backups/*.sql.gz` |
+
+イメージ参照は `APP_IMAGE`（**digest 固定推奨**）。未設定時のみローカル `docker-bitflyer:local` を build する。`:latest` だけに頼らない。
+
+配布の流れ（誰がいつ更新するか）は [ci-cd.md](../ci-cd.md) を正とする。成果物は GHCR。`main` マージ alone では実弾デプロイしない。
+
+### ローカル／本番PC での一度上げ（実弾なし）
+
+```bash
+cp .env.example .env.prod
+# SECRET_KEY_BASE / UI_BASIC_AUTH_* / POSTGRES_PASSWORD / DATABASE_URL / POSTGRES_DB を埋める
+# TRADE_MODE=dry_run のまま
+docker compose -f compose.prod.yaml --env-file .env.prod up -d --build
+curl -fsS http://127.0.0.1:4000/health/live
+```
+
+Status は BasicAuth 必須。`/health*` は認証なし。
+
+### 入れ替え手順（作業用PC → 本番PC）
+
+1. **事前**: ディスク残量、時刻同期、Docker 稼働、現行 `APP_IMAGE`（digest）を記録
+2. **デプロイ前**: 新規発注を止める（halt / 運用操作）。可能なら未約定を把握する。`TRADE_MODE=live` のまま勝手に再開しない
+3. `APP_IMAGE=ghcr.io/<owner>/<repo>@sha256:... ./bin/deploy-prod.sh`  
+   または `docker compose -f compose.prod.yaml --env-file .env.prod pull && ... up -d`
+4. **起動後**: `/health/live`・`/health/ready`・ログ。`live` なら取引所突合。不整合なら Ready にせず停止のまま
+5. **事後**: 監視の心拍。問題なければ段階的に発注再開（初回は厳しい上限）
+6. **失敗時**: `./bin/deploy-prod.sh rollback ghcr.io/...@sha256:<previous>`
+
+release 上の resume（Mix 無し・常駐ノードへ rpc）:
+
+```bash
+docker compose -f compose.prod.yaml --env-file .env.prod exec app \
+  /app/bin/docker_bitflyer rpc "Bitflyer.Release.resume()"
+```
+
+`eval` は別プロセスになるため resume には使わない。rpc で同一 BEAM の ETS を更新する。
+
+### バックアップ / 復元
+
+```bash
+./bin/backup-db.sh
+# → backups/docker_bitflyer_prod_<UTC>.sql.gz
+```
+
+復元（概略。本番ではメンテナンス枠で）:
+
+1. 新規発注を止める / `app` を止める
+2. 空の DB または復旧先へ `gunzip -c backups/....sql.gz | docker compose -f compose.prod.yaml exec -T db psql -U ... -d ...`
+3. `app` を上げ、突合が通るまで Ready にしない
+
+定期取得と **隔離環境への restore 試験** を運用に含める（バックアップの存在だけでは Recoverable と言えない）。
+
+### live 解禁チェックリスト（短い）
+
+- [ ] `TRADE_MODE=dry_run`（または paper）で入れ替え・ロールバックを一度成功している
+- [ ] API キーは出金なし。ホスト `.env.prod` のみ
+- [ ] BasicAuth・公開面（ホスト loopback / ACL）が有効
+- [ ] Discord 等の心拍が届く（未設定ならログ監視を代替とし、後続で必須化）
+- [ ] 最小ロット・厳しい risk 上限
+- [ ] `BITFLYER_LIVE_CONFIRM` に UTC 当日を明示したうえで `live` に切り替える

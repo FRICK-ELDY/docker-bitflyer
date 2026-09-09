@@ -54,7 +54,7 @@
 |:---:|:---|:---|:---|
 | 15 | UI 認証・bind | BasicAuth（環境変数）+ 本番 publish 最小化。ToDo 03 に明記 | 認証なしで取引詳細を見られない |
 | 16 | API キー枠 | `.env.example` に `BITFLYER_API_KEY` / `SECRET`。live 時のみ必須。出金権限禁止を文書化 | live でキー欠落時に起動停止 |
-| 17 | 本番 release Compose | `mix release`、非 root、digest 固定、backup/rollback（ToDo 03） | 実弾なしで一度上げられる |
+| 17 | 本番 release Compose | `mix release`、非 root、digest 固定、backup/rollback（ToDo 03） | **完了**（`Dockerfile.prod` / `compose.prod.yaml` / GHCR CD） |
 | 18 | private API client | 署名付き REST。cancel / 照会 / 約定反映。fixture 契約テスト | Unavailable 以外を差し込める |
 | 19 | deps audit | CI で可視化（最初は fail させなくてもよい） | 既知脆弱性が一覧できる |
 
@@ -73,7 +73,7 @@
 
 | 改善 | 既存文書 |
 |:---|:---|
-| P3 #17 | `.workspace/2_todo/03-cd-prod-host.md` |
+| P3 #17 | ~~ToDo 03~~ → [03-cd-prod-host.md](../../3_archive/03-cd-prod-host.md)（完了） |
 | P2 #10 | `.workspace/1_backlog/discord-notify-adapter.md` |
 | P3 #18（paper 厚みの延長） | `.workspace/1_backlog/paper-trade-adapter.md` |
 

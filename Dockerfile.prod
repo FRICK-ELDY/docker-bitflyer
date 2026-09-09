@@ -1,0 +1,79 @@
+# 本番用 multi-stage。ソース bind mount なし。シークレットは焼かない。
+# Elixir / OTP は開発用 Dockerfile・CI と揃える（1.18.3 / 27）。
+ARG ELIXIR_IMAGE=elixir:1.18.3-otp-27-slim
+ARG RUNNER_IMAGE=debian:bookworm-slim
+
+# ---- build ----
+FROM ${ELIXIR_IMAGE} AS builder
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    curl \
+    git \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ENV MIX_ENV=prod \
+  LANG=C.UTF-8
+
+RUN mix local.hex --force \
+  && mix local.rebar --force
+
+# deps 層をキャッシュしやすくする
+COPY mix.exs mix.lock ./
+COPY config config
+COPY apps/bitflyer/mix.exs apps/bitflyer/
+COPY apps/ui/mix.exs apps/ui/
+
+RUN mix deps.get --only prod \
+  && mix deps.compile
+
+COPY apps apps
+COPY rel rel
+
+RUN mix compile \
+  && mix do --app ui assets.setup \
+  && mix assets.deploy \
+  && mix release docker_bitflyer
+
+# ---- run ----
+FROM ${RUNNER_IMAGE} AS runner
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    libncurses6 \
+    libstdc++6 \
+    openssl \
+    postgresql-client \
+    tini \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --gid 1000 app \
+  && useradd --uid 1000 --gid app --shell /usr/sbin/nologin --create-home app
+
+WORKDIR /app
+
+# release 本体（非 root）
+COPY --from=builder --chown=app:app /app/_build/prod/rel/docker_bitflyer ./
+COPY --chown=app:app bin/prod-entrypoint.sh /usr/local/bin/prod-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/prod-entrypoint.sh \
+  && chmod +x /app/bin/docker_bitflyer /app/bin/server
+
+USER app
+
+ENV HOME=/app \
+  MIX_ENV=prod \
+  PHX_SERVER=true \
+  LANG=C.UTF-8 \
+  PORT=4000
+
+EXPOSE 4000
+
+# tini で PID 1 のゾンビ回収とシグナル転送
+ENTRYPOINT ["tini", "--", "/usr/local/bin/prod-entrypoint.sh"]
+CMD ["/app/bin/server"]

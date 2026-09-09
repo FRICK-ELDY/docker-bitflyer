@@ -1,6 +1,6 @@
 # CI / CD
 
-CI と CD を分ける。この文書の当面の正本は **CI**。CD（本番イメージ配布・本番PC 更新）は [ToDo 03](../../2_todo/03-cd-prod-host.md) と [env/prod.md](./env/prod.md) に残す。
+CI と CD を分ける。品質ゲートは CI、配布は CD。運用の正は本文書と [env/prod.md](./env/prod.md)。
 
 ## CI が保証すること
 
@@ -13,7 +13,7 @@ PR と `main` への push で、ローカルと同じ品質ゲートを自動実
 | compile | `mix compile --warnings-as-errors` |
 | test | `mix test --warnings-as-errors`（PostgreSQL 必須） |
 | 未使用 deps | `mix deps.unlock --check-unused` |
-| ランタイム | Elixir / OTP は開発用 `Dockerfile` と揃える（現状 1.18.3 / 27） |
+| ランタイム | Elixir / OTP は開発用 `Dockerfile`・本番 `Dockerfile.prod` と揃える（現状 1.18.3 / 27） |
 | DB | GitHub Actions の `postgres:16-alpine` service。接続はジョブの `TEST_DATABASE_URL`（なければ `DATABASE_URL` から `*_test` を導出） |
 
 ローカル（Compose）では次と同等とする。
@@ -22,10 +22,24 @@ PR と `main` への push で、ローカルと同じ品質ゲートを自動実
 docker compose run --rm app mix precommit
 ```
 
-## CI が保証しないこと
+## CD が保証すること
 
-- 本番イメージのビルド・レジストリ push
-- 本番PC へのデプロイ・入れ替え
+承認された参照から **本番用 release イメージ** を GHCR に載せ、本番PC が pull して入れ替えられるようにする。`main` マージ alone では実弾デプロイしない。
+
+| 項目 | 内容 |
+| --- | --- |
+| 成果物 | `Dockerfile.prod` でビルドした Umbrella release（`docker_bitflyer`）。非 root・assets digest 込み |
+| レジストリ | GitHub Container Registry（`ghcr.io/<owner>/<repo>`） |
+| トリガー | 明示タグ `v*`、または `workflow_dispatch`（GitHub Environment `production`） |
+| タグ | semver / `sha-<short>`。Compose では **digest 固定**（`APP_IMAGE=...@sha256:...`）を推奨 |
+| ロールバック単位 | 直前の `APP_IMAGE`（digest）へ戻して `compose up -d` |
+| ワークフロー | [`.github/workflows/cd.yml`](../../../.github/workflows/cd.yml) |
+
+VLAN3（作業用）→ VLAN1（本番）の到達は最小ポートのみ（Vision の Least privilege）。
+
+## CI / CD が保証しないこと
+
+- 本番PC への自動実弾デプロイ（人が pull / 入れ替えする）
 - bitFlyer / Discord など外部 API への実呼び出し
 - Credo / Dialyzer / deps audit（後続で足してよい）
 
@@ -33,16 +47,22 @@ docker compose run --rm app mix precommit
 
 - Actions secrets に bitFlyer・Discord・本番キーを置かない
 - テスト用はジョブ内の非秘密な `DATABASE_URL` と `TRADE_MODE=dry_run` で足りる
+- 本番シークレットはホストの `.env.prod` のみ。イメージ・Git・CI ログに出さない
 - 失敗ログにシークレットを出さない
 
 ## 運用ルール
 
 - **CI が赤のまま `main` へマージしない**
 - `main` には CI 必須チェック（Branch protection）を掛ける方針とする。GitHub 上の設定は権限がある人が行う
+- CD の GitHub Environment `production` にレビュー必須を付けられるなら付ける
 - flaky テストは直すか quarantine する。黙って skip しない
+- watchtower 等の自動最新追従は、発注停止ゲートなしでは採用しない
 
 ## ワークフロー
 
-定義は [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml)。トリガーは `pull_request` と `push` to `main`。
+| ファイル | 役割 |
+| --- | --- |
+| [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml) | `pull_request` / `push` to `main` → `mix precommit` |
+| [`.github/workflows/cd.yml`](../../../.github/workflows/cd.yml) | `v*` タグ / 手動 → GHCR push |
 
 ソースの改行は LF 固定（`.gitattributes`）。Windows で CRLF にすると `format --check-formatted` が落ちる。
