@@ -8,14 +8,16 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 
 ## 現状
 
-開発用 Compose で常駐起動できる。`TRADE_MODE` の既定は `dry_run`。live 実発注に必要な署名付き private API・本番 release は未着手。
+開発用 Compose で常駐起動できる。`TRADE_MODE` の既定は `dry_run`。本番相当は `Dockerfile.prod` + `compose.prod.yaml`（release・非 root）。live 実発注の署名付き private API は未着手。
 
 起動・観測の要点:
 
-- `docker compose up -d` で `app`（Phoenix）と `db`（PostgreSQL）が上がる
+- 開発: `docker compose up -d` で `app`（Phoenix）と `db`（PostgreSQL）が上がる
+- 本番相当: `docker compose -f compose.prod.yaml --env-file .env.prod up -d --build`（詳細は [prod.md](.workspace/0_doc/architecture/env/prod.md)）
 - UI は `http://127.0.0.1:4000/`（稼働確認用 Status。取引 UI ではない）
 - 稼働 API: `GET /health/live`（プロセス生存・Compose healthcheck）、`GET /health/ready`（DB + Ready + Feed/鮮度）、`GET /health`（従来互換）
 - 品質ゲートはローカルも CI も `mix precommit`
+- CD: 明示タグ `v*` または手動で GHCR へ push（`main` マージ alone ではデプロイしない）
 
 ### コンポーネント別
 
@@ -34,9 +36,10 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | observe — health | implemented | `/health/live`・`/health/ready`・`/health` |
 | UI StatusLive | implemented | 発注可否・Feed・鮮度・モード色分け |
 | CI（`mix precommit` / GitHub Actions） | implemented | PR と `main` |
+| CD（GHCR push） | implemented | `v*` タグ / `workflow_dispatch`。digest を Compose に固定 |
 | private bitFlyer API（署名付き REST） | unavailable | 既定は `Exchange.Unavailable`。キー枠（`BITFLYER_API_*`）は live 時必須 |
 | UI 認証（BasicAuth） | implemented | `UI_BASIC_AUTH_*`。prod 必須。`/health*` は対象外 |
-| 本番 release Compose | unavailable | 開発用 `Dockerfile` / `compose.yaml` のみ（[ToDo 03](.workspace/2_todo/03-cd-prod-host.md)） |
+| 本番 release Compose | implemented | `Dockerfile.prod` / `compose.prod.yaml` / backup・rollback 手順 |
 
 完了した骨格・CI は [3_archive/](.workspace/3_archive/)。改善の優先順位は [improvement-plan.md](.workspace/0_doc/evaluation/improvement-plan.md)。
 
@@ -64,6 +67,22 @@ docker compose restart app
 docker compose down
 ```
 
+開発用と本番用の見分け: `Dockerfile` + `compose.yaml` が開発（bind mount / `mix phx.server`）。`Dockerfile.prod` + `compose.prod.yaml` が本番（release・非 root）。詳細は [prod.md](.workspace/0_doc/architecture/env/prod.md) / [ci-cd.md](.workspace/0_doc/architecture/ci-cd.md)。
+
+## 本番相当の起動（実弾なし）
+
+`.env.prod` に `SECRET_KEY_BASE`・`UI_BASIC_AUTH_*`・`POSTGRES_PASSWORD`・`DATABASE_URL` を置く（キーの置き方の詳細は書かない）。検証時の `TRADE_MODE` は `dry_run`。
+
+```bash
+cp .env.example .env.prod
+# 必須値を埋める
+docker compose -f compose.prod.yaml --env-file .env.prod up -d --build
+# または ./bin/deploy-prod.sh
+# 開発用と同時なら: APP_HOST_PORT=127.0.0.1:4001 docker compose -f compose.prod.yaml --env-file .env.prod up -d --build
+curl -fsS http://127.0.0.1:4000/health/live
+```
+
+バックアップ: `./bin/backup-db.sh`。ロールバック: `./bin/deploy-prod.sh rollback <image@digest>`。GHCR 配布は `v*` タグまたは Actions 手動。
 ## 品質ゲート
 
 コミット前・PR 前に、ローカルで次を緑にする。
@@ -173,22 +192,18 @@ docker compose run --rm app mix setup
 | --- | --- |
 | [`.workspace/0_doc/vision.md`](.workspace/0_doc/vision.md) | 目的と設計原則 |
 | [`.workspace/0_doc/architecture/overview.md`](.workspace/0_doc/architecture/overview.md) | 全体構成とアプリ境界 |
-| [`.workspace/0_doc/architecture/ci-cd.md`](.workspace/0_doc/architecture/ci-cd.md) | CI が保証すること / しないこと |
+| [`.workspace/0_doc/architecture/ci-cd.md`](.workspace/0_doc/architecture/ci-cd.md) | CI / CD（GHCR・digest・ロールバック単位） |
 | [`.workspace/0_doc/architecture/env/dev.md`](.workspace/0_doc/architecture/env/dev.md) | 開発環境（`app` / `db`、ポート） |
-| [`.workspace/0_doc/architecture/env/prod.md`](.workspace/0_doc/architecture/env/prod.md) | 本番環境 |
+| [`.workspace/0_doc/architecture/env/prod.md`](.workspace/0_doc/architecture/env/prod.md) | 本番環境・入れ替え・backup |
 | [`.workspace/0_doc/evaluation/`](.workspace/0_doc/evaluation/) | 技術選定・評価・改善提案 |
-| [`.workspace/2_todo/03-cd-prod-host.md`](.workspace/2_todo/03-cd-prod-host.md) | 今の ToDo（本番 CD） |
-| [`.workspace/3_archive/`](.workspace/3_archive/) | 完了した ToDo（骨格・CI など） |
+| [`.workspace/3_archive/`](.workspace/3_archive/) | 完了した ToDo（骨格・CI・本番 CD など） |
 | `.workspace/1_backlog/` | まだ着手しない項目 |
 
 ## これから作るもの
 
 - 署名付き private API client（cancel / 照会 / 約定反映）
-- 本番用 release / Compose と配備手順（[ToDo 03](.workspace/2_todo/03-cd-prod-host.md)）
-- 秘密情報を Git に入れない本番実行手順
 
 詳細は Vision と Architecture を先に読む。改善の優先順位は [improvement-plan.md](.workspace/0_doc/evaluation/improvement-plan.md)。
-
 ## 注意
 
 - API キー、パスフレーズ、本番設定をリポジトリにコミットしない

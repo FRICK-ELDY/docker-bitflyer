@@ -8,7 +8,17 @@ defmodule DockerBitflyer.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      releases: [
+        docker_bitflyer: [
+          applications: [
+            bitflyer: :permanent,
+            ui: :permanent
+          ],
+          include_executables_for: [:unix],
+          strip_beams: [keep: ["Docs"]]
+        ]
+      ]
     ]
   end
 
@@ -38,7 +48,9 @@ defmodule DockerBitflyer.MixProject do
         "compile --warnings-as-errors",
         # test/ は compile 対象外のため、こちらでも warnings-as-errors にする
         "test --warnings-as-errors"
-      ]
+      ],
+      # 本番イメージ用。ui の minify + phx.digest
+      "assets.deploy": ["do --app ui assets.deploy"]
     ]
   end
 end
