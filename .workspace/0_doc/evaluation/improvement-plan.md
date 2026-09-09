@@ -1,62 +1,64 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-09  
-根拠: [evaluation-2026-09-09.md](./evaluation-2026-09-09.md) / [specific-weaknesses-2026-09-09.md](./specific-weaknesses-2026-09-09.md)
+最終更新: 2026-09-10  
+根拠: [evaluation-2026-09-10.md](./evaluation-2026-09-10.md) / [specific-weaknesses-2026-09-10.md](./specific-weaknesses-2026-09-10.md)
 
-方針: **利益機能より資金保全・復帰・観測を先に直す。** live 接続は下記 P0/P1 の完了まで禁止。戦略の中身は縦貫通の後。
-
----
-
-## 消化済み（2026-09-08 計画の P0–P2）
-
-前回計画の #1–17（品質ゲート、TradeMode、Readiness、health、telemetry、永続 Resource、突合、ETS、risk 骨、executor 出口、market-data、資金保全回帰）はコード上で解決済み。再掲しない。
+方針: **利益機能より資金保全・復帰・観測を先に直す。** live 実発注は下記 P0 の完了まで禁止。戦略の高度化は縦貫通の安全化の後。
 
 ---
 
-## P0 — live 解禁の前に塞ぐ穴（実 client より先）
+## 消化済み（2026-09-09 計画の大半）
+
+前回計画の P0 #1–#4、P1 全般、P2 全般、P3 #15–#19（UI 認証、API キー枠、本番 release、Exchange.Rest、deps audit）はコード上で解決済み。再掲しない。
+
+**未消化として持ち越すもの:** 旧 P0 #5（risk limits の実効化）。比較関数はあるが本番注入が無い。
+
+---
+
+## P0 — live 解禁の前に塞ぐ穴
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 1 | submission 不明の安全化 | timeout/切断を `rejected` にしない。`submission_unknown`（または同等）+ 即 Readiness halt。確定拒否だけ rejected | 不明結果で halt し、再送しないテストが緑 |
-| 2 | 受注後 ID 永続化失敗 | `exchange_order_id` 更新失敗時も halt。起動突合で回収するまで Ready にしない | persist_failed で発注ゲートが閉じる |
-| 3 | 残高 baseline | live で必須通貨の BalanceSnapshot が無ければ Ready にしない。空リストで compare 成功にしない | 空 DB の live 突合が halt |
-| 4 | risk 迂回の廃止 | `authorize?: false` を本番 API から除去。AuthorizedOrder 型または test 限定注入 | 公開 `submit/2` だけでは risk をスキップできない |
-| 5 | risk limits 完成 | `max_daily_loss` / `max_orders_per_minute` / `max_price_deviation_pct`（+ 可能なら残高） | 各拒否理由のユニット + 回帰が緑 |
+| 1 | 日次損失の実効化 | Fill/建玉から当日損失の正本を作る。`Risk.authorize` に必須注入。未計測は `0` ではなく `:unsynced` | live 経路で損失超過が halt する回帰が緑。README risk 行を正直化 |
+| 2 | 残高検査の実効化 | OrderRate 同型の ETS キャッシュ。live 突合 / paper fill で更新。必要通貨欠落は fail-closed | 未注入・欠落で認可拒否のテストが緑 |
+| 3 | 両建て建玉突合 | 外部 `{product_code,side}` をネット建玉へ正規化（または内部 side 別）。順序反転 fixture | buy+sell 並存でも同じ Ready/halt 判定 |
+| 4 | live 既定の安全化 | prod/live で Strategy 既定 `enabled: false`。live 専用上限を明示必須。FixedOnce の自動成行を live で止める | live+confirm だけでは意図が出ない |
+| 5 | Decode strict 化 | 不正・欠損数値を 0 に丸めず snapshot 失敗 → halt | malformed/null fixture で halt するテストが緑 |
 
 ---
 
-## P1 — 縦貫通と停止・復帰
+## P1 — 停止からの出口と自己修復
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 6 | strategy の骨 | Behaviour + 固定ルール 1 本。Feed → Strategy → Risk → Executor を dry_run で駆動 | compose up 放置でも dry_run 意図がログに出る（または明示的に no-op でも経路が繋がる） |
-| 7 | グレースフルシャットダウン | `prepare_stop` で発注ゲート閉鎖、子 `shutdown`、Compose `stop_grace_period` | SIGTERM 後に新規 submit が拒否される |
-| 8 | halted 復帰手段 | `mix bitflyer.resume`（再突合成功時のみ clear_halt）。手順を prod.md に記載 | remote console 以外で再開できる |
-| 9 | paper 残高・指値 | 擬似約定で BalanceSnapshot 更新。limit は LTP 交差（簡易で可） | paper 経路で残高行が増える |
+| 6 | baseline 初回 import | 承認付き `mix` / RPC。snapshot hash・操作者を記録。その後通常突合成功時のみ Ready | 空 DB から人手 SQL なしで baseline 作成可 |
+| 7 | submission_unknown 回収 | 時刻窓+side+size の候補照合。一意時のみ ID 埋込。曖昧なら承認 command | unknown から resume できる手順が prod.md にある |
+| 8 | 連続障害・auth サーキット | 401/403 即 halt。その他は窓内 N 回で halt | 鍵違いで盲目 rejected 連発しない |
+| 9 | WS サイレントストール watchdog | 最終 tick 経過で socket 切断→再接続 | 無言接続が人手なしで回復する |
+| 10 | in-flight drain | SIGTERM 後、進行中 submit/HTTP 完了を待つ | 競合テストで不明状態が増えない |
 
 ---
 
-## P2 — 観測と運用 UI
+## P2 — 観測と契約の締め
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 10 | Discord（または同等）通知 | halt / reconcile_mismatch / disconnect。失敗しても取引を止めない | Webhook 未設定でも起動し、設定時に halt が届く |
-| 11 | StatusLive 発注可否 | `exchange_order_gate`・鮮度・Feed・モード色分けを最上部に | 「今トレードしてよいか」が 1 秒で分かる |
-| 12 | health の外形 | `/live` と `/ready` 分離、または ready に stale/Feed を含める方針を文書+実装 | WS 断を外形監視で検知できる |
-| 13 | telemetry allowlist | `:kind` / `:currency` / `:limit` を通す | mismatch 種別がログに残る |
-| 14 | README 現状同期 | implemented / partial / unavailable をコンポーネント別に | README だけで現状が分かる |
+| 11 | 本番 metrics 消費者 | ConsoleReporter または Prometheus / BasicAuth 配下 Dashboard | 率・推移が本番で見える |
+| 12 | source timestamp / clock skew / permissions | Normalize 保持、skew ゲート、`getpermissions` で出金禁止を起動検査 | live 起動時に権限・時刻で halt できる |
+| 13 | OrderRate の再起動復元 | 直近 1 分の Order を ETS に温める | クラッシュ直後に頻度上限を回避できない |
+| 14 | CD↔CI 結合 | 対象 SHA の precommit 成功を CD 前提に。任意で `Dockerfile.prod` ビルド検証 | 赤のまま配布しない |
+| 15 | 戦略パラメータ履歴 | Revision Resource + Order への由来記録 | どの設定が注文を生んだか追える |
 
 ---
 
-## P3 — 本番形と live クライアント
+## P3 — 厚み（解禁後でも可）
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 15 | UI 認証・bind | BasicAuth（環境変数）+ 本番 publish 最小化。ToDo 03 に明記 | 認証なしで取引詳細を見られない |
-| 16 | API キー枠 | `.env.example` に `BITFLYER_API_KEY` / `SECRET`。live 時のみ必須。出金権限禁止を文書化 | live でキー欠落時に起動停止 |
-| 17 | 本番 release Compose | `mix release`、非 root、digest 固定、backup/rollback（ToDo 03） | **完了**（`Dockerfile.prod` / `compose.prod.yaml` / GHCR CD） |
-| 18 | private API client | 署名付き REST。cancel / 照会 / 約定反映。fixture 契約テスト | **完了**（`Exchange.Rest`。live 残高は getbalance 突合正本・fill は建玉のみ。cancel 前 fill 同期。認可前同期） |
-| 19 | deps audit | CI で可視化（最初は fail させなくてもよい） | **完了**（`mix_audit` + ゲート外ステップ + artifact。CI 緑≠脆弱性なし） |
+| 16 | paper 手数料・スリッページ | LTP±bps + 手数料 | paper 損益が過大楽観にならない |
+| 17 | AuthorizedOrder 型 | Risk 成功 opaque のみ executor へ | 境界が型で強制される |
+| 18 | Kill switch / StatusLive resume | 認証付き即 halt・再突合操作 | console 以外で運用できる |
+| 19 | 残骸棚卸し | Heartbeat・Layouts 生成ヘッダ・Mailer 等 | ノイズが減る |
 
 ---
 
@@ -73,8 +75,8 @@
 
 | 改善 | 既存文書 |
 |:---|:---|
-| P3 #17 | ~~ToDo 03~~ → [03-cd-prod-host.md](../../3_archive/03-cd-prod-host.md)（完了） |
-| P2 #10 | `.workspace/1_backlog/discord-notify-adapter.md` |
-| P3 #18（paper 厚みの延長） | `.workspace/1_backlog/paper-trade-adapter.md` |
+| P2 Discord（前回） | 実装済み（アダプタ） |
+| P3 release（前回） | [03-cd-prod-host.md](../../3_archive/03-cd-prod-host.md)（完了） |
+| paper 厚み | `.workspace/1_backlog/paper-trade-adapter.md` |
 
-次回評価では、本計画の **P0** がコード上で解決済みかを対象ファイルの再読で確認する。P0 未完了のまま live client を足した場合は重大減点とする。
+次回評価では、本計画の **P0** がコード上で解決済みかを対象ファイルの再読で確認する。P0 未完了のまま live 実発注を進めた場合は重大減点とする。

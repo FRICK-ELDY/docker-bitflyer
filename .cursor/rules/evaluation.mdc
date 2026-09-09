@@ -275,11 +275,11 @@ Safety / Recoverable / Idempotent に関わる欠如は減点寄り、後続バ�
 4. `.workspace/0_doc/evaluation/evaluation-YYYY-MM-DD.md` — 当日の総合評価レポート
 5. `.workspace/0_doc/evaluation/improvement-plan.md` — まとめのマイナス点に基づく改善提案書
 
-次回評価時、前回のまとめ（上記 1〜4）を `.workspace/0_doc/evaluation/archive/` へ移す。`improvement-plan.md` は最新版を置き換える。
+次回評価時、前回のまとめ（上記 1〜4）を `.workspace/0_doc/evaluation/archive/YYYY-MM-DD/` へ移す。`improvement-plan.md` は最新版を置き換える。
 
 ### アーカイブ
 
-- **まとめ**の前回分: `.workspace/0_doc/evaluation/archive/`
+- **まとめ**の前回分: `.workspace/0_doc/evaluation/archive/YYYY-MM-DD/`
 - **評価者別**の前回分: `opus/archive/YYYY-MM-DD/` / `gpt/archive/YYYY-MM-DD/`
 - 技術選定メモ（`tech-stack.md`）は評価レポートのアーカイブ対象外（常設参考資料）
 

@@ -8,7 +8,7 @@
 | 基準 | [vision.md](../../vision.md) / [architecture/overview.md](../../architecture/overview.md) / [env/dev.md](../../architecture/env/dev.md) / [env/prod.md](../../architecture/env/prod.md) |
 | 詳細 | [strengths](./opus-specific-strengths-2026-09-09.md) / [weaknesses](./opus-specific-weaknesses-2026-09-09.md) / [proposals](./opus-specific-proposals-2026-09-09.md) |
 | 前回（自系統） | [opus/archive/2026-09-08](./archive/2026-09-08/opus-evaluation-2026-09-08.md) |
-| 前回（まとめ） | [archive/evaluation-2026-09-08.md](../archive/evaluation-2026-09-08.md) |
+| 前回（まとめ） | [archive/2026-09-08/evaluation-2026-09-08.md](../../../archive/2026-09-08/evaluation-2026-09-08.md) |
 
 本評価は第2評価者の当日文書（`gpt/` 配下）を一切参照していない。前回の指摘は「解決済みと書く前に対象ファイルを読み直す」方針で、weaknesses に挙げた全項目の対象ファイルを再読して確認した。
 

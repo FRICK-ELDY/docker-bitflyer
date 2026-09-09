@@ -4,12 +4,12 @@
 |:---|:---|
 | 評価日 | 2026-09-09 |
 | 種別 | **再評価**（前回 2026-09-08） |
-| 第1評価者 | Claude Opus 5 → [opus-evaluation](./opus/opus-evaluation-2026-09-09.md) |
-| 第2評価者 | GPT-5.6 Sol → [gpt-evaluation](./gpt/gpt-evaluation-2026-09-09.md) |
-| 基準 | [vision.md](../vision.md) / [architecture/overview.md](../architecture/overview.md) |
+| 第1評価者 | Claude Opus 5 → [opus-evaluation](../../opus/archive/2026-09-09/opus-evaluation-2026-09-09.md) |
+| 第2評価者 | GPT-5.6 Sol → [gpt-evaluation](../../gpt/archive/2026-09-09/gpt-evaluation-2026-09-09.md) |
+| 基準 | [vision.md](../../../vision.md) / [architecture/overview.md](../../../architecture/overview.md) |
 | 統合詳細 | [strengths](./specific-strengths-2026-09-09.md) / [weaknesses](./specific-weaknesses-2026-09-09.md) / [proposals](./specific-proposals-2026-09-09.md) |
-| 改善計画 | [improvement-plan.md](./improvement-plan.md) |
-| 前回まとめ | [archive/evaluation-2026-09-08.md](./archive/evaluation-2026-09-08.md) |
+| 改善計画 | [improvement-plan.md](../../improvement-plan.md) |
+| 前回まとめ | [archive/2026-09-08/evaluation-2026-09-08.md](../2026-09-08/evaluation-2026-09-08.md) |
 
 両評価者は相手の当日文書を参照せず、コードを直接検証した。まとめは合意・相違・採用判断を明示する。
 
