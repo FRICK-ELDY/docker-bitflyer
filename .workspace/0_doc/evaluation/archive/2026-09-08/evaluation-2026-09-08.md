@@ -4,11 +4,11 @@
 |:---|:---|
 | 評価日 | 2026-09-08 |
 | 種別 | **初回評価** |
-| 第1評価者 | Claude Opus 5 → [opus-evaluation](./opus/opus-evaluation-2026-09-08.md) |
-| 第2評価者 | GPT-5.6 Sol → [gpt-evaluation](./gpt/gpt-evaluation-2026-09-08.md) |
-| 基準 | [vision.md](../vision.md) / [architecture/overview.md](../architecture/overview.md) |
+| 第1評価者 | Claude Opus 5 → [opus-evaluation](../../opus/archive/2026-09-08/opus-evaluation-2026-09-08.md) |
+| 第2評価者 | GPT-5.6 Sol → [gpt-evaluation](../../gpt/archive/2026-09-08/gpt-evaluation-2026-09-08.md) |
+| 基準 | [vision.md](../../../vision.md) / [architecture/overview.md](../../../architecture/overview.md) |
 | 統合詳細 | [strengths](./specific-strengths-2026-09-08.md) / [weaknesses](./specific-weaknesses-2026-09-08.md) / [proposals](./specific-proposals-2026-09-08.md) |
-| 改善計画 | [improvement-plan.md](./improvement-plan.md) |
+| 改善計画 | [improvement-plan.md](../../improvement-plan.md) |
 
 両評価者は相手の当日文書を参照せず、コードを直接検証した。まとめは合意・相違・採用判断を明示する。
 
