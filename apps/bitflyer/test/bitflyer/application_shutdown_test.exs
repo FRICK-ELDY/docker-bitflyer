@@ -5,6 +5,7 @@ defmodule Bitflyer.ApplicationShutdownTest do
 
   import Bitflyer.TestSupport.MarketDataCacheHelper
   import Bitflyer.TestSupport.OrderRateHelper
+  import Bitflyer.TestSupport.DailyLossHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
   alias Bitflyer.MarketData.Cache
@@ -18,6 +19,7 @@ defmodule Bitflyer.ApplicationShutdownTest do
     reset_readiness()
     reset_market_data_cache()
     reset_order_rate()
+    reset_daily_loss()
 
     previous_mode = Application.get_env(:bitflyer, :trade_mode, :dry_run)
     Application.put_env(:bitflyer, :trade_mode, :dry_run)
@@ -26,6 +28,7 @@ defmodule Bitflyer.ApplicationShutdownTest do
       reset_readiness()
       reset_market_data_cache()
       reset_order_rate()
+      reset_daily_loss()
       Application.put_env(:bitflyer, :trade_mode, previous_mode)
     end)
 

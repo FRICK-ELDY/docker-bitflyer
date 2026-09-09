@@ -5,6 +5,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
 
   import Bitflyer.TestSupport.MarketDataCacheHelper
   import Bitflyer.TestSupport.OrderRateHelper
+  import Bitflyer.TestSupport.DailyLossHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
   alias Bitflyer.MarketData.Cache
@@ -19,6 +20,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
     reset_readiness()
     reset_market_data_cache()
     reset_order_rate()
+    reset_daily_loss()
 
     previous_enabled = Application.get_env(:bitflyer, Bitflyer.Strategy, [])
 
@@ -34,6 +36,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
       reset_readiness()
       reset_market_data_cache()
       reset_order_rate()
+      reset_daily_loss()
       Application.put_env(:bitflyer, Bitflyer.Strategy, previous_enabled)
     end)
 

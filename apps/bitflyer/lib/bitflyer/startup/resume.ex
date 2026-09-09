@@ -47,7 +47,26 @@ defmodule Bitflyer.Startup.Resume do
 
     case Reconcile.run(reconcile_opts) do
       {:ok, _internal} ->
-        finish_resume(halt_reason, trade_mode, opts)
+        # force 禁止: in-flight invalidate を synced に戻さない
+        case Bitflyer.Risk.DailyLoss.reload(trade_mode: trade_mode) do
+          :ok ->
+            finish_resume(halt_reason, trade_mode, opts)
+
+          {:ok, :deferred} ->
+            Bitflyer.Telemetry.log(:warning, "resume blocked: daily loss barrier held", %{
+              trade_mode: trade_mode
+            })
+
+            {:error, :daily_loss_barrier, %{reason: :deferred}}
+
+          {:error, reason} ->
+            Bitflyer.Telemetry.log(:error, "resume daily loss reload failed", %{
+              reason: inspect(reason),
+              trade_mode: trade_mode
+            })
+
+            {:error, :daily_loss_unsynced, %{reason: reason}}
+        end
 
       {:error, reason, details} ->
         Bitflyer.Telemetry.log(:warning, "resume reconcile failed", %{

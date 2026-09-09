@@ -3,16 +3,16 @@ defmodule Bitflyer.OrderExecutor.Positions do
 
   require Ash.Query
 
-  alias Bitflyer.Trading.{Order, Position}
+  alias Bitflyer.Trading.{Fill, Order, Position}
 
   @doc """
-  擬似約定を建玉へ反映する（paper 用）。
+  約定を建玉へ反映し、Fill 行を同一トランザクション内に残す。
 
-  トランザクション内では `return_notifications?: true` で通知を返し、
-  呼び出し側がコミット後に `Ash.Notifier.notify/1` する。
+  戻り値の第 3 要素はコミット後に `Risk.DailyLoss.record_realized/2` へ渡す。
   既存建玉は `FOR UPDATE` でロックし、Lost Update を防ぐ。
   """
-  @spec apply_fill(Order.t(), Decimal.t()) :: {:ok, list()} | {:error, atom(), map()}
+  @spec apply_fill(Order.t(), Decimal.t()) ::
+          {:ok, list(), %{realized_pnl: Decimal.t()}} | {:error, atom(), map()}
   def apply_fill(%Order{} = order, %Decimal{} = fill_price) do
     trade_mode = order.trade_mode
     product_code = order.product_code
@@ -21,10 +21,22 @@ defmodule Bitflyer.OrderExecutor.Positions do
 
     case find_position(product_code, trade_mode) do
       {:ok, nil} ->
-        create_position(product_code, trade_mode, side, size, fill_price)
+        case create_position(product_code, trade_mode, side, size, fill_price) do
+          {:ok, notifications} ->
+            with {:ok, fill_notifications} <-
+                   insert_fill(order, fill_price, size, Decimal.new(0)) do
+              {:ok, notifications ++ fill_notifications, %{realized_pnl: Decimal.new(0)}}
+            end
+
+          {:race, %Position{} = position} ->
+            merge_position(position, order, side, size, fill_price)
+
+          {:error, _, _} = error ->
+            error
+        end
 
       {:ok, %Position{} = position} ->
-        merge_position(position, side, size, fill_price)
+        merge_position(position, order, side, size, fill_price)
 
       {:error, error} ->
         {:error, :persist_failed, %{error: error}}
@@ -52,10 +64,9 @@ defmodule Bitflyer.OrderExecutor.Positions do
         {:ok, notifications}
 
       {:error, error} ->
-        # 同時 create で unique 衝突したらロック付きで再読してマージ
         case find_position(product_code, trade_mode) do
           {:ok, %Position{} = position} ->
-            merge_position(position, side, size, fill_price)
+            {:race, position}
 
           _ ->
             {:error, :persist_failed, %{error: error}}
@@ -63,7 +74,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
     end
   end
 
-  defp merge_position(%Position{} = position, side, size, fill_price) do
+  defp merge_position(%Position{} = position, %Order{} = order, side, size, fill_price) do
     cond do
       position.side == side ->
         new_size = Decimal.add(position.size, size)
@@ -74,27 +85,54 @@ defmodule Bitflyer.OrderExecutor.Positions do
           |> Decimal.add(Decimal.mult(size, fill_price))
           |> Decimal.div(new_size)
 
-        update_position(position, %{size: new_size, average_price: new_avg})
+        with {:ok, notifications} <-
+               update_position(position, %{size: new_size, average_price: new_avg}),
+             {:ok, fill_notifications} <-
+               insert_fill(order, fill_price, size, Decimal.new(0)) do
+          {:ok, notifications ++ fill_notifications, %{realized_pnl: Decimal.new(0)}}
+        end
 
       Decimal.compare(size, position.size) == :lt ->
+        closed = size
+        realized = realized_pnl(position.side, position.average_price, fill_price, closed)
         new_size = Decimal.sub(position.size, size)
-        update_position(position, %{size: new_size})
+
+        with {:ok, notifications} <- update_position(position, %{size: new_size}),
+             {:ok, fill_notifications} <- insert_fill(order, fill_price, size, realized) do
+          {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
+        end
 
       Decimal.equal?(size, position.size) ->
-        case Ash.destroy(position, return_notifications?: true) do
-          :ok -> {:ok, []}
-          {:ok, notifications} when is_list(notifications) -> {:ok, notifications}
-          {:error, error} -> {:error, :persist_failed, %{error: error}}
+        closed = position.size
+        realized = realized_pnl(position.side, position.average_price, fill_price, closed)
+
+        with {:ok, notifications} <- destroy_position(position),
+             {:ok, fill_notifications} <- insert_fill(order, fill_price, size, realized) do
+          {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
         end
 
       true ->
+        closed = position.size
+        realized = realized_pnl(position.side, position.average_price, fill_price, closed)
         remainder = Decimal.sub(size, position.size)
 
-        update_position(position, %{
-          side: side,
-          size: remainder,
-          average_price: fill_price
-        })
+        with {:ok, notifications} <-
+               update_position(position, %{
+                 side: side,
+                 size: remainder,
+                 average_price: fill_price
+               }),
+             {:ok, fill_notifications} <- insert_fill(order, fill_price, size, realized) do
+          {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
+        end
+    end
+  end
+
+  defp destroy_position(%Position{} = position) do
+    case Ash.destroy(position, return_notifications?: true) do
+      :ok -> {:ok, []}
+      {:ok, notifications} when is_list(notifications) -> {:ok, notifications}
+      {:error, error} -> {:error, :persist_failed, %{error: error}}
     end
   end
 
@@ -102,6 +140,39 @@ defmodule Bitflyer.OrderExecutor.Positions do
     case position
          |> Ash.Changeset.for_update(:update, attrs)
          |> Ash.update(return_notifications?: true) do
+      {:ok, _, notifications} -> {:ok, notifications}
+      {:error, error} -> {:error, :persist_failed, %{error: error}}
+    end
+  end
+
+  defp realized_pnl(:buy, avg_price, fill_price, closed_size) do
+    fill_price
+    |> Decimal.sub(avg_price)
+    |> Decimal.mult(closed_size)
+  end
+
+  defp realized_pnl(:sell, avg_price, fill_price, closed_size) do
+    avg_price
+    |> Decimal.sub(fill_price)
+    |> Decimal.mult(closed_size)
+  end
+
+  defp insert_fill(%Order{} = order, fill_price, size, realized_pnl) do
+    attrs = %{
+      internal_order_id: order.internal_order_id,
+      exchange_execution_id: nil,
+      product_code: order.product_code,
+      side: order.side,
+      size: size,
+      price: fill_price,
+      realized_pnl: realized_pnl,
+      trade_mode: order.trade_mode,
+      filled_at: DateTime.utc_now()
+    }
+
+    case Fill
+         |> Ash.Changeset.for_create(:create, attrs)
+         |> Ash.create(return_notifications?: true) do
       {:ok, _, notifications} -> {:ok, notifications}
       {:error, error} -> {:error, :persist_failed, %{error: error}}
     end

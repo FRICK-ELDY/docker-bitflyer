@@ -5,6 +5,7 @@ defmodule Bitflyer.RiskTest do
 
   import Bitflyer.TestSupport.MarketDataCacheHelper
   import Bitflyer.TestSupport.OrderRateHelper
+  import Bitflyer.TestSupport.DailyLossHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
   alias Bitflyer.MarketData.Cache
@@ -18,12 +19,14 @@ defmodule Bitflyer.RiskTest do
     reset_readiness()
     reset_market_data_cache()
     reset_order_rate()
+    reset_daily_loss()
     clear_default_risk_state()
 
     on_exit(fn ->
       reset_readiness()
       reset_market_data_cache()
       reset_order_rate()
+      reset_daily_loss()
     end)
 
     :ok
@@ -295,6 +298,63 @@ defmodule Bitflyer.RiskTest do
 
     assert Readiness.get() == {:halted, :daily_loss_exceeded}
     assert Risk.circuit_open?()
+  end
+
+  test "authorize rejects when DailyLoss ETS is unsynced" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    assert :ok = Bitflyer.Risk.DailyLoss.mark_unsynced()
+
+    assert {:error, :unsynced, %{reason: :daily_loss_unsynced}} =
+             Risk.authorize(valid_command(), positions: [])
+  end
+
+  test "invalidate without reload keeps authorize fail-closed" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    assert {:ok, _gen} = Bitflyer.Risk.DailyLoss.invalidate(:dry_run)
+
+    assert {:error, :unsynced, %{reason: :daily_loss_unsynced}} =
+             Risk.authorize(valid_command(), positions: [], trade_mode: :dry_run)
+  end
+
+  test "reconcile-style reload cannot sync over an open invalidate barrier" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:ok, gen} = Bitflyer.Risk.DailyLoss.invalidate(:dry_run)
+
+    # 突合側の安全 reload（release なし）は barrier 中に synced 化しない
+    assert {:ok, :deferred} = Bitflyer.Risk.DailyLoss.reload(trade_mode: :dry_run)
+
+    assert {:error, :unsynced, %{reason: :daily_loss_unsynced}} =
+             Risk.authorize(valid_command(), positions: [], trade_mode: :dry_run)
+
+    # fill 側が同じ世代で解放して初めて synced
+    assert :ok =
+             Bitflyer.Risk.DailyLoss.reload(
+               trade_mode: :dry_run,
+               generation: gen,
+               release_barrier: true
+             )
+
+    assert :ok = Risk.authorize(valid_command(), positions: [], trade_mode: :dry_run)
+  end
+
+  test "authorize rejects from DailyLoss ETS without daily_loss injection" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert :ok = Bitflyer.Risk.DailyLoss.seed_loss(:dry_run, Decimal.new("150000"))
+
+    assert {:error, :limit_exceeded, %{limit: :max_daily_loss}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               trade_mode: :dry_run,
+               limits: %{max_daily_loss: Decimal.new("100000")}
+             )
+
+    assert Readiness.get() == {:halted, :daily_loss_exceeded}
   end
 
   test "authorize treats non-positive LTP as miss and rejects string daily_loss over limit" do

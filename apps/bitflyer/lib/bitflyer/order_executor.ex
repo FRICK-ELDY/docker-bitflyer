@@ -45,7 +45,7 @@ defmodule Bitflyer.OrderExecutor do
 
     with :ok <- validate_command(command),
          :ok <- maybe_sync_live_fills(trade_mode, opts),
-         :ok <- Risk.authorize(command, opts),
+         :ok <- Risk.authorize(command, Keyword.put(opts, :trade_mode, trade_mode)),
          {:new, command} <- idempotent_lookup(command),
          {:ok, order} <- create_pending(command, trade_mode),
          {:ok, order} <- dispatch(order, command, trade_mode, opts) do

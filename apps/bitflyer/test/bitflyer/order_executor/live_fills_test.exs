@@ -3,6 +3,8 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
 
   require Ash.Query
 
+  import Bitflyer.TestSupport.DailyLossHelper
+
   alias Bitflyer.OrderExecutor.LiveFills
   alias Bitflyer.Trading.{BalanceSnapshot, Order, Position}
 
@@ -56,7 +58,13 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
   end
 
   setup do
+    reset_daily_loss()
     seed_balances()
+
+    on_exit(fn ->
+      reset_daily_loss()
+    end)
+
     :ok
   end
 
