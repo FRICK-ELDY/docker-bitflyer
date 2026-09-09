@@ -128,13 +128,14 @@ defmodule Bitflyer.OrderExecutor.Live do
         Bitflyer.Telemetry.log(
           :critical,
           "Failed to persist risk circuit after #{reason}: #{inspect(open_error)}",
+          # 関数固有キーを後勝ちにし、meta による上書きを防ぐ
           Map.merge(
+            meta,
             %{
               reason: reason,
               open_error: open_error,
               trade_mode: :live
-            },
-            meta
+            }
           )
         )
 
