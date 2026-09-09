@@ -47,19 +47,21 @@ defmodule Bitflyer.OrderExecutor.Live.CancelTest do
     @impl true
     def fetch_executions(_), do: {:ok, []}
 
-    def start, do: Agent.start_link(fn -> 0 end, name: __MODULE__.Counter)
-    def stop, do: if(Process.whereis(__MODULE__.Counter), do: Agent.stop(__MODULE__.Counter))
     def cancel_count, do: Agent.get(__MODULE__.Counter, & &1)
   end
 
   setup do
     reset_readiness()
-    {:ok, _} = CancelExchange.start()
+
+    start_supervised!(%{
+      id: CancelExchange.Counter,
+      start: {Agent, :start_link, [fn -> 0 end, [name: CancelExchange.Counter]]}
+    })
+
     Process.register(self(), CancelExchange)
 
     on_exit(fn ->
       reset_readiness()
-      CancelExchange.stop()
 
       if Process.whereis(CancelExchange) == self() do
         Process.unregister(CancelExchange)

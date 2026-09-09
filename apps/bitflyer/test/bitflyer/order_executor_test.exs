@@ -70,17 +70,6 @@ defmodule Bitflyer.OrderExecutorTest do
     @impl true
     def fetch_executions(_request), do: {:ok, []}
 
-    def start_agents do
-      {:ok, _} = Agent.start_link(fn -> 0 end, name: __MODULE__.Counter)
-      {:ok, _} = Agent.start_link(fn -> :success end, name: __MODULE__.NextResult)
-      :ok
-    end
-
-    def stop_agents do
-      if Process.whereis(__MODULE__.Counter), do: Agent.stop(__MODULE__.Counter)
-      if Process.whereis(__MODULE__.NextResult), do: Agent.stop(__MODULE__.NextResult)
-    end
-
     def place_count do
       Agent.get(__MODULE__.Counter, & &1)
     end
@@ -100,7 +89,16 @@ defmodule Bitflyer.OrderExecutorTest do
     previous_client = Application.get_env(:bitflyer, :exchange_client)
     previous_confirm = Application.get_env(:bitflyer, :live_confirmed)
 
-    :ok = SpyExchange.start_agents()
+    start_supervised!(%{
+      id: SpyExchange.Counter,
+      start: {Agent, :start_link, [fn -> 0 end, [name: SpyExchange.Counter]]}
+    })
+
+    start_supervised!(%{
+      id: SpyExchange.NextResult,
+      start: {Agent, :start_link, [fn -> :success end, [name: SpyExchange.NextResult]]}
+    })
+
     Process.register(self(), SpyExchange)
     Application.put_env(:bitflyer, :exchange_client, SpyExchange)
 
@@ -112,8 +110,6 @@ defmodule Bitflyer.OrderExecutorTest do
       Application.put_env(:bitflyer, :trade_mode, previous_mode)
       Application.put_env(:bitflyer, :exchange_client, previous_client)
       Application.put_env(:bitflyer, :live_confirmed, previous_confirm)
-
-      SpyExchange.stop_agents()
 
       if Process.whereis(SpyExchange) == self() do
         Process.unregister(SpyExchange)

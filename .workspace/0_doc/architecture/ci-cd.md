@@ -4,7 +4,7 @@ CI と CD を分ける。品質ゲートは CI、配布は CD。運用の正は�
 
 ## CI が保証すること
 
-PR と `main` への push で、ローカルと同じ品質ゲートを自動実行する。
+PR と `main` への push で、ローカルと同じ品質ゲート（`mix precommit`）を自動実行する。
 
 | 項目 | 内容 |
 | --- | --- |
@@ -21,6 +21,30 @@ PR と `main` への push で、ローカルと同じ品質ゲートを自動実
 ```bash
 docker compose run --rm app mix precommit
 ```
+
+**CI が緑でも、依存の既知脆弱性が無いことは保証しない。** 下節の deps audit はゲート外の可視化である。
+
+## CI が可視化すること（ゲート外）
+
+`mix deps.audit`（`mix_audit`）を品質ゲートとは別に実行する。現状は `continue-on-error: true` のため、脆弱性があってもジョブは緑のまま。
+
+| 項目 | 内容 |
+| --- | --- |
+| コマンド | `mix deps.audit --format=json`（1 回のみ） |
+| ジョブへの影響 | 落とさない（ステップは黄になり得る） |
+| 成果物 | artifact `deps-audit-report`（`deps-audit.json` / `deps-audit.stderr` / `deps-audit-meta.txt`） |
+| ローカル再現 | `docker compose run --rm app mix deps.audit` |
+
+`deps-audit-meta.txt` の `outcome` で次を区別する（`json_exit=0` かつ `"pass":true` のときだけ `clean`）。
+
+- `clean` — 既知脆弱性なし（タスク成功）
+- `vulnerabilities_found` — advisory 検出（レポートを読む）
+- `audit_tool_or_fetch_failed` — タスク未定義・コンパイル失敗・advisory 取得失敗など（ログ / stderr を見る）
+
+### ツール限界
+
+- `mix_audit` は **Hex パッケージの既知 advisory** が対象
+- GitHub タグ依存（例: `apps/ui` の `heroicons` / `daisyui`）はスキャン対象外。タグ固定のレビューと更新判断は人手
 
 ## CD が保証すること
 
@@ -41,7 +65,9 @@ VLAN3（作業用）→ VLAN1（本番）の到達は最小ポートのみ（Vis
 
 - 本番PC への自動実弾デプロイ（人が pull / 入れ替えする）
 - bitFlyer / Discord など外部 API への実呼び出し
-- Credo / Dialyzer / deps audit（後続で足してよい）
+- 依存の既知脆弱性が無いこと（deps audit は可視化のみ。現状 fail させない）
+- GitHub 依存（`heroicons` / `daisyui` 等）の脆弱性スキャン
+- Credo / Dialyzer（後続で足してよい）
 
 ## 秘密情報
 
@@ -52,7 +78,8 @@ VLAN3（作業用）→ VLAN1（本番）の到達は最小ポートのみ（Vis
 
 ## 運用ルール
 
-- **CI が赤のまま `main` へマージしない**
+- **CI が赤のまま `main` へマージしない**（対象は `mix precommit` の品質ゲート）
+- deps audit の黄ステップ / artifact はマージ前に目視する運用とする（ゲート化は後続）
 - `main` には CI 必須チェック（Branch protection）を掛ける方針とする。GitHub 上の設定は権限がある人が行う
 - CD の GitHub Environment `production` にレビュー必須を付けられるなら付ける
 - flaky テストは直すか quarantine する。黙って skip しない
@@ -62,7 +89,7 @@ VLAN3（作業用）→ VLAN1（本番）の到達は最小ポートのみ（Vis
 
 | ファイル | 役割 |
 | --- | --- |
-| [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml) | `pull_request` / `push` to `main` → `mix precommit` |
+| [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml) | `pull_request` / `push` to `main` → `mix precommit` + deps audit（可視化） |
 | [`.github/workflows/cd.yml`](../../../.github/workflows/cd.yml) | `v*` タグ / 手動 → GHCR push |
 
 ソースの改行は LF 固定（`.gitattributes`）。Windows で CRLF にすると `format --check-formatted` が落ちる。
