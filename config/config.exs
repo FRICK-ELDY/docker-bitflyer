@@ -47,8 +47,7 @@ config :bitflyer, Bitflyer.Risk,
 config :bitflyer, Bitflyer.Observe.Discord,
   webhook_url: nil,
   cooldown_ms: 60_000,
-  http_client: Bitflyer.Observe.Discord.HTTP,
-  attach?: true
+  http_client: Bitflyer.Observe.Discord.HTTP
 
 config :ui,
   generators: [timestamp_type: :utc_datetime]

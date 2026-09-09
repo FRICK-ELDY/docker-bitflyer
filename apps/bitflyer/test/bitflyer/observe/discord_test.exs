@@ -45,7 +45,6 @@ defmodule Bitflyer.Observe.DiscordTest do
         {Discord,
          name: :"discord-unset-#{System.unique_integer([:positive])}",
          webhook_url: nil,
-         attach?: false,
          http_client: CapturingHTTP}
       )
 
@@ -60,8 +59,7 @@ defmodule Bitflyer.Observe.DiscordTest do
 
     pid =
       start_supervised!(
-        {Discord,
-         name: name, webhook_url: url, attach?: false, cooldown_ms: 0, http_client: CapturingHTTP}
+        {Discord, name: name, webhook_url: url, cooldown_ms: 0, http_client: CapturingHTTP}
       )
 
     assert :ok =
@@ -78,6 +76,29 @@ defmodule Bitflyer.Observe.DiscordTest do
     refute content =~ "test-secret-token"
   end
 
+  test "truncates content to Discord 2000 character limit" do
+    name = :"discord-trunc-#{System.unique_integer([:positive])}"
+
+    pid =
+      start_supervised!(
+        {Discord,
+         name: name,
+         webhook_url: "https://discord.example/hook",
+         cooldown_ms: 0,
+         http_client: CapturingHTTP}
+      )
+
+    assert :ok =
+             Discord.notify(pid, :halt, %{
+               reason: String.duplicate("x", 3000),
+               trade_mode: :dry_run
+             })
+
+    assert_receive {:discord_post, _, %{content: content}}, 500
+    assert String.length(content) <= 2000
+    assert String.ends_with?(content, "...(trunc)")
+  end
+
   test "cooldown suppresses repeated disconnect notifications" do
     name = :"discord-cool-#{System.unique_integer([:positive])}"
 
@@ -86,7 +107,6 @@ defmodule Bitflyer.Observe.DiscordTest do
         {Discord,
          name: name,
          webhook_url: "https://discord.example/hook",
-         attach?: false,
          cooldown_ms: 60_000,
          http_client: CapturingHTTP}
       )
@@ -107,7 +127,6 @@ defmodule Bitflyer.Observe.DiscordTest do
         {Discord,
          name: name,
          webhook_url: "https://discord.example/hook",
-         attach?: false,
          cooldown_ms: 60_000,
          http_client: FailingHTTP}
       )
@@ -117,25 +136,30 @@ defmodule Bitflyer.Observe.DiscordTest do
 
     assert Process.alive?(pid)
 
-    # 失敗後も last_sent_at を進めるので、連打で HTTP を繰り返さない
     assert :ok =
              Discord.notify(pid, :reconcile_mismatch, %{kind: :balance_mismatch, currency: "JPY"})
 
     assert Process.alive?(pid)
   end
 
-  test "telemetry reconcile_mismatch reaches discord adapter" do
+  test "static telemetry install routes events to the target process" do
     name = :"discord-tel-#{System.unique_integer([:positive])}"
+    handler_id = "discord-test-#{System.unique_integer([:positive])}"
 
     _pid =
       start_supervised!(
         {Discord,
          name: name,
          webhook_url: "https://discord.example/hook",
-         attach?: true,
          cooldown_ms: 0,
          http_client: CapturingHTTP}
       )
+
+    assert :ok = Discord.install_telemetry(id: handler_id, target: name)
+
+    on_exit(fn ->
+      Discord.uninstall_telemetry(id: handler_id)
+    end)
 
     assert :ok =
              Telemetry.execute(:reconcile_mismatch, %{count: 1}, %{
@@ -151,18 +175,24 @@ defmodule Bitflyer.Observe.DiscordTest do
     assert content =~ "product=FX_BTC_JPY"
   end
 
-  test "telemetry halt notifies except reconcile_mismatch reason" do
+  test "static telemetry halt notifies except reconcile_mismatch reason" do
     name = :"discord-halt-tel-#{System.unique_integer([:positive])}"
+    handler_id = "discord-test-#{System.unique_integer([:positive])}"
 
     _pid =
       start_supervised!(
         {Discord,
          name: name,
          webhook_url: "https://discord.example/hook",
-         attach?: true,
          cooldown_ms: 0,
          http_client: CapturingHTTP}
       )
+
+    assert :ok = Discord.install_telemetry(id: handler_id, target: name)
+
+    on_exit(fn ->
+      Discord.uninstall_telemetry(id: handler_id)
+    end)
 
     assert Readiness.halt(:submission_unknown) == :ok
     assert_receive {:discord_post, _, %{content: content}}, 500
@@ -173,31 +203,13 @@ defmodule Bitflyer.Observe.DiscordTest do
     refute_receive {:discord_post, _, _}, 100
   end
 
-  test "supervisor stop detaches telemetry handlers via terminate" do
-    name = :"discord-detach-#{System.unique_integer([:positive])}"
-
-    pid =
-      start_supervised!(
-        {Discord,
-         name: name,
-         webhook_url: "https://discord.example/hook",
-         attach?: true,
-         cooldown_ms: 0,
-         http_client: CapturingHTTP}
-      )
-
-    handler_id = "bitflyer-observe-discord-#{:erlang.phash2(pid)}"
+  test "install_telemetry is idempotent for the static production handler id" do
+    assert :ok = Discord.install_telemetry()
+    assert :ok = Discord.install_telemetry()
 
     assert Enum.any?(
              :telemetry.list_handlers([:bitflyer, :reconcile, :mismatch]),
-             &(&1.id == handler_id)
-           )
-
-    assert :ok = stop_supervised(Discord)
-
-    refute Enum.any?(
-             :telemetry.list_handlers([:bitflyer, :reconcile, :mismatch]),
-             &(&1.id == handler_id)
+             &(&1.id == Discord.handler_id())
            )
   end
 end

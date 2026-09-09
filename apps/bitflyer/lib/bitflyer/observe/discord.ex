@@ -2,11 +2,11 @@ defmodule Bitflyer.Observe.Discord do
   @moduledoc """
   Discord Incoming Webhook 通知アダプタ（observe）。
 
-  telemetry を購読し、halt / reconcile_mismatch / disconnect を人に届ける。
-  発注経路には接続しない。Webhook 未設定・送信失敗でも取引を止めない。
+  telemetry は Application 起動時に静的 ID で一度だけ attach し、イベントは
+  登録名の GenServer へ cast する（GenServer 再起動で attach/detach しない）。
 
-  Bot は使わない。チャンネルの Incoming Webhook URL だけを
-  `DISCORD_WEBHOOK_URL` に置く。
+  発注経路には接続しない。Webhook 未設定・送信失敗でも取引を止めない。
+  Bot は使わない。`DISCORD_WEBHOOK_URL` に Incoming Webhook URL を置く。
   """
 
   use GenServer
@@ -18,6 +18,9 @@ defmodule Bitflyer.Observe.Discord do
   @name __MODULE__
   @handler_id "bitflyer-observe-discord"
   @default_cooldown_ms 60_000
+  # Discord Incoming Webhook の content 上限
+  @max_content_length 2000
+  @truncate_suffix "...(trunc)"
 
   @events [
     [:bitflyer, :readiness, :changed],
@@ -54,11 +57,38 @@ defmodule Bitflyer.Observe.Discord do
   @spec config() :: keyword()
   def config, do: Application.get_env(:bitflyer, __MODULE__, [])
 
+  @doc """
+  telemetry ハンドラを静的 ID で一度 attach する。
+
+  `target:` で cast 先（既定は `__MODULE__`）。テストでは一意の `id:` を渡す。
+  """
+  @spec install_telemetry(keyword()) :: :ok
+  def install_telemetry(opts \\ []) do
+    id = Keyword.get(opts, :id, @handler_id)
+    target = Keyword.get(opts, :target, @name)
+
+    case :telemetry.attach_many(id, @events, &__MODULE__.handle_event/4, %{target: target}) do
+      :ok -> :ok
+      {:error, :already_exists} -> :ok
+    end
+  end
+
+  @doc """
+  `install_telemetry/1` で付けたハンドラを外す。
+  """
+  @spec uninstall_telemetry(keyword()) :: :ok
+  def uninstall_telemetry(opts \\ []) do
+    id = Keyword.get(opts, :id, @handler_id)
+    _ = :telemetry.detach(id)
+    :ok
+  end
+
+  @doc false
+  @spec handler_id() :: String.t()
+  def handler_id, do: @handler_id
+
   @impl true
   def init(opts) do
-    # Supervisor 停止時に terminate/2 で telemetry を detach するため必須。
-    Process.flag(:trap_exit, true)
-
     cfg = config()
     webhook_url = Keyword.get(opts, :webhook_url, Keyword.get(cfg, :webhook_url))
 
@@ -66,29 +96,14 @@ defmodule Bitflyer.Observe.Discord do
       Keyword.get(opts, :cooldown_ms, Keyword.get(cfg, :cooldown_ms, @default_cooldown_ms))
 
     http_client = Keyword.get(opts, :http_client, Keyword.get(cfg, :http_client, HTTP))
-    attach? = Keyword.get(opts, :attach?, Keyword.get(cfg, :attach?, true))
-
-    if attach? do
-      :ok = attach_handlers(self())
-    end
 
     {:ok,
      %{
        webhook_url: normalize_url(webhook_url),
        cooldown_ms: cooldown_ms,
        http_client: http_client,
-       last_sent_at: %{},
-       attached?: attach?
+       last_sent_at: %{}
      }}
-  end
-
-  @impl true
-  def terminate(_reason, state) do
-    if state.attached? do
-      _ = :telemetry.detach(handler_id(self()))
-    end
-
-    :ok
   end
 
   @impl true
@@ -161,13 +176,25 @@ defmodule Bitflyer.Observe.Discord do
     trade_mode = metadata[:trade_mode] || TradeMode.current()
     readiness = safe_readiness()
 
-    [
-      "[docker-bitflyer] #{kind_label(kind)}",
-      "trade_mode=#{TradeMode.name(trade_mode)} readiness=#{readiness}",
-      detail_line(kind, metadata)
-    ]
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.join("\n")
+    message =
+      [
+        "[docker-bitflyer] #{kind_label(kind)}",
+        "trade_mode=#{TradeMode.name(trade_mode)} readiness=#{readiness}",
+        detail_line(kind, metadata)
+      ]
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.join("\n")
+
+    truncate_content(message)
+  end
+
+  defp truncate_content(message) when is_binary(message) do
+    if String.length(message) <= @max_content_length do
+      message
+    else
+      keep = @max_content_length - String.length(@truncate_suffix)
+      String.slice(message, 0, keep) <> @truncate_suffix
+    end
   end
 
   defp kind_label(:halt), do: "HALTED"
@@ -220,37 +247,40 @@ defmodule Bitflyer.Observe.Discord do
 
   defp normalize_url(_), do: nil
 
-  defp attach_handlers(pid) do
-    :telemetry.attach_many(
-      handler_id(pid),
-      @events,
-      &__MODULE__.handle_event/4,
-      %{pid: pid}
-    )
-  end
-
-  defp handler_id(pid), do: "#{@handler_id}-#{:erlang.phash2(pid)}"
-
   @doc false
-  def handle_event([:bitflyer, :reconcile, :mismatch], _measurements, metadata, %{pid: pid}) do
-    GenServer.cast(pid, {:notify, :reconcile_mismatch, Map.new(metadata)})
+  def handle_event([:bitflyer, :reconcile, :mismatch], _measurements, metadata, config) do
+    cast_notify(config, :reconcile_mismatch, Map.new(metadata))
   end
 
-  def handle_event([:bitflyer, :market_data, :disconnected], _measurements, metadata, %{pid: pid}) do
-    GenServer.cast(pid, {:notify, :disconnect, Map.new(metadata)})
+  def handle_event([:bitflyer, :market_data, :disconnected], _measurements, metadata, config) do
+    cast_notify(config, :disconnect, Map.new(metadata))
   end
 
-  def handle_event([:bitflyer, :readiness, :changed], _measurements, metadata, %{pid: pid}) do
+  def handle_event([:bitflyer, :readiness, :changed], _measurements, metadata, config) do
     metadata = Map.new(metadata)
     to = Map.get(metadata, :to, "")
 
     # reconcile_mismatch は専用イベントで詳細を送る。二重投稿を避ける。
     if halted_to?(to) and Map.get(metadata, :reason) != :reconcile_mismatch do
-      GenServer.cast(pid, {:notify, :halt, metadata})
+      cast_notify(config, :halt, metadata)
     end
   end
 
   def handle_event(_event, _measurements, _metadata, _config), do: :ok
+
+  defp cast_notify(%{target: target}, kind, metadata) do
+    case resolve_target(target) do
+      nil -> :ok
+      pid when is_pid(pid) -> GenServer.cast(pid, {:notify, kind, metadata})
+    end
+  end
+
+  defp resolve_target(pid) when is_pid(pid) do
+    if Process.alive?(pid), do: pid, else: nil
+  end
+
+  defp resolve_target(name) when is_atom(name), do: Process.whereis(name)
+  defp resolve_target(_), do: nil
 
   defp halted_to?(to) when is_binary(to), do: String.starts_with?(to, "halted")
   defp halted_to?(_), do: false
