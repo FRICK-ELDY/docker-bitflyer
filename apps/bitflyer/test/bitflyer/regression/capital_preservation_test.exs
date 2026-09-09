@@ -10,6 +10,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   - live submission 不明（timeout）→ halt・再送禁止
   - live exchange_order_id 永続化失敗 → halt・再送禁止
   - live 空 BalanceSnapshot → baseline missing で halt
+  - 公開 submit は authorize?: false でも risk を迂回できない
   """
 
   use Bitflyer.DataCase, async: false
@@ -350,6 +351,25 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
       assert SpyExchange.place_count() == 0
       assert Readiness.get() == {:halted, :limit_exceeded}
+    end
+
+    test "authorize?: false cannot bypass risk on public submit" do
+      Application.put_env(:bitflyer, :trade_mode, :dry_run)
+      assert Readiness.get() == :not_ready
+
+      assert {:error, :unsynced, _} =
+               OrderExecutor.submit(command("bypass-1"),
+                 trade_mode: :dry_run,
+                 positions: [],
+                 authorize?: false
+               )
+
+      assert SpyExchange.place_count() == 0
+
+      assert {:ok, nil} =
+               Order
+               |> Ash.Query.filter(internal_order_id == "bypass-1")
+               |> Ash.read_one()
     end
   end
 

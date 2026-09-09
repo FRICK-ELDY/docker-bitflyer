@@ -108,6 +108,8 @@ defmodule Bitflyer.System do
 
   @doc """
   risk 認可のあと order-executor へ渡す（モード別出口・冪等）。
+
+  risk は常に必須。`OrderExecutor.submit/2` 経由でもスキップできない。
   """
   def submit_order(command, opts \\ []) do
     Bitflyer.OrderExecutor.submit(command, opts)
