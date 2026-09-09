@@ -69,7 +69,39 @@
 4. 合わせられないなら停止したまま人に渡す
 5. 復旧後も、最初の数件は通常より厳しい上限で様子を見る
 
-## 開発との差分
+## 停止・再開
+
+### 停止（グレースフル）
+
+コンテナへの SIGTERM / `docker compose stop app` で `Application.prep_stop/1` が走り、発注ゲートが閉じる（`Readiness` を not_ready）。子プロセス停止の猶予は Compose の `stop_grace_period`（45s）を正とする。
+
+### halted の見え方
+
+- `GET /health` が 503、またはレスポンスの readiness が `halted:...`
+- 新規 submit は拒否される（`:circuit_open` / `:unsynced`）
+
+### 再開（`mix bitflyer.resume`）
+
+remote console だけに頼らず、再突合成功時のみ halt を外す。
+
+1. 不整合の原因を直す（残高・建玉・設定・取引所側）
+2. 稼働コンテナで実行する:
+
+   ```bash
+   docker compose exec app mix bitflyer.resume
+   ```
+
+   成功時のみ RiskState の永続 halt を解除し、当該 BEAM を Ready にする。突合失敗時は halt を維持して終了コード 1。
+3. **常駐の `phx.server` と別プロセスで Mix を叩いた場合**は、DB は直っても常駐側 ETS の halted が残る。続けて再起動する:
+
+   ```bash
+   docker compose restart app
+   ```
+
+   起動突合が通り Ready になる。同一 BEAM 上なら IEx で `Bitflyer.System.resume()` でもよい。
+4. `GET /health` で readiness が `ready` であることを確認する
+
+やってはいけないこと: 突合せず `clear_halt` / RiskState だけを手で書き換えて再開する。
 
 詳細は [dev.md](./dev.md) を正とする。本番だけで許すことは次に限る。
 

@@ -48,6 +48,7 @@ defmodule Bitflyer.Startup.Reconcile do
   - `:trade_mode` — 既定は `TradeMode.current/0`
   - `:exchange` — 既定は `Bitflyer.Exchange`
   - `:required_balance_currencies` — live 必須通貨（既定は Application env）
+  - `:skip_persisted_risk?` — true なら永続 RiskState halt を無視（手動 resume 用）
   """
   @spec run(keyword()) :: result()
   def run(opts \\ []) do
@@ -58,7 +59,7 @@ defmodule Bitflyer.Startup.Reconcile do
       Keyword.get_lazy(opts, :required_balance_currencies, &required_balance_currencies/0)
 
     with {:ok, internal} <- restore(trade_mode),
-         :ok <- check_persisted_risk(internal),
+         :ok <- maybe_check_persisted_risk(internal, opts),
          :ok <- reconcile_mode(internal, exchange, required) do
       {:ok, internal}
     end
@@ -127,6 +128,14 @@ defmodule Bitflyer.Startup.Reconcile do
 
   defp check_persisted_risk(%{risk_state: %RiskState{halted: true, reason: reason}}) do
     {:error, reason_from_string(reason), %{source: :risk_state}}
+  end
+
+  defp maybe_check_persisted_risk(internal, opts) do
+    if Keyword.get(opts, :skip_persisted_risk?, false) do
+      :ok
+    else
+      check_persisted_risk(internal)
+    end
   end
 
   defp reconcile_mode(%{trade_mode: mode} = internal, exchange, _required)
