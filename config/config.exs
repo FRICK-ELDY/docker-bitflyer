@@ -29,7 +29,10 @@ config :bitflyer, Bitflyer.MarketData,
 config :bitflyer, Bitflyer.Risk,
   max_order_size: "1",
   max_position_size: "5",
-  market_data_max_age_ms: 5_000
+  market_data_max_age_ms: 5_000,
+  max_daily_loss: "100000",
+  max_orders_per_minute: 20,
+  max_price_deviation_pct: "2"
 
 config :ui,
   generators: [timestamp_type: :utc_datetime]
