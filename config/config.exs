@@ -52,6 +52,9 @@ config :bitflyer, Bitflyer.Observe.Discord,
 config :ui,
   generators: [timestamp_type: :utc_datetime]
 
+# UI BasicAuth（runtime で上書き。prod は必須）
+config :ui, :basic_auth, enabled: false, username: "", password: ""
+
 config :ui, UiWeb.Gettext,
   default_locale: "en",
   locales: ~w(en ja)

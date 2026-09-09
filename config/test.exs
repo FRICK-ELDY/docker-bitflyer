@@ -16,6 +16,9 @@ config :swoosh, :api_client, false
 # Print only warnings and errors during test
 config :logger, level: :warning
 
+# UI BasicAuth はテスト既定オフ（個別テストで Application.put_env する）
+config :ui, :basic_auth, enabled: false, username: "", password: ""
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 
