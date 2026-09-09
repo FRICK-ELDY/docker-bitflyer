@@ -98,12 +98,8 @@ defmodule Bitflyer.System do
   @doc """
   市場データ Feed の状態（接続・再購読回数など）。
   """
-  def market_data_status do
-    try do
-      Bitflyer.MarketData.Feed.status()
-    catch
-      :exit, _ -> %{enabled: false}
-    end
+  def market_data_status(opts \\ []) do
+    Bitflyer.OperationalStatus.feed_snapshot(opts)
   end
 
   @doc """

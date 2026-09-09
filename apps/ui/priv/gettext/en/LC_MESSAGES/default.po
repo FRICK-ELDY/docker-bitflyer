@@ -118,3 +118,28 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "stale"
 msgstr ""
+
+#: lib/ui_web/live/status_live.ex:152
+#, elixir-autogen, elixir-format
+msgid "Feed"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:278
+#, elixir-autogen, elixir-format
+msgid "disabled"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:281
+#, elixir-autogen, elixir-format
+msgid "disconnected"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:170
+#, elixir-autogen, elixir-format
+msgid "subscribes"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:173
+#, elixir-autogen, elixir-format
+msgid "reconnects"
+msgstr ""

@@ -3,11 +3,12 @@ defmodule Bitflyer.OperationalStatus do
   運用画面向けの発注可否スナップショット。
 
   「今トレードしてよいか」の判定正本。UI は表示のみ行い、ここで
-  readiness / live 解禁 / 市場データ鮮度を合成する。
+  readiness / live 解禁 / 市場データ鮮度 / Feed 接続を合成する。
   """
 
   alias Bitflyer.MarketData
   alias Bitflyer.MarketData.Cache
+  alias Bitflyer.MarketData.Feed
   alias Bitflyer.Readiness
   alias Bitflyer.TradeMode
 
@@ -27,6 +28,14 @@ defmodule Bitflyer.OperationalStatus do
           entries: [market_entry()]
         }
 
+  @type feed :: %{
+          enabled?: boolean(),
+          available?: boolean(),
+          connected?: boolean(),
+          subscribe_count: non_neg_integer(),
+          reconnect_attempt: non_neg_integer()
+        }
+
   @type t :: %{
           trade_mode: TradeMode.t(),
           readiness: Readiness.state(),
@@ -34,7 +43,8 @@ defmodule Bitflyer.OperationalStatus do
           halt_reason: reason() | nil,
           orders_allowed?: boolean(),
           orders_reason: reason() | nil,
-          market_data: market()
+          market_data: market(),
+          feed: feed()
         }
 
   @doc """
@@ -46,6 +56,7 @@ defmodule Bitflyer.OperationalStatus do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &TradeMode.current/0)
     live_confirmed? = Keyword.get_lazy(opts, :live_confirmed?, &TradeMode.live_confirmed?/0)
     market_data = Keyword.get_lazy(opts, :market_data, fn -> market_data_snapshot(opts) end)
+    feed = Keyword.get_lazy(opts, :feed, fn -> feed_snapshot(opts) end)
 
     {allowed?, reason} = classify(readiness, trade_mode, market_data, live_confirmed?)
 
@@ -56,7 +67,8 @@ defmodule Bitflyer.OperationalStatus do
       halt_reason: halt_reason(readiness),
       orders_allowed?: allowed?,
       orders_reason: reason,
-      market_data: market_data
+      market_data: market_data,
+      feed: feed
     }
   end
 
@@ -119,6 +131,23 @@ defmodule Bitflyer.OperationalStatus do
     }
   end
 
+  @doc """
+  Feed 接続状態のスナップショット。
+  """
+  @spec feed_snapshot(keyword()) :: feed()
+  def feed_snapshot(opts \\ []) do
+    enabled? = Keyword.get_lazy(opts, :feed_enabled?, &MarketData.enabled?/0)
+
+    status =
+      if enabled? do
+        Keyword.get_lazy(opts, :feed_status, &safe_feed_status/0)
+      else
+        :unavailable
+      end
+
+    normalize_feed(status, enabled?)
+  end
+
   defp classify(readiness, trade_mode, market_data, live_confirmed?) do
     case readiness do
       {:halted, reason} ->
@@ -143,4 +172,35 @@ defmodule Bitflyer.OperationalStatus do
 
   defp halt_reason({:halted, reason}) when is_atom(reason), do: reason
   defp halt_reason(_), do: nil
+
+  defp safe_feed_status do
+    try do
+      Feed.status()
+    catch
+      :exit, _ -> :unavailable
+    end
+  end
+
+  defp normalize_feed(:unavailable, enabled?) do
+    %{
+      enabled?: enabled?,
+      available?: false,
+      connected?: false,
+      subscribe_count: 0,
+      reconnect_attempt: 0
+    }
+  end
+
+  defp normalize_feed(status, enabled?) when is_map(status) do
+    %{
+      enabled?: enabled?,
+      available?: true,
+      connected?: Map.get(status, :connected?, false) == true,
+      subscribe_count: non_neg_int(Map.get(status, :subscribe_count, 0)),
+      reconnect_attempt: non_neg_int(Map.get(status, :reconnect_attempt, 0))
+    }
+  end
+
+  defp non_neg_int(n) when is_integer(n) and n >= 0, do: n
+  defp non_neg_int(_), do: 0
 end

@@ -29,7 +29,7 @@ defmodule Bitflyer.MarketData.Feed do
   end
 
   @doc """
-  現在の接続状態（テスト用）。
+  現在の接続状態（運用画面・テスト用）。
   """
   @spec status(GenServer.server()) :: map()
   def status(server \\ @name) do

@@ -100,4 +100,76 @@ defmodule Bitflyer.OperationalStatusTest do
     refute status.market_data.all_fresh?
     assert hd(status.market_data.entries).age_ms == 10_000
   end
+
+  test "feed_snapshot reports disabled when market data is off" do
+    feed = OperationalStatus.feed_snapshot(feed_enabled?: false)
+
+    refute feed.enabled?
+    refute feed.available?
+    refute feed.connected?
+    assert feed.subscribe_count == 0
+    assert feed.reconnect_attempt == 0
+  end
+
+  test "feed_snapshot normalizes connected feed status" do
+    feed =
+      OperationalStatus.feed_snapshot(
+        feed_enabled?: true,
+        feed_status: %{
+          connected?: true,
+          subscribe_count: 2,
+          reconnect_attempt: 0
+        }
+      )
+
+    assert feed.enabled?
+    assert feed.available?
+    assert feed.connected?
+    assert feed.subscribe_count == 2
+    assert feed.reconnect_attempt == 0
+  end
+
+  test "feed_snapshot coerces non-boolean connected? to false" do
+    feed =
+      OperationalStatus.feed_snapshot(
+        feed_enabled?: true,
+        feed_status: %{
+          connected?: "yes",
+          subscribe_count: 0,
+          reconnect_attempt: 0
+        }
+      )
+
+    refute feed.connected?
+  end
+
+  test "feed_snapshot marks missing process as unavailable" do
+    feed =
+      OperationalStatus.feed_snapshot(
+        feed_enabled?: true,
+        feed_status: :unavailable
+      )
+
+    assert feed.enabled?
+    refute feed.available?
+    refute feed.connected?
+  end
+
+  test "snapshot includes feed from feed_status override" do
+    status =
+      OperationalStatus.snapshot(
+        trade_mode: :dry_run,
+        live_confirmed?: false,
+        feed_enabled?: true,
+        feed_status: %{
+          connected?: false,
+          subscribe_count: 1,
+          reconnect_attempt: 3
+        }
+      )
+
+    refute status.feed.connected?
+    assert status.feed.subscribe_count == 1
+    assert status.feed.reconnect_attempt == 3
+  end
 end

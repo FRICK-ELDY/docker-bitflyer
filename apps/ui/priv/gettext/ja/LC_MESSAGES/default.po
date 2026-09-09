@@ -118,3 +118,28 @@ msgstr "なし"
 #, elixir-autogen, elixir-format
 msgid "stale"
 msgstr "古い"
+
+#: lib/ui_web/live/status_live.ex:152
+#, elixir-autogen, elixir-format
+msgid "Feed"
+msgstr "Feed"
+
+#: lib/ui_web/live/status_live.ex:278
+#, elixir-autogen, elixir-format
+msgid "disabled"
+msgstr "無効"
+
+#: lib/ui_web/live/status_live.ex:281
+#, elixir-autogen, elixir-format
+msgid "disconnected"
+msgstr "切断"
+
+#: lib/ui_web/live/status_live.ex:170
+#, elixir-autogen, elixir-format
+msgid "subscribes"
+msgstr "購読回数"
+
+#: lib/ui_web/live/status_live.ex:173
+#, elixir-autogen, elixir-format
+msgid "reconnects"
+msgstr "再接続回数"
