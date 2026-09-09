@@ -374,21 +374,22 @@ defmodule Bitflyer.Risk do
     end
   end
 
-  defp extract_ltp(%{ltp: %Decimal{} = ltp}), do: ltp
-  defp extract_ltp(%{"ltp" => %Decimal{} = ltp}), do: ltp
+  defp extract_ltp(%{ltp: %Decimal{} = ltp}) do
+    if Decimal.positive?(ltp), do: ltp, else: nil
+  end
+
+  defp extract_ltp(%{"ltp" => %Decimal{} = ltp}) do
+    if Decimal.positive?(ltp), do: ltp, else: nil
+  end
+
   defp extract_ltp(_), do: nil
 
   defp price_deviation_pct(%Decimal{} = price, %Decimal{} = ltp) do
-    # LTP が 0 以下だと除算結果が不正になり上限比較をすり抜ける
-    if Decimal.compare(ltp, Decimal.new(0)) != :gt do
-      Decimal.new("100")
-    else
-      price
-      |> Decimal.sub(ltp)
-      |> Decimal.abs()
-      |> Decimal.div(ltp)
-      |> Decimal.mult(Decimal.new(100))
-    end
+    price
+    |> Decimal.sub(ltp)
+    |> Decimal.abs()
+    |> Decimal.div(ltp)
+    |> Decimal.mult(Decimal.new(100))
   end
 
   defp resolve_recent_order_count(opts) do
@@ -446,7 +447,7 @@ defmodule Bitflyer.Risk do
           val -> to_decimal(val)
         end
 
-      {currency, available}
+      {normalize_currency_key(currency), available}
     end)
     |> Enum.reject(fn {currency, available} -> is_nil(currency) or is_nil(available) end)
     |> Map.new()
@@ -457,11 +458,15 @@ defmodule Bitflyer.Risk do
     |> Enum.map(fn balance ->
       currency = Map.get(balance, :currency) || Map.get(balance, "currency")
       available = Map.get(balance, :available) || Map.get(balance, "available")
-      {currency, to_decimal(available)}
+      {normalize_currency_key(currency), to_decimal(available)}
     end)
     |> Enum.reject(fn {currency, available} -> is_nil(currency) or is_nil(available) end)
     |> Map.new()
   end
+
+  defp normalize_currency_key(key) when is_atom(key), do: Atom.to_string(key)
+  defp normalize_currency_key(key) when is_binary(key), do: key
+  defp normalize_currency_key(_), do: nil
 
   defp to_decimal(%Decimal{} = d), do: d
 
@@ -478,14 +483,25 @@ defmodule Bitflyer.Risk do
 
   defp quote_currency("FX_BTC_JPY"), do: "JPY"
   defp quote_currency("BTC_JPY"), do: "JPY"
-  defp quote_currency(product_code), do: product_code |> String.split("_") |> List.last()
+
+  defp quote_currency(product_code) when is_binary(product_code) do
+    product_code
+    |> String.split("_")
+    |> List.last()
+    |> String.split("-")
+    |> List.first()
+  end
 
   defp base_currency("FX_BTC_JPY"), do: "BTC"
   defp base_currency("BTC_JPY"), do: "BTC"
 
-  defp base_currency(product_code) do
+  defp base_currency(product_code) when is_binary(product_code) do
     parts = String.split(product_code, "_")
-    Enum.at(parts, max(length(parts) - 2, 0))
+
+    parts
+    |> Enum.at(max(length(parts) - 2, 0))
+    |> String.split("-")
+    |> List.first()
   end
 
   defp fetch_positions(product_code, opts) do

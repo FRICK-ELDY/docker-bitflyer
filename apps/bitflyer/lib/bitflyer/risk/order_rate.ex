@@ -88,24 +88,16 @@ defmodule Bitflyer.Risk.OrderRate do
        when is_atom(table) or is_reference(table) do
     since = now - window_ms
 
-    table
-    |> :ets.lookup(trade_mode)
-    |> Enum.count(fn {_mode, ts} -> ts >= since end)
-  rescue
-    ArgumentError -> 0
+    try do
+      :ets.select_count(table, [{{trade_mode, :"$1"}, [{:>=, :"$1", since}], [true]}])
+    rescue
+      ArgumentError -> 0
+    end
   end
 
   defp prune(table, trade_mode, now, window_ms) do
     since = now - window_ms
-
-    table
-    |> :ets.lookup(trade_mode)
-    |> Enum.each(fn
-      {^trade_mode, ts} when ts < since ->
-        true = :ets.delete_object(table, {trade_mode, ts})
-
-      _ ->
-        :ok
-    end)
+    _ = :ets.select_delete(table, [{{trade_mode, :"$1"}, [{:<, :"$1", since}], [true]}])
+    :ok
   end
 end
