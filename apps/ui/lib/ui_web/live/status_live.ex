@@ -1,6 +1,6 @@
 defmodule UiWeb.StatusLive do
   @moduledoc """
-  稼働確認ページ。発注可否・取引モード・Ready・市場データ鮮度・DB を表示する。
+  稼働確認ページ。発注可否・取引モード・Ready・Feed・市場データ鮮度・DB を表示する。
   """
   use UiWeb, :live_view
 
@@ -93,7 +93,7 @@ defmodule UiWeb.StatusLive do
           </p>
         </section>
 
-        <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <div
             id="trade-mode-card"
             class={[
@@ -139,6 +139,39 @@ defmodule UiWeb.StatusLive do
               class="mt-2 text-sm text-error"
             >
               {gettext("Halt reason")}: <span class="font-mono">{@halt_reason}</span>
+            </p>
+          </div>
+
+          <div
+            id="feed-status-card"
+            class={[
+              "rounded-lg border p-4",
+              feed_card_class(@feed)
+            ]}
+          >
+            <dt class="text-sm text-base-content/60">{gettext("Feed")}</dt>
+
+            <dd
+              id="feed-status"
+              class={[
+                "mt-1 font-mono text-lg font-medium",
+                feed_text_class(@feed)
+              ]}
+            >
+              {@feed_label}
+            </dd>
+
+            <p
+              :if={@feed.enabled?}
+              id="feed-status-detail"
+              class="mt-2 space-y-1 text-sm text-base-content/70"
+            >
+              <span class="block font-mono">
+                {gettext("subscribes")}: {@feed.subscribe_count}
+              </span>
+              <span class="block font-mono">
+                {gettext("reconnects")}: {@feed.reconnect_attempt}
+              </span>
             </p>
           </div>
 
@@ -220,6 +253,8 @@ defmodule UiWeb.StatusLive do
     |> assign(:orders_allowed?, status.orders_allowed?)
     |> assign(:orders_reason, reason_label(status.orders_reason))
     |> assign(:orders_gate_label, orders_gate_label(status.orders_allowed?))
+    |> assign(:feed, status.feed)
+    |> assign(:feed_label, feed_label(status.feed))
     |> assign(:market_all_fresh?, status.market_data.all_fresh?)
     |> assign(:market_freshness_label, market_freshness_label(status.market_data))
     |> assign(:market_entries, status.market_data.entries)
@@ -232,6 +267,11 @@ defmodule UiWeb.StatusLive do
 
   defp market_freshness_label(%{all_fresh?: true}), do: gettext("fresh")
   defp market_freshness_label(_), do: gettext("stale")
+
+  defp feed_label(%{enabled?: false}), do: gettext("disabled")
+  defp feed_label(%{available?: false}), do: gettext("unavailable")
+  defp feed_label(%{connected?: true}), do: gettext("connected")
+  defp feed_label(_), do: gettext("disconnected")
 
   defp reason_label(nil), do: nil
   defp reason_label(reason) when is_atom(reason), do: Atom.to_string(reason)
@@ -260,6 +300,16 @@ defmodule UiWeb.StatusLive do
   defp readiness_text_class(:not_ready), do: "text-warning"
   defp readiness_text_class({:halted, _}), do: "text-error"
   defp readiness_text_class(_), do: "text-base-content"
+
+  defp feed_card_class(%{enabled?: false}), do: "border-base-300 bg-base-200/40"
+  defp feed_card_class(%{available?: false}), do: "border-error/40 bg-error/10"
+  defp feed_card_class(%{connected?: true}), do: "border-success/30 bg-success/5"
+  defp feed_card_class(_), do: "border-warning/40 bg-warning/5"
+
+  defp feed_text_class(%{enabled?: false}), do: "text-base-content/70"
+  defp feed_text_class(%{available?: false}), do: "text-error"
+  defp feed_text_class(%{connected?: true}), do: "text-success"
+  defp feed_text_class(_), do: "text-warning"
 
   defp schedule_refresh do
     Process.send_after(self(), :refresh, @refresh_ms)

@@ -32,12 +32,14 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#readiness", "not_ready")
     assert has_element?(view, "#orders-gate-label", "STOPPED")
     assert has_element?(view, "#orders-gate-reason", "not_ready")
+    assert has_element?(view, "#feed-status", "disabled")
     assert has_element?(view, "#market-freshness", "stale")
     assert has_element?(view, "#db-status-label")
     assert has_element?(view, "#status-page", "Operational health check")
     assert has_element?(view, "#status-page", "Trade mode")
     assert has_element?(view, "#status-page", "Readiness")
     assert has_element?(view, "#status-page", "Orders")
+    assert has_element?(view, "#status-page", "Feed")
     assert has_element?(view, "#status-page", "Market data")
     assert has_element?(view, "#locale-switcher")
   end
@@ -52,8 +54,10 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#status-page", "取引モード")
     assert has_element?(view, "#status-page", "Ready 状態")
     assert has_element?(view, "#status-page", "発注")
+    assert has_element?(view, "#status-page", "Feed")
     assert has_element?(view, "#status-page", "市場データ")
     assert has_element?(view, "#orders-gate-label", "停止")
+    assert has_element?(view, "#feed-status", "無効")
     assert has_element?(view, "#locale-ja")
   end
 
@@ -76,6 +80,7 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#orders-gate-label", "ALLOWED")
     refute has_element?(view, "#orders-gate-reason")
     assert has_element?(view, "#readiness", "ready")
+    assert has_element?(view, "#feed-status", "disabled")
     assert has_element?(view, "#market-freshness", "fresh")
     assert has_element?(view, "#market-freshness-FX_BTC_JPY", "fresh")
   end
