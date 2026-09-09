@@ -119,6 +119,35 @@ discord_webhook =
 
 config :bitflyer, Bitflyer.Observe.Discord, webhook_url: discord_webhook
 
+# UI BasicAuth。prod は必須。dev/test は両方揃ったときだけ有効。
+ui_basic_user = System.get_env("UI_BASIC_AUTH_USERNAME")
+ui_basic_pass = System.get_env("UI_BASIC_AUTH_PASSWORD")
+
+ui_basic_present? =
+  is_binary(ui_basic_user) and String.trim(ui_basic_user) != "" and
+    is_binary(ui_basic_pass) and String.trim(ui_basic_pass) != ""
+
+ui_basic_enabled? =
+  case config_env() do
+    :prod ->
+      if ui_basic_present? do
+        true
+      else
+        raise """
+        UI_BASIC_AUTH_USERNAME and UI_BASIC_AUTH_PASSWORD are required in prod.
+        /health* stays unauthenticated; Status UI requires BasicAuth.
+        """
+      end
+
+    _ ->
+      ui_basic_present?
+  end
+
+config :ui, :basic_auth,
+  enabled: ui_basic_enabled?,
+  username: if(ui_basic_present?, do: String.trim(ui_basic_user), else: ""),
+  password: if(ui_basic_present?, do: String.trim(ui_basic_pass), else: "")
+
 # ## Using releases
 #
 # If you use `mix release`, you need to explicitly enable the server
@@ -166,16 +195,35 @@ if config_env() == :prod do
 
   host = System.get_env("PHX_HOST") || "example.com"
 
+  # 公開面の最小化: 既定は loopback。VLAN 等へ意図的に出すときだけ PHX_HTTP_IP を変える。
+  # 許可値: 127.0.0.1（既定）/ 0.0.0.0 / ::1 / ::
+  http_ip =
+    case System.get_env("PHX_HTTP_IP") || "127.0.0.1" do
+      "127.0.0.1" ->
+        {127, 0, 0, 1}
+
+      "0.0.0.0" ->
+        {0, 0, 0, 0}
+
+      "::1" ->
+        {0, 0, 0, 0, 0, 0, 0, 1}
+
+      "::" ->
+        {0, 0, 0, 0, 0, 0, 0, 0}
+
+      other ->
+        raise """
+        invalid PHX_HTTP_IP #{inspect(other)}.
+        Allowed: 127.0.0.1, 0.0.0.0, ::1, ::
+        """
+    end
+
   config :ui, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :ui, UiWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
-      # Enable IPv6 and bind on all interfaces.
-      # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
-      # See the documentation on https://bandit.hexdocs.pm/Bandit.html#t:options/0
-      # for details about using IPv6 vs IPv4 and loopback vs public addresses.
-      ip: {0, 0, 0, 0, 0, 0, 0, 0}
+      ip: http_ip
     ],
     secret_key_base: secret_key_base
 

@@ -8,7 +8,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 
 ## 現状
 
-開発用 Compose で常駐起動できる。`TRADE_MODE` の既定は `dry_run`。live 実発注に必要な署名付き private API・UI 認証・本番 release は未着手。
+開発用 Compose で常駐起動できる。`TRADE_MODE` の既定は `dry_run`。live 実発注に必要な署名付き private API・本番 release は未着手。
 
 起動・観測の要点:
 
@@ -35,7 +35,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | UI StatusLive | implemented | 発注可否・Feed・鮮度・モード色分け |
 | CI（`mix precommit` / GitHub Actions） | implemented | PR と `main` |
 | private bitFlyer API（署名付き REST） | unavailable | 既定は `Exchange.Unavailable` |
-| UI 認証（BasicAuth 等） | unavailable | browser scope は未認証 |
+| UI 認証（BasicAuth） | implemented | `UI_BASIC_AUTH_*`。prod 必須。`/health*` は対象外 |
 | 本番 release Compose | unavailable | 開発用 `Dockerfile` / `compose.yaml` のみ（[ToDo 03](.workspace/2_todo/03-cd-prod-host.md)） |
 
 完了した骨格・CI は [3_archive/](.workspace/3_archive/)。改善の優先順位は [improvement-plan.md](.workspace/0_doc/evaluation/improvement-plan.md)。
@@ -97,6 +97,8 @@ GitHub Actions も同じ `mix precommit` を PR と `main` で実行する。範
 | `TRADE_MODE` | `dry_run` |
 | `BITFLYER_LIVE_CONFIRM` | live 時のみ。UTC 当日 `YYYY-MM-DD` |
 | `DISCORD_WEBHOOK_URL` | 任意。Discord Incoming Webhook。未設定でも起動する |
+| `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` | Status UI。prod 必須。dev は両方揃ったときだけ有効 |
+| `PHX_HTTP_IP` | prod のみ。既定 `127.0.0.1`（公開面最小化） |
 
 ## よく使う mix
 
@@ -128,7 +130,6 @@ docker compose run --rm app mix setup
 ## これから作るもの
 
 - 署名付き private API client（cancel / 照会 / 約定反映）
-- UI 認証と本番公開面の最小化
 - 本番用 release / Compose と配備手順（[ToDo 03](.workspace/2_todo/03-cd-prod-host.md)）
 - 秘密情報を Git に入れない本番実行手順
 

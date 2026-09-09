@@ -9,6 +9,9 @@ defmodule UiWeb.Router do
     plug :protect_from_forgery
     plug :put_secure_browser_headers
     plug UiWeb.Plugs.Locale
+
+    # /health* は :api。Status / locale / LiveView は認証必須（prod で資格情報必須）。
+    plug UiWeb.Plugs.BasicAuth
   end
 
   pipeline :api do
@@ -30,7 +33,7 @@ defmodule UiWeb.Router do
 
     get "/locale/:locale", LocaleController, :update
 
-    live_session :default, on_mount: [UiWeb.Hooks.Locale] do
+    live_session :default, on_mount: [UiWeb.Hooks.BasicAuth, UiWeb.Hooks.Locale] do
       live "/", StatusLive
     end
   end

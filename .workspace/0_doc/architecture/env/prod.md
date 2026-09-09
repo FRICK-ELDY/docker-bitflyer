@@ -21,6 +21,15 @@
 | データストア | 名前付きボリュームまたはホストの永続ディスク。定期バックアップ |
 | 秘密情報 | ホストのシークレットまたは環境変数。リポジトリ・イメージ・ログに出さない |
 | 公開ポート | 管理 UI や DB を不用意に公開しない |
+| UI 認証 | `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` 必須（`:browser` のみ。`/health*` は認証なし） |
+| HTTP bind | 既定 `PHX_HTTP_IP=127.0.0.1`。VLAN 越しに出すときだけ明示変更 |
+
+## UI 公開面
+
+- Status（`/`）と locale 切替は BasicAuth。資格情報はホスト側シークレットのみ
+- 外形監視用の `/health/live`・`/health/ready`・`/health` は認証なし（詳細は取引画面より薄い）
+- 本番 Endpoint の既定 bind は loopback。`0.0.0.0` / `::` は意図的な公開時のみ
+- 作業用 PC から見る場合も、ネットワーク ACL と BasicAuth の両方で守る（どちらか一方に頼らない）
 
 ## 稼働要件
 
