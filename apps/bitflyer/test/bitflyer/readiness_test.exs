@@ -113,4 +113,8 @@ defmodule Bitflyer.ReadinessTest do
     assert Readiness.halt(:reconcile_mismatch) == :ok
     refute_receive {:telemetry, [:bitflyer, :readiness, :changed], _, _}, 50
   end
+
+  test "mark_not_ready_safe is no-op when Readiness process is missing" do
+    assert :ok = Readiness.mark_not_ready_safe(Bitflyer.Readiness.DoesNotExist)
+  end
 end

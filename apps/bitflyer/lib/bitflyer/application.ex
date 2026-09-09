@@ -5,8 +5,10 @@ defmodule Bitflyer.Application do
 
   use Application
 
-  # Compose stop_grace_period と揃える（進行中の永続・Feed 切断を待つ）
-  @child_shutdown_ms 30_000
+  # Supervisor は子を直列停止する。1 子あたりの上限を短くし、
+  # Compose stop_grace_period（45s）内に Repo 等の後続クリーンアップ余地を残す。
+  # 発注停止自体は prep_stop で即時に行う。
+  @child_shutdown_ms 5_000
 
   @impl true
   def start(_type, _args) do
@@ -32,19 +34,24 @@ defmodule Bitflyer.Application do
   @doc """
   アプリケーション停止前に発注ゲートを閉じる（SIGTERM / `Application.stop`）。
 
-  OTP コールバックは `prep_stop/1`。`Readiness.mark_not_ready/0` により以降の
+  OTP コールバックは `prep_stop/1`。`Readiness.mark_not_ready_safe/0` により以降の
   `Risk.authorize` が新規 submit を拒否する。halted 中は halted を維持する。
   """
   @impl true
   def prep_stop(state) do
-    previous = Bitflyer.Readiness.get()
+    previous =
+      try do
+        Bitflyer.Readiness.get()
+      catch
+        :exit, _ -> :not_ready
+      end
 
     Bitflyer.Telemetry.log(:info, "prep_stop: closing order gate", %{
       readiness: Bitflyer.Readiness.format(previous),
       reason: :application_stop
     })
 
-    _ = Bitflyer.Readiness.mark_not_ready()
+    _ = Bitflyer.Readiness.mark_not_ready_safe()
     state
   end
 

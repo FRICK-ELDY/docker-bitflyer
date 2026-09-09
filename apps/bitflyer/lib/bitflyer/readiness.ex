@@ -89,6 +89,34 @@ defmodule Bitflyer.Readiness do
   end
 
   @doc """
+  `mark_not_ready/1` の安全版。未起動・停止中は no-op（`:noproc` で落とさない）。
+  """
+  @spec mark_not_ready_safe(GenServer.server()) :: :ok
+  def mark_not_ready_safe(server \\ @name)
+
+  def mark_not_ready_safe(server) when is_atom(server) do
+    case Process.whereis(server) do
+      nil ->
+        :ok
+
+      _pid ->
+        try do
+          mark_not_ready(server)
+        catch
+          :exit, _reason -> :ok
+        end
+    end
+  end
+
+  def mark_not_ready_safe(server) do
+    try do
+      mark_not_ready(server)
+    catch
+      :exit, _reason -> :ok
+    end
+  end
+
+  @doc """
   どの状態からでも `{:halted, reason}` にする。
   """
   @spec halt(reason(), GenServer.server()) :: :ok
