@@ -5,6 +5,11 @@ defmodule Bitflyer.Application do
 
   use Application
 
+  # Supervisor は子を直列停止する。1 子あたりの上限を短くし、
+  # Compose stop_grace_period（45s）内に Repo 等の後続クリーンアップ余地を残す。
+  # 発注停止自体は prep_stop で即時に行う。
+  @child_shutdown_ms 5_000
+
   @impl true
   def start(_type, _args) do
     children =
@@ -13,8 +18,11 @@ defmodule Bitflyer.Application do
         Bitflyer.Readiness,
         Bitflyer.MarketData.Cache,
         Bitflyer.Risk.OrderRate,
-        {Task.Supervisor, name: Bitflyer.MarketData.TaskSupervisor},
-        Bitflyer.Startup.Reconciler
+        Supervisor.child_spec(
+          {Task.Supervisor, name: Bitflyer.MarketData.TaskSupervisor},
+          shutdown: @child_shutdown_ms
+        ),
+        Supervisor.child_spec(Bitflyer.Startup.Reconciler, shutdown: @child_shutdown_ms)
       ] ++ market_data_feed()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -23,9 +31,35 @@ defmodule Bitflyer.Application do
     Supervisor.start_link(children, opts)
   end
 
+  @doc """
+  アプリケーション停止前に発注ゲートを閉じる（SIGTERM / `Application.stop`）。
+
+  OTP コールバックは `prep_stop/1`。`Readiness.mark_not_ready_safe/0` により以降の
+  `Risk.authorize` が新規 submit を拒否する。halted 中は halted を維持する。
+  """
+  @impl true
+  def prep_stop(state) do
+    previous =
+      try do
+        Bitflyer.Readiness.get()
+      catch
+        :exit, _ -> :not_ready
+      end
+
+    Bitflyer.Telemetry.log(:info, "prep_stop: closing order gate", %{
+      readiness: Bitflyer.Readiness.format(previous),
+      reason: :application_stop
+    })
+
+    _ = Bitflyer.Readiness.mark_not_ready_safe()
+    state
+  end
+
   defp market_data_feed do
     if Bitflyer.MarketData.enabled?() do
-      [{Bitflyer.MarketData.Feed, []}] ++ strategy_runner()
+      [
+        Supervisor.child_spec({Bitflyer.MarketData.Feed, []}, shutdown: @child_shutdown_ms)
+      ] ++ strategy_runner()
     else
       []
     end
@@ -33,7 +67,9 @@ defmodule Bitflyer.Application do
 
   defp strategy_runner do
     if Bitflyer.Strategy.enabled?() do
-      [{Bitflyer.Strategy.Runner, []}]
+      [
+        Supervisor.child_spec({Bitflyer.Strategy.Runner, []}, shutdown: @child_shutdown_ms)
+      ]
     else
       []
     end

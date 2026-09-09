@@ -26,6 +26,8 @@ services:
     entrypoint: ["sh", "/app/bin/docker-entrypoint.sh"]
     command: ["mix", "phx.server"]
     restart: unless-stopped
+    # 子は直列停止するため、1 子 5s × 複数 + Repo 用に 45s（prep_stop で発注は即停止）
+    stop_grace_period: 45s
     volumes:
       - .:/app
       - mix_deps:/app/deps

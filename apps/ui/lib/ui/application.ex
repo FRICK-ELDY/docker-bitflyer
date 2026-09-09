@@ -30,4 +30,14 @@ defmodule Ui.Application do
     UiWeb.Endpoint.config_change(changed, removed)
     :ok
   end
+
+  @doc """
+  UI アプリ停止が先に走るため、ここでも発注ゲートを閉じる（bitflyer 側 prep_stop の先回り）。
+  Readiness 未起動時は no-op。
+  """
+  @impl true
+  def prep_stop(state) do
+    _ = Bitflyer.Readiness.mark_not_ready_safe()
+    state
+  end
 end
