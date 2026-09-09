@@ -7,6 +7,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   - trade_mode 分離
   - boot reconcile halt → 発注不可
   - risk 拒否が executor 経由でも永続化・REST を起こさない
+  - live submission 不明（timeout）→ halt・再送禁止
   """
 
   use Bitflyer.DataCase, async: false
@@ -66,6 +67,27 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
     @impl true
     def place_order(_request), do: {:error, :must_not_place}
+  end
+
+  defmodule TimeoutExchange do
+    @behaviour Bitflyer.Exchange.Client
+
+    @impl true
+    def fetch_reconcile_snapshot do
+      {:ok, %{positions: [], balances: [], open_orders: []}}
+    end
+
+    @impl true
+    def place_order(_request) do
+      Agent.update(__MODULE__.Counter, fn n -> n + 1 end)
+      {:error, :timeout}
+    end
+
+    def start_counter, do: Agent.start_link(fn -> 0 end, name: __MODULE__.Counter)
+    def place_count, do: Agent.get(__MODULE__.Counter, & &1)
+
+    def stop_counter,
+      do: if(Process.whereis(__MODULE__.Counter), do: Agent.stop(__MODULE__.Counter))
   end
 
   setup do
@@ -307,6 +329,50 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
       assert SpyExchange.place_count() == 0
       assert Readiness.get() == {:halted, :limit_exceeded}
+    end
+  end
+
+  describe "submission unknown" do
+    test "live timeout halts and blocks resubmit without treating as rejected" do
+      {:ok, _} = TimeoutExchange.start_counter()
+
+      on_exit(fn ->
+        TimeoutExchange.stop_counter()
+      end)
+
+      Application.put_env(:bitflyer, :trade_mode, :live)
+      Application.put_env(:bitflyer, :live_confirmed, true)
+      Application.put_env(:bitflyer, :exchange_client, TimeoutExchange)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market()
+
+      assert {:error, :submission_unknown, %{reason: :timeout}} =
+               OrderExecutor.submit(command("unknown-1"),
+                 trade_mode: :live,
+                 positions: []
+               )
+
+      assert TimeoutExchange.place_count() == 1
+
+      assert {:ok, %Order{status: :submission_unknown}} =
+               Order
+               |> Ash.Query.filter(internal_order_id == "unknown-1")
+               |> Ash.read_one()
+
+      assert Readiness.get() == {:halted, :submission_unknown}
+
+      assert {:error, :circuit_open, _} =
+               OrderExecutor.submit(command("unknown-2"),
+                 trade_mode: :live,
+                 positions: []
+               )
+
+      assert TimeoutExchange.place_count() == 1
+
+      assert {:ok, nil} =
+               Order
+               |> Ash.Query.filter(internal_order_id == "unknown-2")
+               |> Ash.read_one()
     end
   end
 

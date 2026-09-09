@@ -3,6 +3,15 @@ defmodule Bitflyer.OrderExecutor.Live do
 
   alias Bitflyer.Trading.Order
 
+  # 取引所に注文が存在しないと確定できる理由のみ。それ以外は提出不明として扱う。
+  @definite_rejection_reasons [
+    :exchange_unavailable,
+    :rejected_by_exchange,
+    :insufficient_funds,
+    :invalid_order,
+    :invalid_request
+  ]
+
   @doc """
   `exchange_order_gate` 通過時のみ取引所 REST へ発注する。
   """
@@ -13,7 +22,8 @@ defmodule Bitflyer.OrderExecutor.Live do
         place(order)
 
       {:halted, reason} ->
-        _ = reject(order, reason)
+        # REST 前のゲート失敗は未送信のため確定拒否でよい
+        _ = update_status(order, :rejected, reason)
         {:error, :exchange_halted, %{reason: reason}}
     end
   end
@@ -60,26 +70,47 @@ defmodule Bitflyer.OrderExecutor.Live do
         end
 
       {:error, reason} ->
-        _ = reject(order, reason)
-        {:error, :exchange_error, %{reason: reason}}
+        handle_place_error(order, reason)
     end
   end
 
-  defp reject(%Order{} = order, reason) do
+  defp handle_place_error(%Order{} = order, reason) do
+    if definite_rejection?(reason) do
+      _ = update_status(order, :rejected, reason)
+      {:error, :exchange_error, %{reason: reason}}
+    else
+      # timeout / 切断等: 受注不明。rejected にせず halt して再送を止める
+      _ = update_status(order, :submission_unknown, reason)
+      _ = Bitflyer.Risk.open_circuit(:submission_unknown)
+
+      {:error, :submission_unknown, %{reason: reason}}
+    end
+  end
+
+  defp definite_rejection?(reason) when is_atom(reason) do
+    reason in @definite_rejection_reasons
+  end
+
+  defp definite_rejection?(_reason), do: false
+
+  defp update_status(%Order{} = order, status, reason)
+       when status in [:rejected, :submission_unknown] do
     case order
-         |> Ash.Changeset.for_update(:update, %{status: :rejected})
+         |> Ash.Changeset.for_update(:update, %{status: status})
          |> Ash.update() do
       {:ok, updated} ->
+        level = if status == :submission_unknown, do: :critical, else: :warning
+
         Bitflyer.Telemetry.log(
-          :warning,
-          "live order rejected",
+          level,
+          "live order #{status}",
           %{
             internal_order_id: order.internal_order_id,
             product_code: order.product_code,
             side: order.side,
             trade_mode: :live,
             reason: reason,
-            status: :rejected
+            status: status
           }
         )
 
