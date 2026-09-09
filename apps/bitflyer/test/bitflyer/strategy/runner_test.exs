@@ -28,9 +28,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
       params: [size: "0.01", side: :buy]
     )
 
-    {:ok, pid} = start_supervised({Runner, [throttle_ms: 0]})
-    allow_runner_repo(pid)
-    _ = :sys.get_state(Runner)
+    start_runner(throttle_ms: 0)
 
     on_exit(fn ->
       reset_readiness()
@@ -40,6 +38,19 @@ defmodule Bitflyer.Strategy.RunnerTest do
     end)
 
     :ok
+  end
+
+  defp start_runner(opts) do
+    opts = Keyword.merge([throttle_ms: 0, load_submitted?: false], opts)
+    {:ok, pid} = start_supervised({Runner, opts})
+    allow_runner_repo(pid)
+
+    if opts[:load_submitted?] == false do
+      send(pid, :load_submitted)
+    end
+
+    _ = :sys.get_state(Runner)
+    {:ok, pid}
   end
 
   defp allow_runner_repo(pid) when is_pid(pid) do
@@ -83,9 +94,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
 
   test "throttle_ms prevents immediate retry after failed submit" do
     stop_supervised(Runner)
-    {:ok, pid} = start_supervised({Runner, [throttle_ms: 60_000]})
-    allow_runner_repo(pid)
-    _ = :sys.get_state(Runner)
+    start_runner(throttle_ms: 60_000)
 
     assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
     assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
@@ -116,8 +125,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
              |> Ash.create()
 
     stop_supervised(Runner)
-    {:ok, pid} = start_supervised({Runner, [throttle_ms: 0]})
-    allow_runner_repo(pid)
+    start_runner(throttle_ms: 0)
     state = :sys.get_state(Runner)
 
     assert MapSet.member?(state.submitted, @order_id)
@@ -133,6 +141,36 @@ defmodule Bitflyer.Strategy.RunnerTest do
              |> Ash.read()
   end
 
+  test "ignores ticks until submitted ids are loaded" do
+    stop_supervised(Runner)
+
+    {:ok, pid} = start_supervised({Runner, [throttle_ms: 0, load_submitted?: :pending]})
+    allow_runner_repo(pid)
+
+    assert %{submitted: nil} = :sys.get_state(pid)
+
+    assert Readiness.mark_ready() == :ok
+    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
+    _ = :sys.get_state(pid)
+
+    assert {:ok, nil} =
+             Order
+             |> Ash.Query.filter(internal_order_id == ^@order_id)
+             |> Ash.read_one()
+
+    send(pid, :load_submitted)
+    _ = :sys.get_state(pid)
+
+    assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
+    _ = :sys.get_state(pid)
+
+    assert {:ok, %Order{}} =
+             Order
+             |> Ash.Query.filter(internal_order_id == ^@order_id)
+             |> Ash.read_one()
+  end
+
   test "invalid_command is settled and not retried" do
     stop_supervised(Runner)
 
@@ -142,9 +180,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
       params: []
     )
 
-    {:ok, pid} = start_supervised({Runner, [throttle_ms: 0]})
-    allow_runner_repo(pid)
-    _ = :sys.get_state(Runner)
+    start_runner(throttle_ms: 0)
 
     assert Readiness.mark_ready() == :ok
     assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok

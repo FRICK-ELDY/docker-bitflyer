@@ -3,7 +3,7 @@ defmodule Bitflyer.Strategy.Runner do
   Feed の tick を受け、Strategy → Risk → Executor へ渡す駆動役。
 
   Ready 前など一時失敗は再試行する。受理済み・永続失敗は `internal_order_id`
-  単位で settled とし再送しない。起動時は Order テーブルから ID を復元する。
+  単位で settled とし再送しない。  起動時は Order から ID を復元するまで tick を無視する（起動レース回避）。
   銘柄ごとに `throttle_ms` で評価頻度を制限する。
   """
 
@@ -55,17 +55,18 @@ defmodule Bitflyer.Strategy.Runner do
 
   @impl true
   def init(opts) do
+    {submitted, schedule_load?} = submitted_boot(Keyword.get(opts, :load_submitted?, true))
+
     state = %{
       module: Keyword.get_lazy(opts, :module, &Strategy.module/0),
       params: Keyword.get_lazy(opts, :params, &Strategy.params/0),
       throttle_ms: Keyword.get(opts, :throttle_ms, Strategy.throttle_ms()),
-      load_submitted?: Keyword.get(opts, :load_submitted?, true),
-      submitted: MapSet.new(),
+      # ロード完了まで nil。tick を無視して起動レースでの二重評価を防ぐ
+      submitted: submitted,
       last_evaluated: %{}
     }
 
-    if state.load_submitted? do
-      # continue ではなく後続メッセージにし、テストの Sandbox.allow 後に読めるようにする
+    if schedule_load? do
       send(self(), :load_submitted)
     end
 
@@ -74,8 +75,7 @@ defmodule Bitflyer.Strategy.Runner do
 
   @impl true
   def handle_info(:load_submitted, state) do
-    submitted = MapSet.union(state.submitted, load_submitted_ids())
-    {:noreply, %{state | submitted: submitted}}
+    {:noreply, %{state | submitted: load_submitted_ids()}}
   end
 
   def handle_info({:tick, {:ticker, product_code} = key, value}, state) do
@@ -83,6 +83,9 @@ defmodule Bitflyer.Strategy.Runner do
 
     state =
       cond do
+        is_nil(state.submitted) ->
+          state
+
         # 高頻度 tick では Application env より先に throttle 判定する
         throttled?(state, product_code, now) ->
           state
@@ -99,6 +102,13 @@ defmodule Bitflyer.Strategy.Runner do
   end
 
   def handle_info(_other, state), do: {:noreply, state}
+
+  # true — 起動時に DB ロードをスケジュール（完了まで submitted は nil）
+  # false — 空の MapSet で即受付（テスト用）
+  # :pending — nil のままロードしない（起動レース検証用）
+  defp submitted_boot(true), do: {nil, true}
+  defp submitted_boot(false), do: {MapSet.new(), false}
+  defp submitted_boot(:pending), do: {nil, false}
 
   # monotonic 時刻は負になり得るため、未評価は 0 ではなくキー欠如で表す
   defp throttled?(%{throttle_ms: throttle_ms, last_evaluated: last_evaluated}, product_code, now) do
@@ -270,7 +280,10 @@ defmodule Bitflyer.Strategy.Runner do
   end
 
   defp load_submitted_ids do
-    case Ash.read(Order) do
+    Order
+    |> Ash.Query.select([:internal_order_id])
+    |> Ash.read()
+    |> case do
       {:ok, orders} ->
         orders
         |> Enum.map(& &1.internal_order_id)
