@@ -3,6 +3,55 @@ defmodule Bitflyer.HealthTest do
 
   alias Bitflyer.Health
 
+  @fresh_market %{
+    enabled?: true,
+    max_age_ms: 5_000,
+    all_fresh?: true,
+    entries: [
+      %{product_code: "FX_BTC_JPY", key: {:ticker, "FX_BTC_JPY"}, fresh?: true, age_ms: 10}
+    ]
+  }
+
+  @stale_market %{
+    enabled?: true,
+    max_age_ms: 5_000,
+    all_fresh?: false,
+    entries: [
+      %{product_code: "FX_BTC_JPY", key: {:ticker, "FX_BTC_JPY"}, fresh?: false, age_ms: :miss}
+    ]
+  }
+
+  @disabled_market %{
+    enabled?: false,
+    max_age_ms: 5_000,
+    all_fresh?: false,
+    entries: []
+  }
+
+  @connected_feed %{
+    enabled?: true,
+    available?: true,
+    connected?: true,
+    subscribe_count: 1,
+    reconnect_attempt: 0
+  }
+
+  @disconnected_feed %{
+    enabled?: true,
+    available?: true,
+    connected?: false,
+    subscribe_count: 1,
+    reconnect_attempt: 2
+  }
+
+  @unavailable_feed %{
+    enabled?: true,
+    available?: false,
+    connected?: false,
+    subscribe_count: 0,
+    reconnect_attempt: 0
+  }
+
   test "ready when db ok and readiness ready" do
     health = Health.build(:ok, :ready, :dry_run)
 
@@ -13,9 +62,10 @@ defmodule Bitflyer.HealthTest do
     assert Health.to_json_map(health)["status"] == "ready"
     assert Health.to_json_map(health)["trade_mode"] == "dry_run"
     refute Map.has_key?(Health.to_json_map(health), "db_error")
+    refute Map.has_key?(Health.to_json_map(health), "feed")
   end
 
-  test "not_ready remains healthy for compose boot" do
+  test "not_ready remains healthy for compose boot on legacy /health" do
     health = Health.build(:ok, :not_ready, :paper)
 
     assert health.status == :not_ready
@@ -71,5 +121,85 @@ defmodule Bitflyer.HealthTest do
 
     assert health.status == :unavailable
     refute health.healthy?
+  end
+
+  test "live_snapshot is always healthy" do
+    health = Health.live_snapshot(trade_mode: fn -> :paper end)
+
+    assert health.status == :live
+    assert health.healthy?
+    assert Health.to_json_map(health)["status"] == "live"
+    assert Health.to_json_map(health)["readiness"] == "live"
+    assert Health.to_json_map(health)["trade_mode"] == "paper"
+  end
+
+  test "ready_snapshot is ready when market enabled and feed connected and fresh" do
+    health = Health.build_ready(:ok, :ready, :dry_run, @fresh_market, @connected_feed)
+
+    assert health.status == :ready
+    assert health.healthy?
+    assert health.reason == nil
+
+    json = Health.to_json_map(health)
+    assert json["feed"]["connected"] == true
+    assert json["market_data"]["all_fresh"] == true
+  end
+
+  test "ready_snapshot fails when feed is disconnected" do
+    health = Health.build_ready(:ok, :ready, :dry_run, @fresh_market, @disconnected_feed)
+
+    assert health.status == :not_ready
+    refute health.healthy?
+    assert health.reason == :feed_disconnected
+    assert Health.to_json_map(health)["reason"] == "feed_disconnected"
+  end
+
+  test "ready_snapshot fails when feed process is unavailable" do
+    health = Health.build_ready(:ok, :ready, :dry_run, @fresh_market, @unavailable_feed)
+
+    assert health.status == :not_ready
+    refute health.healthy?
+    assert health.reason == :feed_unavailable
+  end
+
+  test "ready_snapshot fails when market data is stale" do
+    health = Health.build_ready(:ok, :ready, :dry_run, @stale_market, @connected_feed)
+
+    assert health.status == :not_ready
+    refute health.healthy?
+    assert health.reason == :stale_market_data
+
+    assert Health.to_json_map(health)["market_data"]["entries"] == [
+             %{"product_code" => "FX_BTC_JPY", "fresh" => false, "age_ms" => nil}
+           ]
+  end
+
+  test "ready_snapshot skips feed and freshness when market data is disabled" do
+    health = Health.build_ready(:ok, :ready, :dry_run, @disabled_market, @unavailable_feed)
+
+    assert health.status == :ready
+    assert health.healthy?
+  end
+
+  test "ready_snapshot treats boot not_ready as unhealthy" do
+    health = Health.build_ready(:ok, :not_ready, :dry_run, @disabled_market, @unavailable_feed)
+
+    assert health.status == :not_ready
+    refute health.healthy?
+    assert health.reason == :not_ready
+  end
+
+  test "ready_snapshot uses injectable market and feed" do
+    health =
+      Health.ready_snapshot(
+        database: fn -> :ok end,
+        readiness: fn -> :ready end,
+        trade_mode: fn -> :dry_run end,
+        market_data: @fresh_market,
+        feed: @disconnected_feed
+      )
+
+    refute health.healthy?
+    assert health.reason == :feed_disconnected
   end
 end

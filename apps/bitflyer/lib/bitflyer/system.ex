@@ -33,10 +33,24 @@ defmodule Bitflyer.System do
   end
 
   @doc """
-  稼働スナップショット（DB + readiness + trade mode）。
+  稼働スナップショット（DB + readiness + trade mode）。`GET /health` 互換。
   """
   def health(opts \\ []) do
     Bitflyer.Health.snapshot(opts)
+  end
+
+  @doc """
+  プロセス生存スナップショット。`GET /health/live`。
+  """
+  def health_live(opts \\ []) do
+    Bitflyer.Health.live_snapshot(opts)
+  end
+
+  @doc """
+  外形 readiness（DB + Ready + Feed/鮮度）。`GET /health/ready`。
+  """
+  def health_ready(opts \\ []) do
+    Bitflyer.Health.ready_snapshot(opts)
   end
 
   @doc """
