@@ -115,7 +115,10 @@ config :logger, :default_formatter,
     :rejection_code,
     :circuit_reason,
     :db,
-    :healthy
+    :healthy,
+    :kind,
+    :currency,
+    :limit
   ]
 
 # Use Jason for JSON parsing in Phoenix

@@ -45,13 +45,32 @@ defmodule Bitflyer.TelemetryTest do
       Telemetry.sanitize_metadata(%{
         trade_mode: :dry_run,
         reason: :reconcile_mismatch,
+        kind: :balance_mismatch,
+        currency: "JPY",
+        limit: :max_order_size,
         api_key: "SHOULD_NOT_LEAK",
         password: "secret",
         webhook_url: "https://example.invalid",
         unknown_field: "drop-me"
       })
 
-    assert sanitized == %{trade_mode: :dry_run, reason: :reconcile_mismatch}
+    assert sanitized == %{
+             trade_mode: :dry_run,
+             reason: :reconcile_mismatch,
+             kind: :balance_mismatch,
+             currency: "JPY",
+             limit: :max_order_size
+           }
+  end
+
+  test "diagnostic keys stay on allowlist and logger metadata" do
+    allowlist = Telemetry.metadata_allowlist()
+    logger_metadata = Application.get_env(:logger, :default_formatter)[:metadata] || []
+
+    for key <- [:kind, :currency, :limit] do
+      assert MapSet.member?(allowlist, key)
+      assert key in logger_metadata
+    end
   end
 
   test "execute emits filtered metadata only" do
@@ -68,5 +87,22 @@ defmodule Bitflyer.TelemetryTest do
     assert metadata.internal_order_id == "ord-1"
     refute Map.has_key?(metadata, :api_secret)
     refute Map.has_key?(metadata, :authorization)
+  end
+
+  test "reconcile_mismatch keeps kind and currency" do
+    assert :ok =
+             Telemetry.execute(:reconcile_mismatch, %{count: 1}, %{
+               reason: :reconcile_mismatch,
+               kind: :position_mismatch,
+               currency: "BTC",
+               product_code: "FX_BTC_JPY",
+               api_key: "nope"
+             })
+
+    assert_receive {:telemetry, [:bitflyer, :reconcile, :mismatch], %{count: 1}, metadata}
+    assert metadata.kind == :position_mismatch
+    assert metadata.currency == "BTC"
+    assert metadata.product_code == "FX_BTC_JPY"
+    refute Map.has_key?(metadata, :api_key)
   end
 end

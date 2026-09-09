@@ -48,7 +48,10 @@ defmodule Bitflyer.Telemetry do
                         :circuit_reason,
                         :db,
                         :healthy,
-                        :count
+                        :count,
+                        :kind,
+                        :currency,
+                        :limit
                       ])
 
   @doc """

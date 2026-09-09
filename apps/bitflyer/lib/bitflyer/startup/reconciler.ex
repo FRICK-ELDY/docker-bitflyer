@@ -142,6 +142,9 @@ defmodule Bitflyer.Startup.Reconciler do
   end
 
   defp apply_result({:error, reason, details}, state) do
+    detail_meta =
+      if is_map(details), do: Map.take(details, [:product_code, :currency, :kind]), else: %{}
+
     Bitflyer.Telemetry.execute(
       :reconcile_mismatch,
       %{count: 1},
@@ -150,14 +153,21 @@ defmodule Bitflyer.Startup.Reconciler do
           reason: reason,
           trade_mode: Bitflyer.TradeMode.current()
         },
-        Map.take(details, [:product_code, :currency, :kind])
+        detail_meta
       )
     )
 
-    Bitflyer.Telemetry.log(:warning, "boot reconcile halted", %{
-      reason: reason,
-      trade_mode: Bitflyer.TradeMode.current()
-    })
+    Bitflyer.Telemetry.log(
+      :warning,
+      "boot reconcile halted",
+      Map.merge(
+        %{
+          reason: reason,
+          trade_mode: Bitflyer.TradeMode.current()
+        },
+        detail_meta
+      )
+    )
 
     # 即時にメモリ上を止め、その後 RiskState を永続化する（persist 失敗でも発注は閉じる）
     _ = state.readiness.halt(reason)
