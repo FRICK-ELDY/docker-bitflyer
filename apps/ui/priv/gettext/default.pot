@@ -23,12 +23,10 @@ msgid "Attempting to reconnect"
 msgstr ""
 
 #: lib/ui_web/live/status_live.ex:41
-#: lib/ui_web/live/status_live.ex:41
 #, elixir-autogen, elixir-format
 msgid "Language"
 msgstr ""
 
-#: lib/ui_web/live/status_live.ex:34
 #: lib/ui_web/live/status_live.ex:34
 #, elixir-autogen, elixir-format
 msgid "Operational health check. This is not a trading UI."
@@ -40,13 +38,11 @@ msgid "Something went wrong!"
 msgstr ""
 
 #: lib/ui_web/live/status_live.ex:29
-#: lib/ui_web/live/status_live.ex:29
 #, elixir-autogen, elixir-format
 msgid "Status"
 msgstr ""
 
-#: lib/ui_web/live/status_live.ex:71
-#: lib/ui_web/live/status_live.ex:71
+#: lib/ui_web/live/status_live.ex:104
 #, elixir-autogen, elixir-format
 msgid "Trade mode"
 msgstr ""
@@ -61,20 +57,64 @@ msgstr ""
 msgid "close"
 msgstr ""
 
-#: lib/ui_web/live/status_live.ex:97
-#: lib/ui_web/live/status_live.ex:97
+#: lib/ui_web/live/status_live.ex:193
 #, elixir-autogen, elixir-format
 msgid "connected"
 msgstr ""
 
-#: lib/ui_web/live/status_live.ex:97
-#: lib/ui_web/live/status_live.ex:97
+#: lib/ui_web/live/status_live.ex:193
 #, elixir-autogen, elixir-format
 msgid "unavailable"
 msgstr ""
 
-#: lib/ui_web/live/status_live.ex:79
-#: lib/ui_web/live/status_live.ex:79
+#: lib/ui_web/live/status_live.ex:124
 #, elixir-autogen, elixir-format
 msgid "Readiness"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:230
+#, elixir-autogen, elixir-format
+msgid "ALLOWED"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:141
+#, elixir-autogen, elixir-format
+msgid "Halt reason"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:153
+#, elixir-autogen, elixir-format
+msgid "Market data"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:78
+#, elixir-autogen, elixir-format
+msgid "Orders"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:92
+#, elixir-autogen, elixir-format
+msgid "Reason"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:231
+#, elixir-autogen, elixir-format
+msgid "STOPPED"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:174
+#: lib/ui_web/live/status_live.ex:233
+#, elixir-autogen, elixir-format
+msgid "fresh"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:240
+#, elixir-autogen, elixir-format
+msgid "miss"
+msgstr ""
+
+#: lib/ui_web/live/status_live.ex:174
+#: lib/ui_web/live/status_live.ex:234
+#, elixir-autogen, elixir-format
+msgid "stale"
 msgstr ""

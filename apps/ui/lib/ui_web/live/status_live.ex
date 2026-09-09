@@ -1,6 +1,6 @@
 defmodule UiWeb.StatusLive do
   @moduledoc """
-  稼働確認ページ。アプリ名・取引モード・Ready 状態・DB 接続可否を表示する。
+  稼働確認ページ。発注可否・取引モード・Ready・市場データ鮮度・DB を表示する。
   """
   use UiWeb, :live_view
 
@@ -66,19 +66,115 @@ defmodule UiWeb.StatusLive do
           </nav>
         </div>
 
-        <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <div id="trade-mode-card" class="rounded-lg border border-base-300 bg-base-200/40 p-4">
+        <section
+          id="orders-gate"
+          class={[
+            "rounded-lg border px-4 py-4 transition-colors sm:px-5",
+            @orders_allowed? && "border-success/40 bg-success/10",
+            !@orders_allowed? && "border-error/40 bg-error/10"
+          ]}
+          aria-live="polite"
+        >
+          <p class="text-sm font-medium text-base-content/70">{gettext("Orders")}</p>
+
+          <p
+            id="orders-gate-label"
+            class={[
+              "mt-1 font-mono text-2xl font-semibold tracking-tight",
+              @orders_allowed? && "text-success",
+              !@orders_allowed? && "text-error"
+            ]}
+          >
+            {@orders_gate_label}
+          </p>
+
+          <p :if={@orders_reason} id="orders-gate-reason" class="mt-2 text-sm text-base-content/70">
+            {gettext("Reason")}: <span class="font-mono">{@orders_reason}</span>
+          </p>
+        </section>
+
+        <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div
+            id="trade-mode-card"
+            class={[
+              "rounded-lg border p-4 transition-colors",
+              trade_mode_card_class(@trade_mode)
+            ]}
+          >
             <dt class="text-sm text-base-content/60">{gettext("Trade mode")}</dt>
 
-            <dd id="trade-mode" class="mt-1 font-mono text-lg font-medium">
+            <dd
+              id="trade-mode"
+              class={[
+                "mt-1 font-mono text-lg font-medium",
+                trade_mode_text_class(@trade_mode)
+              ]}
+            >
               {Bitflyer.TradeMode.name(@trade_mode)}
             </dd>
           </div>
 
-          <div id="readiness-card" class="rounded-lg border border-base-300 bg-base-200/40 p-4">
+          <div
+            id="readiness-card"
+            class={[
+              "rounded-lg border p-4",
+              readiness_card_class(@readiness)
+            ]}
+          >
             <dt class="text-sm text-base-content/60">{gettext("Readiness")}</dt>
 
-            <dd id="readiness" class="mt-1 font-mono text-lg font-medium">{@readiness_label}</dd>
+            <dd
+              id="readiness"
+              class={[
+                "mt-1 font-mono text-lg font-medium",
+                readiness_text_class(@readiness)
+              ]}
+            >
+              {@readiness_label}
+            </dd>
+
+            <p
+              :if={@halt_reason}
+              id="halt-reason"
+              class="mt-2 text-sm text-error"
+            >
+              {gettext("Halt reason")}: <span class="font-mono">{@halt_reason}</span>
+            </p>
+          </div>
+
+          <div
+            id="market-freshness-card"
+            class={[
+              "rounded-lg border p-4",
+              @market_all_fresh? && "border-success/30 bg-success/5",
+              !@market_all_fresh? && "border-warning/40 bg-warning/5"
+            ]}
+          >
+            <dt class="text-sm text-base-content/60">{gettext("Market data")}</dt>
+
+            <dd
+              id="market-freshness"
+              class={[
+                "mt-1 font-mono text-lg font-medium",
+                @market_all_fresh? && "text-success",
+                !@market_all_fresh? && "text-warning"
+              ]}
+            >
+              {@market_freshness_label}
+            </dd>
+
+            <ul id="market-freshness-entries" class="mt-2 space-y-1 text-sm text-base-content/70">
+              <li
+                :for={entry <- @market_entries}
+                id={"market-freshness-#{entry.product_code}"}
+                class="font-mono"
+              >
+                {entry.product_code}: {format_age_ms(entry.age_ms)}
+                <span class="text-base-content/50">
+                  ({if(entry.fresh?, do: gettext("fresh"), else: gettext("stale"))})
+                </span>
+              </li>
+            </ul>
           </div>
 
           <div id="db-status-card" class="rounded-lg border border-base-300 bg-base-200/40 p-4">
@@ -113,16 +209,57 @@ defmodule UiWeb.StatusLive do
         {:error, message} -> {false, message}
       end
 
-    readiness = Bitflyer.System.readiness()
+    status = Bitflyer.System.operational_status()
 
     socket
     |> assign(:app_name, "docker_bitflyer")
-    |> assign(:trade_mode, Bitflyer.System.trade_mode())
-    |> assign(:readiness, readiness)
-    |> assign(:readiness_label, Bitflyer.Readiness.format(readiness))
+    |> assign(:trade_mode, status.trade_mode)
+    |> assign(:readiness, status.readiness)
+    |> assign(:readiness_label, status.readiness_label)
+    |> assign(:halt_reason, reason_label(status.halt_reason))
+    |> assign(:orders_allowed?, status.orders_allowed?)
+    |> assign(:orders_reason, reason_label(status.orders_reason))
+    |> assign(:orders_gate_label, orders_gate_label(status.orders_allowed?))
+    |> assign(:market_all_fresh?, status.market_data.all_fresh?)
+    |> assign(:market_freshness_label, market_freshness_label(status.market_data))
+    |> assign(:market_entries, status.market_data.entries)
     |> assign(:db_ok?, db_ok?)
     |> assign(:db_error, db_error)
   end
+
+  defp orders_gate_label(true), do: gettext("ALLOWED")
+  defp orders_gate_label(false), do: gettext("STOPPED")
+
+  defp market_freshness_label(%{all_fresh?: true}), do: gettext("fresh")
+  defp market_freshness_label(_), do: gettext("stale")
+
+  defp reason_label(nil), do: nil
+  defp reason_label(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_label(reason), do: inspect(reason)
+
+  defp format_age_ms(:miss), do: gettext("miss")
+  defp format_age_ms(age) when is_integer(age) and age < 1_000, do: "#{age}ms"
+  defp format_age_ms(age) when is_integer(age), do: "#{Float.round(age / 1_000, 1)}s"
+
+  defp trade_mode_card_class(:dry_run), do: "border-base-300 bg-base-200/40"
+  defp trade_mode_card_class(:paper), do: "border-info/40 bg-info/10"
+  defp trade_mode_card_class(:live), do: "border-error/50 bg-error/10"
+  defp trade_mode_card_class(_), do: "border-base-300 bg-base-200/40"
+
+  defp trade_mode_text_class(:dry_run), do: "text-base-content"
+  defp trade_mode_text_class(:paper), do: "text-info"
+  defp trade_mode_text_class(:live), do: "text-error"
+  defp trade_mode_text_class(_), do: "text-base-content"
+
+  defp readiness_card_class(:ready), do: "border-success/30 bg-success/5"
+  defp readiness_card_class(:not_ready), do: "border-warning/40 bg-warning/5"
+  defp readiness_card_class({:halted, _}), do: "border-error/40 bg-error/10"
+  defp readiness_card_class(_), do: "border-base-300 bg-base-200/40"
+
+  defp readiness_text_class(:ready), do: "text-success"
+  defp readiness_text_class(:not_ready), do: "text-warning"
+  defp readiness_text_class({:halted, _}), do: "text-error"
+  defp readiness_text_class(_), do: "text-base-content"
 
   defp schedule_refresh do
     Process.send_after(self(), :refresh, @refresh_ms)

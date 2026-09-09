@@ -40,6 +40,13 @@ defmodule Bitflyer.System do
   end
 
   @doc """
+  運用画面向けスナップショット（発注可否・鮮度・モード）。
+  """
+  def operational_status(opts \\ []) do
+    Bitflyer.OperationalStatus.snapshot(opts)
+  end
+
+  @doc """
   Ready 状態の正本（`:not_ready` / `:ready` / `{:halted, reason}`）。
   """
   def readiness do
