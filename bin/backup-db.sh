@@ -13,25 +13,19 @@ OUT_DIR="${1:-./backups}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_FILE="${OUT_DIR}/docker_bitflyer_prod_${STAMP}.sql.gz"
 
-mkdir -p "${OUT_DIR}"
-
-if [[ -f "${ENV_FILE}" ]]; then
-  # shellcheck disable=SC1090
-  set -a
-  # 値に空白があっても大体動くよう source
-  source "${ENV_FILE}"
-  set +a
+if [[ ! -f "${ENV_FILE}" ]]; then
+  echo "missing ${ENV_FILE}. Copy from .env.example and set secrets." >&2
+  exit 1
 fi
 
-POSTGRES_USER="${POSTGRES_USER:-postgres}"
-POSTGRES_DB="${POSTGRES_DB:-docker_bitflyer_prod}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
+mkdir -p "${OUT_DIR}"
 
-echo "Backing up ${POSTGRES_DB} via compose service db -> ${OUT_FILE}"
-# コンテナ内でもパスワード認証が必要な構成に備え PGPASSWORD を渡す（unix socket trust でも無害）
-docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" exec -T \
-  -e "PGPASSWORD=${POSTGRES_PASSWORD}" db \
-  pg_dump -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" --no-owner --format=plain \
+# ホストで .env.prod を source しない（特殊文字の誤評価を避ける）。
+# POSTGRES_* は起動時に db コンテナへ注入済みなので、コンテナ内の値で pg_dump する。
+# --env-file は compose ファイル補間用（ホストシェルには載せない）。
+echo "Backing up via compose service db -> ${OUT_FILE}"
+docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" exec -T db \
+  sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" exec pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --format=plain' \
   | gzip -c > "${OUT_FILE}"
 
 echo "Done: ${OUT_FILE}"

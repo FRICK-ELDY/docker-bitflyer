@@ -19,12 +19,27 @@ require_env_file() {
   fi
 }
 
+# KEY=value をシェル評価なしで読む（source しない。.env の $ や空白を壊さない）。
+env_file_get() {
+  local key="$1"
+  local line val
+  line="$(grep -E "^${key}=" "${ENV_FILE}" 2>/dev/null | head -n1 || true)"
+  [[ -z "${line}" ]] && return 0
+  val="${line#*=}"
+  val="${val%$'\r'}"
+  # 両端の対応する引用符だけ外す
+  if [[ "${val}" == \"*\" ]]; then
+    val="${val:1:${#val}-2}"
+  elif [[ "${val}" == \'*\' ]]; then
+    val="${val:1:${#val}-2}"
+  fi
+  printf '%s' "${val}"
+}
+
 load_env_file() {
-  # compose の --env-file はシェル変数には入らない。APP_IMAGE / APP_HOST_PORT 用に取り込む。
-  # shellcheck disable=SC1090
-  set -a
-  source "${ENV_FILE}"
-  set +a
+  # compose の --env-file はシェル変数に入らない。スクリプトが使う 2 キーだけ取り出す。
+  APP_IMAGE="${APP_IMAGE:-$(env_file_get APP_IMAGE)}"
+  APP_HOST_PORT="${APP_HOST_PORT:-$(env_file_get APP_HOST_PORT)}"
 }
 
 compose() {
@@ -54,7 +69,7 @@ wait_healthy() {
   echo "Waiting for app healthy on 127.0.0.1:${port}..."
   local i=0
   while [[ "$i" -lt 60 ]]; do
-    if compose ps --status running | grep -q app; then
+    if [[ -n "$(compose ps --status running -q app 2>/dev/null || true)" ]]; then
       if curl -fsS "http://127.0.0.1:${port}/health/live" >/dev/null 2>&1; then
         echo "app /health/live OK"
         return 0
