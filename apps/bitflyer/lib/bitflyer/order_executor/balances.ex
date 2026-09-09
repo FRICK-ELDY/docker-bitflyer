@@ -5,10 +5,20 @@ defmodule Bitflyer.OrderExecutor.Balances do
 
   alias Bitflyer.Trading.{BalanceSnapshot, Order, Product}
 
+  # pg_advisory_xact_lock(int, int) 用の名前空間（残高 append 専用）
+  @balance_lock_namespace 1
+
   @doc """
   擬似約定を残高スナップショットへ反映する（paper 用）。
 
   最新行を読み、デルタ適用した**新しい**行を create する（append-only）。
+  `(trade_mode, currency)` ごとに `pg_advisory_xact_lock` で直列化し、
+  同時約定による Lost Update を防ぐ（先端行の `FOR UPDATE` だけでは
+  新 tip 挿入後も古い額から append され得る／初回行なし時も競合する）。
+
+  **呼び出し側は同一 DB トランザクション内で呼ぶこと**（xact ロックは
+  コミット／ロールバックで解放される）。
+
   トランザクション内では `return_notifications?: true` で通知を返し、
   呼び出し側がコミット後に notify する。
   """
@@ -37,7 +47,8 @@ defmodule Bitflyer.OrderExecutor.Balances do
   end
 
   defp append_snapshot(trade_mode, currency, delta, captured_at) do
-    with {:ok, previous} <- latest_amount(trade_mode, currency) do
+    with :ok <- acquire_balance_lock(trade_mode, currency),
+         {:ok, previous} <- latest_amount(trade_mode, currency) do
       amount = Decimal.add(previous, delta)
 
       case BalanceSnapshot
@@ -52,6 +63,18 @@ defmodule Bitflyer.OrderExecutor.Balances do
         {:ok, _row, notifications} -> {:ok, notifications}
         {:error, error} -> {:error, :persist_failed, %{error: error, currency: currency}}
       end
+    end
+  end
+
+  defp acquire_balance_lock(trade_mode, currency) do
+    key = :erlang.phash2({trade_mode, currency}, 2_147_483_647)
+
+    case Bitflyer.Repo.query("SELECT pg_advisory_xact_lock($1, $2)", [
+           @balance_lock_namespace,
+           key
+         ]) do
+      {:ok, _} -> :ok
+      {:error, error} -> {:error, :persist_failed, %{error: error, currency: currency}}
     end
   end
 

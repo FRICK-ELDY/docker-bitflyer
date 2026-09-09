@@ -213,6 +213,46 @@ defmodule Bitflyer.OrderExecutorTest do
     assert length(after_balances) == length(before)
   end
 
+  test "concurrent paper fills serialize balance appends without lost update" do
+    Application.put_env(:bitflyer, :trade_mode, :paper)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_paper_balance!("JPY", "1000000")
+    seed_paper_balance!("BTC", "0")
+
+    results =
+      1..2
+      |> Enum.map(fn i ->
+        Task.async(fn ->
+          OrderExecutor.submit(valid_command("paper-concurrent-#{i}"),
+            positions: [],
+            trade_mode: :paper
+          )
+        end)
+      end)
+      |> Task.await_many(15_000)
+
+    assert Enum.all?(results, &match?({:ok, %Order{status: :filled}}, &1))
+
+    assert {:ok, %BalanceSnapshot{amount: jpy}} =
+             BalanceSnapshot
+             |> Ash.Query.filter(trade_mode == :paper and currency == "JPY")
+             |> Ash.Query.sort(captured_at: :desc)
+             |> Ash.Query.limit(1)
+             |> Ash.read_one()
+
+    assert {:ok, %BalanceSnapshot{amount: btc}} =
+             BalanceSnapshot
+             |> Ash.Query.filter(trade_mode == :paper and currency == "BTC")
+             |> Ash.Query.sort(captured_at: :desc)
+             |> Ash.Query.limit(1)
+             |> Ash.read_one()
+
+    # 1_000_000 - 2 * (0.01 * 5_000_000)
+    assert Decimal.equal?(jpy, Decimal.new("900000"))
+    assert Decimal.equal?(btc, Decimal.new("0.02"))
+  end
+
   test "idempotent submit does not call place_order again" do
     Application.put_env(:bitflyer, :trade_mode, :dry_run)
     assert Readiness.mark_ready() == :ok
