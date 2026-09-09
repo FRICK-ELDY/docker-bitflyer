@@ -11,6 +11,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   - live exchange_order_id 永続化失敗 → halt・再送禁止
   - live 空 BalanceSnapshot → baseline missing で halt
   - 公開 submit は authorize?: false でも risk を迂回できない
+  - risk limits（価格逸脱・頻度・日次損失・残高）拒否で永続化・REST しない
   """
 
   use Bitflyer.DataCase, async: false
@@ -369,6 +370,102 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert {:ok, nil} =
                Order
                |> Ash.Query.filter(internal_order_id == "bypass-1")
+               |> Ash.read_one()
+    end
+
+    test "price deviation rejects submit without persistence" do
+      Application.put_env(:bitflyer, :trade_mode, :dry_run)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market()
+
+      assert {:error, :limit_exceeded, %{limit: :max_price_deviation_pct}} =
+               OrderExecutor.submit(
+                 command("dev-1", %{
+                   order_type: :limit,
+                   price: Decimal.new("5200000")
+                 }),
+                 trade_mode: :dry_run,
+                 positions: [],
+                 limits: %{max_price_deviation_pct: Decimal.new("1")}
+               )
+
+      assert SpyExchange.place_count() == 0
+
+      assert {:ok, nil} =
+               Order
+               |> Ash.Query.filter(internal_order_id == "dev-1")
+               |> Ash.read_one()
+    end
+
+    test "order rate rejects submit without persistence" do
+      Application.put_env(:bitflyer, :trade_mode, :dry_run)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market()
+
+      assert {:error, :limit_exceeded, %{limit: :max_orders_per_minute}} =
+               OrderExecutor.submit(command("rate-1"),
+                 trade_mode: :dry_run,
+                 positions: [],
+                 recent_order_count: 5,
+                 limits: %{max_orders_per_minute: 3}
+               )
+
+      assert SpyExchange.place_count() == 0
+
+      assert {:ok, nil} =
+               Order
+               |> Ash.Query.filter(internal_order_id == "rate-1")
+               |> Ash.read_one()
+    end
+
+    test "daily loss rejects submit, opens circuit, and blocks further submit" do
+      Application.put_env(:bitflyer, :trade_mode, :dry_run)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market()
+
+      assert {:error, :limit_exceeded, %{limit: :max_daily_loss}} =
+               OrderExecutor.submit(command("loss-1"),
+                 trade_mode: :dry_run,
+                 positions: [],
+                 daily_loss: Decimal.new("200000"),
+                 limits: %{max_daily_loss: Decimal.new("100000")}
+               )
+
+      assert SpyExchange.place_count() == 0
+      assert Readiness.get() == {:halted, :daily_loss_exceeded}
+
+      assert {:ok, nil} =
+               Order
+               |> Ash.Query.filter(internal_order_id == "loss-1")
+               |> Ash.read_one()
+
+      assert {:error, :circuit_open, _} =
+               OrderExecutor.submit(command("loss-2"), trade_mode: :dry_run, positions: [])
+
+      assert SpyExchange.place_count() == 0
+    end
+
+    test "insufficient balance rejects submit without persistence" do
+      Application.put_env(:bitflyer, :trade_mode, :dry_run)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market()
+
+      assert {:error, :limit_exceeded, %{limit: :insufficient_balance}} =
+               OrderExecutor.submit(
+                 command("bal-1", %{
+                   order_type: :limit,
+                   price: Decimal.new("5000000")
+                 }),
+                 trade_mode: :dry_run,
+                 positions: [],
+                 balances: %{"JPY" => %{available: Decimal.new("1")}}
+               )
+
+      assert SpyExchange.place_count() == 0
+
+      assert {:ok, nil} =
+               Order
+               |> Ash.Query.filter(internal_order_id == "bal-1")
                |> Ash.read_one()
     end
   end

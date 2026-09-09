@@ -5,11 +5,17 @@ defmodule Bitflyer.Risk.Limits do
 
   @default_max_order_size "1"
   @default_max_position_size "5"
+  @default_max_daily_loss "100000"
+  @default_max_orders_per_minute 20
+  @default_max_price_deviation_pct "2"
 
   @type t :: %{
           max_order_size: Decimal.t(),
           max_position_size: Decimal.t(),
-          market_data_max_age_ms: non_neg_integer()
+          market_data_max_age_ms: non_neg_integer(),
+          max_daily_loss: Decimal.t(),
+          max_orders_per_minute: non_neg_integer(),
+          max_price_deviation_pct: Decimal.t()
         }
 
   @doc """
@@ -34,7 +40,12 @@ defmodule Bitflyer.Risk.Limits do
       max_position_size: decimal(Map.get(limits, :max_position_size, @default_max_position_size)),
       market_data_max_age_ms:
         Map.get(limits, :market_data_max_age_ms) ||
-          Bitflyer.MarketData.Cache.default_max_age_ms()
+          Bitflyer.MarketData.Cache.default_max_age_ms(),
+      max_daily_loss: decimal(Map.get(limits, :max_daily_loss, @default_max_daily_loss)),
+      max_orders_per_minute:
+        non_neg_int(Map.get(limits, :max_orders_per_minute, @default_max_orders_per_minute)),
+      max_price_deviation_pct:
+        decimal(Map.get(limits, :max_price_deviation_pct, @default_max_price_deviation_pct))
     }
   end
 
@@ -42,4 +53,7 @@ defmodule Bitflyer.Risk.Limits do
   defp decimal(raw) when is_binary(raw), do: Decimal.new(raw)
   defp decimal(raw) when is_integer(raw), do: Decimal.new(raw)
   defp decimal(raw) when is_float(raw), do: Decimal.from_float(raw)
+
+  defp non_neg_int(n) when is_integer(n) and n >= 0, do: n
+  defp non_neg_int(n) when is_binary(n), do: String.to_integer(n)
 end

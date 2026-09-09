@@ -5,13 +5,15 @@ defmodule Bitflyer.Risk do
   strategy からの発注意図は必ず `authorize/2` を通す（fail-closed）。
   上限超過・stale・未同期は必ず拒否する。
   サーキットは `open_circuit/1` / `clear_circuit/1`。
+
+  検査: 同期 → 鮮度 → 注文サイズ → 建玉 → 価格逸脱 → 発注頻度 → 日次損失 → 残高（任意）。
   """
 
   require Ash.Query
 
   alias Bitflyer.MarketData.Cache
   alias Bitflyer.Risk.{Circuit, Limits}
-  alias Bitflyer.Trading.Position
+  alias Bitflyer.Trading.{BalanceSnapshot, Order, Position}
 
   @type rejection_code ::
           :invalid_command
@@ -29,8 +31,12 @@ defmodule Bitflyer.Risk do
   - `:readiness` — 既定 `Bitflyer.Readiness`
   - `:limits` — 上限上書き（`Limits.normalize/1` される）
   - `:positions` — 建玉リスト（未指定時は DB から当該銘柄を読む）
-  - `:now` / `:server` — Cache.fresh?/3 へ転送
-  - `:check_persisted_circuit` — 既定 false。true のとき Ready でも RiskState を見る（診断用。ホットパスでは使わない）
+  - `:now` / `:server` — Cache.fresh?/3・LTP 取得へ転送
+  - `:check_persisted_circuit` — 既定 false。true のとき Ready でも RiskState を見る
+  - `:recent_order_count` — 直近 1 分の発注件数（テスト注入）
+  - `:daily_loss` — 当日損失額（正の Decimal。テスト注入）
+  - `:balances` — `%{currency => %{available: Decimal.t()}}` または `%{currency, available}` のリスト
+  - `:utc_now` — 発注頻度窓の基準時刻（テスト注入）
   """
   @spec authorize(map(), keyword()) :: result()
   def authorize(command, opts \\ []) when is_map(command) do
@@ -44,7 +50,11 @@ defmodule Bitflyer.Risk do
            :ok <- check_sync(opts),
            :ok <- check_freshness(command, limits, opts),
            :ok <- check_order_size(command, limits),
-           :ok <- check_position_size(command, limits, opts) do
+           :ok <- check_position_size(command, limits, opts),
+           :ok <- check_price_deviation(command, limits, opts),
+           :ok <- check_order_rate(limits, opts),
+           :ok <- check_daily_loss(limits, opts),
+           :ok <- check_available_balance(command, opts) do
         :ok
       end
 
@@ -179,6 +189,306 @@ defmodule Bitflyer.Risk do
         # 建玉が読めないときは空とみなさない（fail-closed）
         {:error, :unsynced, %{reason: :position_load_failed, product_code: product_code}}
     end
+  end
+
+  defp check_price_deviation(command, limits, opts) do
+    order_type = Map.get(command, :order_type, :market)
+    price = Map.get(command, :price)
+
+    cond do
+      order_type != :limit ->
+        :ok
+
+      not match?(%Decimal{}, price) ->
+        {:error, :invalid_command, %{field: :price}}
+
+      true ->
+        case fetch_ltp(command, opts) do
+          {:ok, ltp} ->
+            deviation_pct = price_deviation_pct(price, ltp)
+
+            if Decimal.gt?(deviation_pct, limits.max_price_deviation_pct) do
+              {:error, :limit_exceeded,
+               %{
+                 limit: :max_price_deviation_pct,
+                 deviation_pct: deviation_pct,
+                 max: limits.max_price_deviation_pct,
+                 price: price,
+                 ltp: ltp
+               }}
+            else
+              :ok
+            end
+
+          :miss ->
+            # freshness 通過後でも値欠落は fail-closed
+            {:error, :stale,
+             %{market_key: Map.fetch!(command, :market_key), reason: :ltp_missing}}
+        end
+    end
+  end
+
+  defp check_order_rate(limits, opts) do
+    case resolve_recent_order_count(opts) do
+      {:ok, count} when count >= limits.max_orders_per_minute ->
+        {:error, :limit_exceeded,
+         %{
+           limit: :max_orders_per_minute,
+           count: count,
+           max: limits.max_orders_per_minute
+         }}
+
+      {:ok, _count} ->
+        :ok
+
+      {:error, _error} ->
+        {:error, :unsynced, %{reason: :order_rate_load_failed}}
+    end
+  end
+
+  defp check_daily_loss(limits, opts) do
+    case resolve_daily_loss(opts) do
+      {:ok, loss} ->
+        if Decimal.gt?(loss, limits.max_daily_loss) do
+          _ = open_circuit(:daily_loss_exceeded, Keyword.take(opts, [:readiness]))
+
+          {:error, :limit_exceeded,
+           %{
+             limit: :max_daily_loss,
+             daily_loss: loss,
+             max: limits.max_daily_loss
+           }}
+        else
+          :ok
+        end
+
+      {:error, _error} ->
+        {:error, :unsynced, %{reason: :daily_loss_load_failed}}
+    end
+  end
+
+  defp check_available_balance(command, opts) do
+    case fetch_balances(opts) do
+      {:ok, []} ->
+        # 残高スナップが無い環境（dry_run 初期等）ではスキップ。
+        # live Ready は Reconcile の baseline が別途担保する。
+        :ok
+
+      {:ok, balances} ->
+        verify_available_balance(command, balances, opts)
+
+      {:error, _error} ->
+        {:error, :unsynced, %{reason: :balance_load_failed}}
+    end
+  end
+
+  defp verify_available_balance(command, balances, opts) do
+    side = Map.fetch!(command, :side)
+    size = Map.fetch!(command, :size)
+    product_code = Map.fetch!(command, :product_code)
+    balance_map = balance_map(balances)
+
+    case side do
+      :buy ->
+        case quote_notional(command, opts) do
+          {:ok, notional} ->
+            available = Map.get(balance_map, quote_currency(product_code))
+
+            cond do
+              is_nil(available) ->
+                :ok
+
+              Decimal.lt?(available, notional) ->
+                {:error, :limit_exceeded,
+                 %{
+                   limit: :insufficient_balance,
+                   currency: quote_currency(product_code),
+                   available: available,
+                   required: notional
+                 }}
+
+              true ->
+                :ok
+            end
+
+          other ->
+            other
+        end
+
+      :sell ->
+        available = Map.get(balance_map, base_currency(product_code))
+
+        cond do
+          is_nil(available) ->
+            :ok
+
+          Decimal.lt?(available, size) ->
+            {:error, :limit_exceeded,
+             %{
+               limit: :insufficient_balance,
+               currency: base_currency(product_code),
+               available: available,
+               required: size
+             }}
+
+          true ->
+            :ok
+        end
+    end
+  end
+
+  defp quote_notional(command, opts) do
+    size = Map.fetch!(command, :size)
+    order_type = Map.get(command, :order_type, :market)
+    price = Map.get(command, :price)
+
+    cond do
+      order_type == :limit and match?(%Decimal{}, price) ->
+        {:ok, Decimal.mult(price, size)}
+
+      true ->
+        case fetch_ltp(command, opts) do
+          {:ok, ltp} ->
+            {:ok, Decimal.mult(ltp, size)}
+
+          :miss ->
+            {:error, :stale,
+             %{market_key: Map.fetch!(command, :market_key), reason: :ltp_missing}}
+        end
+    end
+  end
+
+  defp fetch_ltp(command, opts) do
+    key = Map.fetch!(command, :market_key)
+    server = Keyword.get(opts, :server, Cache)
+
+    case Cache.get(key, server) do
+      {:ok, value, _received_at} ->
+        case extract_ltp(value) do
+          %Decimal{} = ltp -> {:ok, ltp}
+          _ -> :miss
+        end
+
+      :miss ->
+        :miss
+    end
+  end
+
+  defp extract_ltp(%{ltp: %Decimal{} = ltp}), do: ltp
+  defp extract_ltp(%{"ltp" => %Decimal{} = ltp}), do: ltp
+  defp extract_ltp(_), do: nil
+
+  defp price_deviation_pct(%Decimal{} = price, %Decimal{} = ltp) do
+    if Decimal.eq?(ltp, 0) do
+      Decimal.new("100")
+    else
+      price
+      |> Decimal.sub(ltp)
+      |> Decimal.abs()
+      |> Decimal.div(ltp)
+      |> Decimal.mult(Decimal.new(100))
+    end
+  end
+
+  defp resolve_recent_order_count(opts) do
+    case Keyword.fetch(opts, :recent_order_count) do
+      {:ok, count} when is_integer(count) and count >= 0 ->
+        {:ok, count}
+
+      {:ok, _} ->
+        {:error, :invalid_recent_order_count}
+
+      :error ->
+        load_recent_order_count(opts)
+    end
+  end
+
+  defp load_recent_order_count(opts) do
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+
+    now =
+      Keyword.get_lazy(opts, :utc_now, fn -> DateTime.utc_now() end)
+      |> DateTime.truncate(:microsecond)
+
+    since = DateTime.add(now, -60, :second)
+
+    case Order
+         |> Ash.Query.filter(trade_mode == ^trade_mode and inserted_at >= ^since)
+         |> Ash.read() do
+      {:ok, orders} -> {:ok, length(orders)}
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  defp resolve_daily_loss(opts) do
+    case Keyword.fetch(opts, :daily_loss) do
+      {:ok, %Decimal{} = loss} ->
+        if Decimal.compare(loss, 0) == :lt do
+          {:error, :invalid_daily_loss}
+        else
+          {:ok, loss}
+        end
+
+      {:ok, _} ->
+        {:error, :invalid_daily_loss}
+
+      :error ->
+        # 損失計測の正本が無い間は 0（未知の損失を捏造しない）。
+        # 明示注入または将来の Fill / Balance 差分で上書きする。
+        {:ok, Decimal.new(0)}
+    end
+  end
+
+  defp fetch_balances(opts) do
+    case Keyword.fetch(opts, :balances) do
+      {:ok, balances} -> {:ok, balances || []}
+      :error -> load_balances(opts)
+    end
+  end
+
+  defp load_balances(opts) do
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+
+    import Ecto.Query
+
+    query =
+      from(b in BalanceSnapshot,
+        where: b.trade_mode == ^trade_mode,
+        distinct: b.currency,
+        order_by: [asc: b.currency, desc: b.captured_at]
+      )
+
+    {:ok, Bitflyer.Repo.all(query)}
+  rescue
+    error -> {:error, error}
+  end
+
+  defp balance_map(balances) when is_map(balances) do
+    Map.new(balances, fn
+      {currency, %{available: %Decimal{} = available}} -> {currency, available}
+      {currency, %Decimal{} = available} -> {currency, available}
+      {currency, available} when is_binary(available) -> {currency, Decimal.new(available)}
+    end)
+  end
+
+  defp balance_map(balances) when is_list(balances) do
+    Map.new(balances, fn balance ->
+      currency = Map.fetch!(balance, :currency)
+      available = Map.get(balance, :available) || Map.get(balance, "available")
+      {currency, available}
+    end)
+  end
+
+  defp quote_currency("FX_BTC_JPY"), do: "JPY"
+  defp quote_currency("BTC_JPY"), do: "JPY"
+  defp quote_currency(product_code), do: product_code |> String.split("_") |> List.last()
+
+  defp base_currency("FX_BTC_JPY"), do: "BTC"
+  defp base_currency("BTC_JPY"), do: "BTC"
+
+  defp base_currency(product_code) do
+    parts = String.split(product_code, "_")
+    Enum.at(parts, max(length(parts) - 2, 0))
   end
 
   defp fetch_positions(product_code, opts) do
