@@ -81,4 +81,23 @@ defmodule Bitflyer.OperationalStatusTest do
     assert OperationalStatus.orders_gate({:halted, :circuit_open}, :dry_run, market, false) ==
              {:halted, :circuit_open}
   end
+
+  test "snapshot forwards now/max_age_ms into market_data freshness" do
+    assert Readiness.mark_ready() == :ok
+    now = Cache.monotonic_ms()
+    assert Cache.put(@market_key, %{ltp: Decimal.new("1")}, received_at: now - 10_000) == :ok
+
+    status =
+      OperationalStatus.snapshot(
+        trade_mode: :dry_run,
+        live_confirmed?: false,
+        now: now,
+        max_age_ms: 5_000
+      )
+
+    refute status.orders_allowed?
+    assert status.orders_reason == :stale_market_data
+    refute status.market_data.all_fresh?
+    assert hd(status.market_data.entries).age_ms == 10_000
+  end
 end

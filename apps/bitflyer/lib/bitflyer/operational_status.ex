@@ -45,7 +45,7 @@ defmodule Bitflyer.OperationalStatus do
     readiness = Keyword.get_lazy(opts, :readiness, &Readiness.get/0)
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &TradeMode.current/0)
     live_confirmed? = Keyword.get_lazy(opts, :live_confirmed?, &TradeMode.live_confirmed?/0)
-    market_data = Keyword.get_lazy(opts, :market_data, &market_data_snapshot/0)
+    market_data = Keyword.get_lazy(opts, :market_data, fn -> market_data_snapshot(opts) end)
 
     {allowed?, reason} = classify(readiness, trade_mode, market_data, live_confirmed?)
 
@@ -92,12 +92,23 @@ defmodule Bitflyer.OperationalStatus do
       Enum.map(product_codes, fn product_code ->
         key = MarketData.ticker_key(product_code)
 
-        %{
-          product_code: product_code,
-          key: key,
-          fresh?: Cache.fresh?(key, max_age_ms, server: server, now: now),
-          age_ms: Cache.age_ms(key, server: server, now: now)
-        }
+        case Cache.get(key, server) do
+          {:ok, _value, received_at} ->
+            %{
+              product_code: product_code,
+              key: key,
+              fresh?: Cache.entry_fresh?(received_at, max_age_ms, now),
+              age_ms: max(now - received_at, 0)
+            }
+
+          :miss ->
+            %{
+              product_code: product_code,
+              key: key,
+              fresh?: false,
+              age_ms: :miss
+            }
+        end
       end)
 
     %{
@@ -109,22 +120,24 @@ defmodule Bitflyer.OperationalStatus do
   end
 
   defp classify(readiness, trade_mode, market_data, live_confirmed?) do
-    cond do
-      match?({:halted, _}, readiness) ->
-        {:halted, reason} = readiness
+    case readiness do
+      {:halted, reason} ->
         {false, reason}
 
-      readiness != :ready ->
+      :ready ->
+        cond do
+          TradeMode.live?(trade_mode) and not live_confirmed? ->
+            {false, :live_confirm_missing}
+
+          not market_data.all_fresh? ->
+            {false, :stale_market_data}
+
+          true ->
+            {true, nil}
+        end
+
+      _ ->
         {false, :not_ready}
-
-      TradeMode.live?(trade_mode) and not live_confirmed? ->
-        {false, :live_confirm_missing}
-
-      not market_data.all_fresh? ->
-        {false, :stale_market_data}
-
-      true ->
-        {true, nil}
     end
   end
 
