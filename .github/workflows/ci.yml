@@ -1,4 +1,5 @@
-# ローカルと同品質ゲート: mix precommit
+# 品質ゲート: mix precommit（ローカルと同範囲）
+# deps.audit はゲート外の可視化（失敗してもジョブは緑）
 # 方針: .workspace/0_doc/architecture/ci-cd.md
 name: CI
 
@@ -9,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   precommit:
@@ -61,6 +63,46 @@ jobs:
 
       - name: Install dependencies
         run: mix deps.get
+
+      # ゲートではない。脆弱性・ツール失敗のどちらでも非0になる。artifact で区別する。
+      - name: Dependency audit (visibility only)
+        id: deps_audit
+        continue-on-error: true
+        run: |
+          mkdir -p tmp
+          set +e
+          mix deps.audit --format=human | tee tmp/deps-audit.txt
+          human_exit=${PIPESTATUS[0]}
+          mix deps.audit --format=json > tmp/deps-audit.json 2> tmp/deps-audit-json.stderr
+          json_exit=$?
+          {
+            echo "human_exit=${human_exit}"
+            echo "json_exit=${json_exit}"
+            if [ "${human_exit}" -eq 0 ]; then
+              echo "outcome=clean"
+            elif [ -s tmp/deps-audit.json ] && grep -q '"pass":false' tmp/deps-audit.json; then
+              echo "outcome=vulnerabilities_found"
+            else
+              echo "outcome=audit_tool_or_fetch_failed"
+            fi
+          } | tee tmp/deps-audit-meta.txt
+          if [ "${human_exit}" -ne 0 ]; then
+            echo "::warning::mix deps.audit exited ${human_exit} (see artifact deps-audit-report / tmp/deps-audit-meta.txt). CI green does not mean no advisories."
+          fi
+          exit "${human_exit}"
+
+      - name: Upload dependency audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deps-audit-report
+          path: |
+            tmp/deps-audit.txt
+            tmp/deps-audit.json
+            tmp/deps-audit-json.stderr
+            tmp/deps-audit-meta.txt
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Create and migrate test database
         run: mix ash.setup --domains Bitflyer.System,Bitflyer.Trading

@@ -36,6 +36,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | observe — health | implemented | `/health/live`・`/health/ready`・`/health` |
 | UI StatusLive | implemented | 発注可否・Feed・鮮度・モード色分け |
 | CI（`mix precommit` / GitHub Actions） | implemented | PR と `main` |
+| deps audit（`mix deps.audit`） | implemented | ゲート外の可視化。CI artifact。Hex のみ（GitHub 依存は対象外） |
 | CD（GHCR push） | implemented | `v*` タグ / `workflow_dispatch`。digest を Compose に固定 |
 | private bitFlyer API（署名付き REST） | implemented | `Exchange.Rest`。cancel / 照会 / 約定反映。live+キーで差し込み。既定は Unavailable |
 | UI 認証（BasicAuth） | implemented | `UI_BASIC_AUTH_*`。prod 必須。`/health*` は対象外 |
@@ -91,7 +92,7 @@ curl -fsS http://127.0.0.1:4000/health/live
 docker compose run --rm app mix precommit
 ```
 
-中身は format チェック / warnings-as-errors の compile / test（両アプリ）。`MIX_ENV` は Compose に固定しない（`.env` にも書かない）。`preferred_envs` が `precommit` を `:test` にする。
+中身は format チェック / warnings-as-errors の compile / test（両アプリ）/ 未使用 deps。`MIX_ENV` は Compose に固定しない（`.env` にも書かない）。`preferred_envs` が `precommit` を `:test` にする。
 
 `ash.setup` は常駐起動（`phx.server`）時だけ走り、対象は開発用 DB（`docker_bitflyer_dev`）。テストは別 DB（既定 `docker_bitflyer_test`）を使うため、初回やマイグレーション追加のあとは先に次を実行する。
 
@@ -102,6 +103,16 @@ docker compose run --rm -e MIX_ENV=test app mix ash.setup --domains Bitflyer.Sys
 （上書きしたいときは `TEST_DATABASE_URL` を設定する。CI はジョブ内で setup してから `precommit` する。）
 
 GitHub Actions も同じ `mix precommit` を PR と `main` で実行する。範囲の詳細は [architecture/ci-cd.md](.workspace/0_doc/architecture/ci-cd.md)。**CI が赤のまま `main` へマージしない。**
+
+### deps audit（ゲート外・可視化）
+
+品質ゲートには含めない。CI では別ステップで実行し、失敗してもジョブは緑のまま（artifact `deps-audit-report` に残る）。ローカル再現:
+
+```bash
+docker compose run --rm app mix deps.audit
+```
+
+Hex の既知 advisory が対象。`heroicons` / `daisyui` など GitHub タグ依存はスキャンされない。**CI 緑 ≠ 依存に既知脆弱性なし。**
 
 ## 環境変数
 
@@ -201,7 +212,6 @@ docker compose run --rm app mix setup
 
 ## これから作るもの
 
-- deps audit（CI 可視化）
 - 戦略アルゴリズムの高度化
 
 詳細は Vision と Architecture を先に読む。改善の優先順位は [improvement-plan.md](.workspace/0_doc/evaluation/improvement-plan.md)。
