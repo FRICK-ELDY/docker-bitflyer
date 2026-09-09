@@ -23,4 +23,9 @@ defmodule Bitflyer.Strategy.FixedOnceTest do
   test "evaluate is pure and repeats the same intent" do
     assert FixedOnce.evaluate(@market, [], %{}) == FixedOnce.evaluate(@market, [], %{})
   end
+
+  test "evaluate accepts float size via Decimal.from_float" do
+    assert [command] = FixedOnce.evaluate(@market, [], %{size: 0.05})
+    assert Decimal.eq?(command.size, Decimal.from_float(0.05))
+  end
 end

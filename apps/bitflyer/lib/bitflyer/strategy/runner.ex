@@ -4,6 +4,7 @@ defmodule Bitflyer.Strategy.Runner do
 
   Ready 前など一時失敗は再試行する。受理済み・永続失敗は `internal_order_id`
   単位で settled とし再送しない。  起動時は Order から ID を復元するまで tick を無視する（起動レース回避）。
+  復元は lookback＋戦略 ID 接頭辞で絞り、古い行の二重 REST は Executor 冪等に委ねる。
   銘柄ごとに `throttle_ms` で評価頻度を制限する。
   """
 
@@ -207,12 +208,13 @@ defmodule Bitflyer.Strategy.Runner do
   defp accepted?({:ok, _order, :idempotent}), do: true
   defp accepted?(_), do: false
 
-  defp terminal_rejection?({:error, reason, meta}) when is_map(meta) do
+  defp terminal_rejection?({:error, reason, meta}) do
     cond do
       reason in @retryable_errors ->
         false
 
-      reason == :limit_exceeded and Map.get(meta, :limit) in @retryable_limit_kinds ->
+      reason == :limit_exceeded and is_map(meta) and
+          Map.get(meta, :limit) in @retryable_limit_kinds ->
         false
 
       reason == :limit_exceeded ->
@@ -229,6 +231,7 @@ defmodule Bitflyer.Strategy.Runner do
 
   defp terminal_rejection?({:error, reason}) when reason in @retryable_errors, do: false
   defp terminal_rejection?({:error, :invalid_command}), do: true
+  defp terminal_rejection?({:error, :limit_exceeded}), do: true
   defp terminal_rejection?({:error, _}), do: false
   defp terminal_rejection?(_), do: false
 
@@ -292,18 +295,27 @@ defmodule Bitflyer.Strategy.Runner do
   end
 
   defp load_submitted_ids do
+    since = submitted_lookback_since()
+    prefix = Strategy.submitted_id_prefix()
+
     Order
     |> Ash.Query.select([:internal_order_id])
+    |> Ash.Query.filter(inserted_at >= ^since)
     |> Ash.read()
     |> case do
       {:ok, orders} ->
         orders
         |> Enum.map(& &1.internal_order_id)
-        |> Enum.filter(&(is_binary(&1) and &1 != ""))
+        |> Enum.filter(&(is_binary(&1) and &1 != "" and String.starts_with?(&1, prefix)))
         |> MapSet.new()
 
       {:error, error} ->
         raise "failed to load submitted order ids: #{inspect(error)}"
     end
+  end
+
+  defp submitted_lookback_since do
+    days = Strategy.submitted_lookback_days()
+    DateTime.utc_now() |> DateTime.add(-days * 86_400, :second) |> DateTime.truncate(:microsecond)
   end
 end

@@ -31,6 +31,7 @@ defmodule Bitflyer.Strategy.FixedOnce do
       %Decimal{} = size -> size
       raw when is_binary(raw) -> Decimal.new(raw)
       raw when is_integer(raw) -> Decimal.new(raw)
+      raw when is_float(raw) -> Decimal.from_float(raw)
       _ -> Decimal.new("0.01")
     end
   end

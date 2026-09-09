@@ -48,4 +48,27 @@ defmodule Bitflyer.Strategy do
       _ -> 1_000
     end
   end
+
+  @doc """
+  起動時に Order から復元する `internal_order_id` の lookback（日）。
+  古い行は Executor の冪等に委ね、フルスキャンを避ける。
+  """
+  @spec submitted_lookback_days() :: pos_integer()
+  def submitted_lookback_days do
+    case Keyword.get(config(), :submitted_lookback_days, 7) do
+      days when is_integer(days) and days > 0 -> days
+      _ -> 7
+    end
+  end
+
+  @doc """
+  復元対象の ID 接頭辞。戦略由来以外の注文を載せない。
+  """
+  @spec submitted_id_prefix() :: String.t()
+  def submitted_id_prefix do
+    case Keyword.get(config(), :submitted_id_prefix, "strategy-") do
+      prefix when is_binary(prefix) and prefix != "" -> prefix
+      _ -> "strategy-"
+    end
+  end
 end
