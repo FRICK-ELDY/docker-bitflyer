@@ -120,12 +120,19 @@ discord_webhook =
 config :bitflyer, Bitflyer.Observe.Discord, webhook_url: discord_webhook
 
 # UI BasicAuth。prod は必須。dev は両方揃ったときだけ有効（test は既定オフ）。
-ui_basic_user = System.get_env("UI_BASIC_AUTH_USERNAME")
-ui_basic_pass = System.get_env("UI_BASIC_AUTH_PASSWORD")
+ui_basic_user =
+  case System.get_env("UI_BASIC_AUTH_USERNAME") do
+    nil -> ""
+    val -> String.trim(val)
+  end
 
-ui_basic_present? =
-  is_binary(ui_basic_user) and String.trim(ui_basic_user) != "" and
-    is_binary(ui_basic_pass) and String.trim(ui_basic_pass) != ""
+ui_basic_pass =
+  case System.get_env("UI_BASIC_AUTH_PASSWORD") do
+    nil -> ""
+    val -> String.trim(val)
+  end
+
+ui_basic_present? = ui_basic_user != "" and ui_basic_pass != ""
 
 ui_basic_enabled? =
   case config_env() do
@@ -149,8 +156,8 @@ ui_basic_enabled? =
 
 config :ui, :basic_auth,
   enabled: ui_basic_enabled?,
-  username: if(ui_basic_present?, do: String.trim(ui_basic_user), else: ""),
-  password: if(ui_basic_present?, do: String.trim(ui_basic_pass), else: "")
+  username: ui_basic_user,
+  password: ui_basic_pass
 
 # ## Using releases
 #
@@ -201,8 +208,14 @@ if config_env() == :prod do
 
   # 公開面の最小化: 既定は loopback。VLAN 等へ意図的に出すときだけ PHX_HTTP_IP を変える。
   # 許可値: 127.0.0.1（既定）/ 0.0.0.0 / ::1 / ::
+  phx_http_ip =
+    case System.get_env("PHX_HTTP_IP") do
+      nil -> "127.0.0.1"
+      val -> String.trim(val)
+    end
+
   http_ip =
-    case System.get_env("PHX_HTTP_IP") || "127.0.0.1" do
+    case phx_http_ip do
       "127.0.0.1" ->
         {127, 0, 0, 1}
 

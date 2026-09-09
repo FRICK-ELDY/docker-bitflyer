@@ -14,9 +14,7 @@ defmodule UiWeb.Hooks.BasicAuth do
     end
   end
 
-  defp session_ok?(session) when is_map(session) do
-    Map.get(session, "ui_basic_ok") == true or Map.get(session, :ui_basic_ok) == true
-  end
-
+  defp session_ok?(%{"ui_basic_ok" => true}), do: true
+  defp session_ok?(%{ui_basic_ok: true}), do: true
   defp session_ok?(_), do: false
 end
