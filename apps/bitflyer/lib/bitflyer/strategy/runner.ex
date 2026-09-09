@@ -3,7 +3,10 @@ defmodule Bitflyer.Strategy.Runner do
   Feed の tick を受け、Strategy → Risk → Executor へ渡す駆動役。
 
   Ready 前など一時失敗は再試行する。受理済み・永続失敗は `internal_order_id`
-  単位で settled とし再送しない。  起動時は Order から ID を復元するまで tick を無視する（起動レース回避）。
+  単位で settled とし再送しない。
+
+  起動時は Order から ID を復元するまで tick を無視する。
+  ロード完了時刻より前に送られた tick（メールボックス滞留分）は破棄する。
   復元は lookback＋戦略 ID 接頭辞で絞り、古い行の二重 REST は Executor 冪等に委ねる。
   銘柄ごとに `throttle_ms` で評価頻度を制限する。
   """
@@ -41,12 +44,17 @@ defmodule Bitflyer.Strategy.Runner do
 
   @doc """
   Feed から tick を通知する。Runner 未起動なら no-op。
+
+  送信時刻（monotonic ms）を付与し、起動ロード完了前の滞留 tick を破棄できるようにする。
   """
   @spec notify_tick({:ticker, String.t()}, map()) :: :ok
   def notify_tick({:ticker, _product_code} = key, value) when is_map(value) do
     case Process.whereis(@name) do
-      nil -> :ok
-      pid -> send(pid, {:tick, key, value})
+      nil ->
+        :ok
+
+      pid ->
+        send(pid, {:tick, key, value, System.monotonic_time(:millisecond)})
     end
 
     :ok
@@ -56,7 +64,8 @@ defmodule Bitflyer.Strategy.Runner do
 
   @impl true
   def init(opts) do
-    {submitted, schedule_load?} = submitted_boot(Keyword.get(opts, :load_submitted?, true))
+    {submitted, schedule_load?, ticks_ready_at} =
+      submitted_boot(Keyword.get(opts, :load_submitted?, true))
 
     state = %{
       module: Keyword.get_lazy(opts, :module, &Strategy.module/0),
@@ -64,6 +73,8 @@ defmodule Bitflyer.Strategy.Runner do
       throttle_ms: Keyword.get(opts, :throttle_ms, Strategy.throttle_ms()),
       # ロード完了まで nil。tick を無視して起動レースでの二重評価を防ぐ
       submitted: submitted,
+      # この時刻より前に送られた tick はブート滞留とみなして破棄
+      ticks_ready_at: ticks_ready_at,
       last_evaluated: %{}
     }
 
@@ -76,15 +87,25 @@ defmodule Bitflyer.Strategy.Runner do
 
   @impl true
   def handle_info(:load_submitted, state) do
-    {:noreply, %{state | submitted: load_submitted_ids()}}
+    {:noreply,
+     %{
+       state
+       | submitted: load_submitted_ids(),
+         ticks_ready_at: System.monotonic_time(:millisecond)
+     }}
   end
 
-  def handle_info({:tick, {:ticker, product_code} = key, value}, state) do
+  def handle_info({:tick, {:ticker, product_code} = key, value, sent_at}, state)
+      when is_integer(sent_at) do
     now = System.monotonic_time(:millisecond)
 
     state =
       cond do
-        is_nil(state.submitted) ->
+        is_nil(state.submitted) or is_nil(state.ticks_ready_at) ->
+          state
+
+        # ロード完了前にキューされた tick（固定 100ms TTL より意図が明確）
+        sent_at < state.ticks_ready_at ->
           state
 
         # 高頻度 tick では Application env より先に throttle 判定する
@@ -107,9 +128,9 @@ defmodule Bitflyer.Strategy.Runner do
   # true — 起動時に DB ロードをスケジュール（完了まで submitted は nil）
   # false — 空の MapSet で即受付（テスト用）
   # :pending — nil のままロードしない（起動レース検証用）
-  defp submitted_boot(true), do: {nil, true}
-  defp submitted_boot(false), do: {MapSet.new(), false}
-  defp submitted_boot(:pending), do: {nil, false}
+  defp submitted_boot(true), do: {nil, true, nil}
+  defp submitted_boot(false), do: {MapSet.new(), false, System.monotonic_time(:millisecond)}
+  defp submitted_boot(:pending), do: {nil, false, nil}
 
   defp normalize_params(params) when is_map(params), do: params
   defp normalize_params(params) when is_list(params), do: Map.new(params)
@@ -125,7 +146,7 @@ defmodule Bitflyer.Strategy.Runner do
   defp maybe_submit(product_code, key, value, state) do
     case build_market(product_code, key, value) do
       {:ok, market} ->
-        commands = state.module.evaluate(market, [], state.params)
+        commands = evaluate_commands(state.module, market, state.params, product_code)
 
         pending_commands =
           Enum.filter(commands, fn command ->
@@ -171,6 +192,31 @@ defmodule Bitflyer.Strategy.Runner do
       :error ->
         state
     end
+  end
+
+  defp evaluate_commands(module, market, params, product_code) do
+    case module.evaluate(market, [], params) do
+      commands when is_list(commands) ->
+        commands
+
+      other ->
+        Bitflyer.Telemetry.log(
+          :error,
+          "strategy evaluate returned non-list",
+          %{product_code: product_code, strategy: module, result: inspect(other)}
+        )
+
+        []
+    end
+  rescue
+    error ->
+      Bitflyer.Telemetry.log(
+        :error,
+        "strategy evaluate crashed: #{Exception.message(error)}",
+        %{product_code: product_code, strategy: module}
+      )
+
+      []
   end
 
   defp maybe_settle(acc, command, result) do
@@ -232,6 +278,7 @@ defmodule Bitflyer.Strategy.Runner do
   defp terminal_rejection?({:error, reason}) when reason in @retryable_errors, do: false
   defp terminal_rejection?({:error, :invalid_command}), do: true
   defp terminal_rejection?({:error, :limit_exceeded}), do: true
+  defp terminal_rejection?({:error, %_{}}), do: true
   defp terminal_rejection?({:error, _}), do: false
   defp terminal_rejection?(_), do: false
 

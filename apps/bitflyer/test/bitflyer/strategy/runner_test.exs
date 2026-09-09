@@ -171,6 +171,40 @@ defmodule Bitflyer.Strategy.RunnerTest do
              |> Ash.read_one()
   end
 
+  test "discards ticks sent before ticks_ready_at (boot backlog)" do
+    stop_supervised(Runner)
+
+    {:ok, pid} = start_supervised({Runner, [throttle_ms: 0, load_submitted?: :pending]})
+    allow_runner_repo(pid)
+    send(pid, :load_submitted)
+    state = :sys.get_state(pid)
+
+    assert is_integer(state.ticks_ready_at)
+
+    assert Readiness.mark_ready() == :ok
+    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+
+    send(
+      pid,
+      {:tick, @market_key, %{ltp: Decimal.new("5000000")}, state.ticks_ready_at - 1}
+    )
+
+    _ = :sys.get_state(pid)
+
+    assert {:ok, nil} =
+             Order
+             |> Ash.Query.filter(internal_order_id == ^@order_id)
+             |> Ash.read_one()
+
+    assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
+    _ = :sys.get_state(pid)
+
+    assert {:ok, %Order{}} =
+             Order
+             |> Ash.Query.filter(internal_order_id == ^@order_id)
+             |> Ash.read_one()
+  end
+
   test "invalid_command is settled and not retried" do
     stop_supervised(Runner)
 
