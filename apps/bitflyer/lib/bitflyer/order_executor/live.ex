@@ -64,7 +64,13 @@ defmodule Bitflyer.OrderExecutor.Live do
               }
             )
 
-            _ = Bitflyer.Risk.open_circuit(:persist_failed)
+            _ =
+              open_circuit_or_log!(:persist_failed, %{
+                internal_order_id: order.internal_order_id,
+                exchange_order_id: exchange_order_id,
+                product_code: order.product_code,
+                side: order.side
+              })
 
             {:error, :persist_failed,
              %{
@@ -98,9 +104,41 @@ defmodule Bitflyer.OrderExecutor.Live do
     else
       # timeout / 切断等: 受注不明。rejected にせず halt して再送を止める
       _ = update_status(order, :submission_unknown, reason)
-      _ = Bitflyer.Risk.open_circuit(:submission_unknown)
+
+      _ =
+        open_circuit_or_log!(:submission_unknown, %{
+          internal_order_id: order.internal_order_id,
+          product_code: order.product_code,
+          side: order.side,
+          place_error: reason
+        })
 
       {:error, :submission_unknown, %{reason: reason}}
+    end
+  end
+
+  # Circuit.open は常に先に Readiness.halt する。{:error, _} は RiskState 永続化失敗のみ。
+  # 稼働中の発注ゲートは閉じているが、再起動後に halt が消える危険があるため critical を残す。
+  defp open_circuit_or_log!(reason, meta) when is_atom(reason) and is_map(meta) do
+    case Bitflyer.Risk.open_circuit(reason) do
+      :ok ->
+        :ok
+
+      {:error, open_error} ->
+        Bitflyer.Telemetry.log(
+          :critical,
+          "Failed to persist risk circuit after #{reason}: #{inspect(open_error)}",
+          Map.merge(
+            %{
+              reason: reason,
+              open_error: open_error,
+              trade_mode: :live
+            },
+            meta
+          )
+        )
+
+        {:error, open_error}
     end
   end
 
