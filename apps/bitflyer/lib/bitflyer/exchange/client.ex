@@ -4,8 +4,12 @@ defmodule Bitflyer.Exchange.Client do
 
   - 突合: `fetch_reconcile_snapshot/0`
   - 発注: `place_order/1`（live の order-executor 出口のみが呼ぶ）
+  - 取消: `cancel_order/1`
+  - 照会: `fetch_order/1`
+  - 約定: `fetch_executions/1`（live 約定反映用）
 
   未実装クライアントは `Bitflyer.Exchange.Unavailable`（fail-closed）。
+  署名付き REST は `Bitflyer.Exchange.Rest`。
 
   ## `place_order/1` のエラー契約
 
@@ -56,6 +60,49 @@ defmodule Bitflyer.Exchange.Client do
 
   @type place_order_result :: %{exchange_order_id: String.t()}
 
+  @type cancel_order_request :: %{
+          required(:product_code) => String.t(),
+          required(:exchange_order_id) => String.t()
+        }
+
+  @type fetch_order_request :: %{
+          required(:product_code) => String.t(),
+          required(:exchange_order_id) => String.t()
+        }
+
+  @type order_status ::
+          :active | :completed | :canceled | :expired | :rejected | :unknown
+
+  @type order_info :: %{
+          exchange_order_id: String.t(),
+          product_code: String.t(),
+          side: :buy | :sell,
+          size: Decimal.t(),
+          filled_size: Decimal.t(),
+          average_price: Decimal.t() | nil,
+          status: order_status()
+        }
+
+  @type fetch_executions_request :: %{
+          required(:product_code) => String.t(),
+          optional(:exchange_order_id) => String.t(),
+          optional(:count) => pos_integer()
+        }
+
+  @type execution :: %{
+          id: integer() | String.t(),
+          exchange_order_id: String.t(),
+          product_code: String.t() | nil,
+          side: :buy | :sell,
+          price: Decimal.t(),
+          size: Decimal.t(),
+          executed_at: String.t() | nil
+        }
+
   @callback fetch_reconcile_snapshot() :: {:ok, snapshot()} | {:error, term()}
   @callback place_order(place_order_request()) :: {:ok, place_order_result()} | {:error, term()}
+  @callback cancel_order(cancel_order_request()) :: :ok | {:error, term()}
+  @callback fetch_order(fetch_order_request()) :: {:ok, order_info()} | {:error, term()}
+  @callback fetch_executions(fetch_executions_request()) ::
+              {:ok, [execution()]} | {:error, term()}
 end

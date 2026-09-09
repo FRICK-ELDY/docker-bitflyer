@@ -11,6 +11,7 @@ defmodule Bitflyer.Startup.ResumeTest do
 
   defmodule EmptyExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot do
@@ -23,6 +24,7 @@ defmodule Bitflyer.Startup.ResumeTest do
 
   defmodule UnavailableExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot, do: {:error, :exchange_unavailable}

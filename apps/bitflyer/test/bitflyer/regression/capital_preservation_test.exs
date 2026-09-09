@@ -34,6 +34,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
   defmodule SpyExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot do
@@ -52,6 +53,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
   defmodule MismatchExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot do
@@ -76,6 +78,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
   defmodule TimeoutExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot do

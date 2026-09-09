@@ -109,7 +109,7 @@ config :bitflyer,
 
 # bitFlyer Private API 資格情報。名前は固定。値は Git / イメージ / ログに出さない。
 # TRADE_MODE=live のときのみ必須（:test は除く。.env の live でテスト起動を止めない）。
-# 署名付き client 本体は未実装（Exchange.Unavailable）。枠だけ先に固定する。
+# live + キーありのとき署名付き Rest を差し込む。それ以外は Unavailable（fail-closed）。
 # 出金権限付きキーは運用禁止（文書の正: overview / prod.md）。
 bitflyer_api_key =
   case System.get_env("BITFLYER_API_KEY") do
@@ -146,6 +146,16 @@ end
 config :bitflyer, :exchange_api,
   api_key: exchange_api_key,
   api_secret: exchange_api_secret
+
+# live 実運用のみ Rest を刺す。test / dry_run / paper / キー欠落は Unavailable のまま。
+if trade_mode == :live and config_env() != :test and bitflyer_api_present? do
+  config :bitflyer, exchange_client: Bitflyer.Exchange.Rest
+end
+
+config :bitflyer, Bitflyer.Exchange.Rest,
+  base_url: "https://api.bitflyer.com",
+  http_client: Bitflyer.Exchange.Rest.HTTP,
+  receive_timeout: 5_000
 
 discord_webhook =
   case System.get_env("DISCORD_WEBHOOK_URL") do

@@ -9,6 +9,11 @@ config :bitflyer,
 # Private API 資格情報（runtime で上書き。live 時のみ必須）
 config :bitflyer, :exchange_api, api_key: "", api_secret: ""
 
+config :bitflyer, Bitflyer.Exchange.Rest,
+  base_url: "https://api.bitflyer.com",
+  http_client: Bitflyer.Exchange.Rest.HTTP,
+  receive_timeout: 5_000
+
 config :bitflyer, Bitflyer.Startup.Reconciler,
   boot?: true,
   interval_ms: 60_000

@@ -8,6 +8,8 @@ defmodule Bitflyer.OrderExecutor do
   - `dry_run` — 送らず記録のみ（建玉は動かさない）
   - `paper` — 擬似約定 → datastore（取引所 REST は呼ばない）
   - `live` — `exchange_order_gate` 通過時のみ REST
+
+  取消は `cancel/2`。live のみ取引所 REST を呼ぶ。
   """
 
   require Ash.Query
@@ -22,13 +24,18 @@ defmodule Bitflyer.OrderExecutor do
           | {:ok, Order.t(), :idempotent}
           | {:error, atom(), map()}
 
+  @cancellable_statuses [:pending, :partially_filled]
+
   @doc """
   注文を実行する。先に risk 認可し、既存 `internal_order_id` があれば再送しない。
+
+  live では認可前に未反映約定を同期し、Risk の建玉検査が遅れないようにする。
 
   ## Options
   - Risk.authorize/2 と同じオプション（`:positions`, `:limits`, `:now`, `:server` 等）
   - `:trade_mode` — 出口上書き（既定は `TradeMode.current/0`）
   - `:persist_exchange_order_id` — live のみ。受注 ID 永続化の差し替え（テスト用）
+  - `:exchange` — live fill 同期先（テスト用）
 
   risk 認可は常に必須。公開 API からスキップできない。
   """
@@ -37,6 +44,7 @@ defmodule Bitflyer.OrderExecutor do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &TradeMode.current/0)
 
     with :ok <- validate_command(command),
+         :ok <- maybe_sync_live_fills(trade_mode, opts),
          :ok <- Risk.authorize(command, opts),
          {:new, command} <- idempotent_lookup(command),
          {:ok, order} <- create_pending(command, trade_mode),
@@ -49,6 +57,88 @@ defmodule Bitflyer.OrderExecutor do
 
       other ->
         other
+    end
+  end
+
+  @doc """
+  未約定（または部分約定）注文を取消する。
+
+  - `dry_run` / `paper` — 内部 status のみ `cancelled`（REST なし）
+  - `live` — `Exchange.cancel_order/1` のあと fill 同期して終端化。
+    発注ゲート（halt）中でもエクスポージャ削減のため取消 REST は許可する。
+
+  出口は注文自身の `trade_mode` に固定する（opts で上書きしない）。
+  """
+  @spec cancel(String.t() | Order.t(), keyword()) :: result()
+  def cancel(internal_order_id_or_order, opts \\ [])
+
+  def cancel(internal_order_id, opts) when is_binary(internal_order_id) do
+    case fetch_order(internal_order_id) do
+      {:ok, %Order{} = order} -> cancel(order, opts)
+      {:ok, nil} -> {:error, :not_found, %{internal_order_id: internal_order_id}}
+      {:error, error} -> {:error, :persist_failed, %{error: error}}
+    end
+  end
+
+  def cancel(%Order{} = order, opts) do
+    # opts の :trade_mode は無視。live 注文を dry_run 取消にして取引所に残骸を残さない。
+    trade_mode = order.trade_mode
+
+    cond do
+      order.status not in @cancellable_statuses ->
+        {:error, :not_cancellable, %{status: order.status}}
+
+      trade_mode == :live ->
+        Live.Cancel.execute(order, opts)
+
+      trade_mode in [:dry_run, :paper] ->
+        cancel_local(order)
+
+      true ->
+        {:error, :invalid_trade_mode, %{trade_mode: trade_mode}}
+    end
+  end
+
+  defp maybe_sync_live_fills(:live, opts) do
+    exchange = Keyword.get(opts, :exchange, Bitflyer.Exchange)
+
+    case Bitflyer.OrderExecutor.LiveFills.sync_open_orders(exchange: exchange) do
+      :ok ->
+        :ok
+
+      {:error, reason, meta} ->
+        Bitflyer.Telemetry.log(
+          :error,
+          "live fill sync before authorize failed: #{inspect(reason)}",
+          Map.merge(%{trade_mode: :live}, meta || %{})
+        )
+
+        {:error, :fill_sync_failed, Map.put(meta || %{}, :reason, reason)}
+    end
+  end
+
+  defp maybe_sync_live_fills(_mode, _opts), do: :ok
+
+  defp cancel_local(%Order{} = order) do
+    case order
+         |> Ash.Changeset.for_update(:update, %{status: :cancelled})
+         |> Ash.update() do
+      {:ok, updated} ->
+        Bitflyer.Telemetry.log(
+          :info,
+          "#{order.trade_mode} order cancelled (local)",
+          %{
+            internal_order_id: order.internal_order_id,
+            product_code: order.product_code,
+            trade_mode: order.trade_mode,
+            status: :cancelled
+          }
+        )
+
+        {:ok, updated}
+
+      {:error, error} ->
+        {:error, :persist_failed, %{error: error}}
     end
   end
 

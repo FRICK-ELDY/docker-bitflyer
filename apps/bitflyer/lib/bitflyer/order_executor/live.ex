@@ -46,6 +46,8 @@ defmodule Bitflyer.OrderExecutor.Live do
       {:ok, %{exchange_order_id: exchange_order_id}} ->
         case persist_exchange_order_id(order, exchange_order_id, opts) do
           {:ok, updated} ->
+            # 成行即時約定などを Risk が次に見る前に取り込む（失敗はログのみ。認可前同期が本命）
+            _ = sync_fills_after_place(updated, opts)
             {:ok, updated}
 
           {:error, error} ->
@@ -82,6 +84,34 @@ defmodule Bitflyer.OrderExecutor.Live do
 
       {:error, reason} ->
         handle_place_error(order, reason)
+    end
+  end
+
+  defp sync_fills_after_place(%Order{} = order, opts) do
+    exchange = Keyword.get(opts, :exchange, Bitflyer.Exchange)
+
+    case Bitflyer.OrderExecutor.LiveFills.sync_order(order, exchange: exchange) do
+      :ok ->
+        :ok
+
+      {:ok, _} ->
+        :ok
+
+      {:error, reason, meta} ->
+        Bitflyer.Telemetry.log(
+          :warning,
+          "live fill sync after place_order failed: #{inspect(reason)}",
+          Map.merge(
+            %{
+              internal_order_id: order.internal_order_id,
+              exchange_order_id: order.exchange_order_id,
+              trade_mode: :live
+            },
+            meta || %{}
+          )
+        )
+
+        {:error, reason, meta}
     end
   end
 

@@ -1,0 +1,21 @@
+[
+  {
+    "id": 138398,
+    "child_order_id": "JOR20150707-084555-022523",
+    "product_code": "FX_BTC_JPY",
+    "side": "BUY",
+    "child_order_type": "LIMIT",
+    "price": 30000,
+    "average_price": 30000,
+    "size": 0.1,
+    "child_order_state": "ACTIVE",
+    "expire_date": "2015-07-14T07:25:52",
+    "child_order_date": "2015-07-07T08:45:53",
+    "child_order_acceptance_id": "JRF20150707-084552-031927",
+    "outstanding_size": 0.1,
+    "cancel_size": 0,
+    "executed_size": 0,
+    "total_commission": 0,
+    "time_in_force": "GTC"
+  }
+]
