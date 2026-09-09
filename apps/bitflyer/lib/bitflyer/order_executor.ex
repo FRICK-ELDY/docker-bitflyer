@@ -28,15 +28,16 @@ defmodule Bitflyer.OrderExecutor do
   ## Options
   - Risk.authorize/2 と同じオプション（`:positions`, `:limits`, `:now`, `:server` 等）
   - `:trade_mode` — 出口上書き（既定は `TradeMode.current/0`）
-  - `:authorize?` — 既定 true。false のとき risk をスキップ（テスト用）
   - `:persist_exchange_order_id` — live のみ。受注 ID 永続化の差し替え（テスト用）
+
+  risk 認可は常に必須。公開 API からスキップできない。
   """
   @spec submit(map(), keyword()) :: result()
   def submit(command, opts \\ []) when is_map(command) do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &TradeMode.current/0)
 
     with :ok <- validate_command(command),
-         :ok <- maybe_authorize(command, opts),
+         :ok <- Risk.authorize(command, opts),
          {:new, command} <- idempotent_lookup(command),
          {:ok, order} <- create_pending(command, trade_mode),
          {:ok, order} <- dispatch(order, command, trade_mode, opts) do
@@ -84,17 +85,6 @@ defmodule Bitflyer.OrderExecutor do
 
   defp valid_limit_price?(%Decimal{} = price), do: Decimal.positive?(price)
   defp valid_limit_price?(_), do: false
-
-  defp maybe_authorize(command, opts) do
-    if Keyword.get(opts, :authorize?, true) do
-      case Risk.authorize(command, opts) do
-        :ok -> :ok
-        {:error, code, meta} -> {:error, code, meta}
-      end
-    else
-      :ok
-    end
-  end
 
   defp idempotent_lookup(command) do
     id = Map.fetch!(command, :internal_order_id)

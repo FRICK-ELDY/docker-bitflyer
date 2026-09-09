@@ -361,6 +361,26 @@ defmodule Bitflyer.OrderExecutorTest do
     assert SpyExchange.place_count() == 0
   end
 
+  test "public submit cannot skip risk via authorize?: false" do
+    Application.put_env(:bitflyer, :trade_mode, :dry_run)
+    assert Readiness.get() == :not_ready
+
+    # 旧オプションを渡しても risk は常に実行される（迂回不可）
+    assert {:error, :unsynced, _} =
+             OrderExecutor.submit(valid_command("risk-bypass-1"),
+               positions: [],
+               trade_mode: :dry_run,
+               authorize?: false
+             )
+
+    assert {:ok, nil} =
+             Order
+             |> Ash.Query.filter(internal_order_id == "risk-bypass-1")
+             |> Ash.read_one()
+
+    assert SpyExchange.place_count() == 0
+  end
+
   defp valid_command(internal_order_id, overrides \\ %{}) do
     Map.merge(
       %{
