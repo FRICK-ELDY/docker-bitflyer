@@ -25,7 +25,15 @@ defmodule Bitflyer.Application do
 
   defp market_data_feed do
     if Bitflyer.MarketData.enabled?() do
-      [{Bitflyer.MarketData.Feed, []}]
+      [{Bitflyer.MarketData.Feed, []}] ++ strategy_runner()
+    else
+      []
+    end
+  end
+
+  defp strategy_runner do
+    if Bitflyer.Strategy.enabled?() do
+      [{Bitflyer.Strategy.Runner, []}]
     else
       []
     end

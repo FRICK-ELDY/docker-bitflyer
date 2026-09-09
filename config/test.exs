@@ -37,3 +37,5 @@ config :bitflyer, Bitflyer.MarketData,
   enabled: false,
   rest_client: Bitflyer.MarketData.Rest.Stub,
   socket_client: Bitflyer.MarketData.Socket.Local
+
+config :bitflyer, Bitflyer.Strategy, enabled: false

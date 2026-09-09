@@ -26,6 +26,12 @@ config :bitflyer, Bitflyer.MarketData,
   reconnect_base_ms: 500,
   reconnect_max_ms: 30_000
 
+# Feed → Strategy → Risk → Executor（dry_run 既定で意図を 1 回出す）
+config :bitflyer, Bitflyer.Strategy,
+  enabled: true,
+  module: Bitflyer.Strategy.FixedOnce,
+  params: [size: "0.01", side: :buy]
+
 config :bitflyer, Bitflyer.Risk,
   max_order_size: "1",
   max_position_size: "5",
