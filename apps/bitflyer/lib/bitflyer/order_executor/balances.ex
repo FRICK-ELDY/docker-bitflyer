@@ -15,6 +15,7 @@ defmodule Bitflyer.OrderExecutor.Balances do
   `(trade_mode, currency)` ごとに `pg_advisory_xact_lock` で直列化し、
   同時約定による Lost Update を防ぐ（先端行の `FOR UPDATE` だけでは
   新 tip 挿入後も古い額から append され得る／初回行なし時も競合する）。
+  複数通貨は currency 昇順でロックし、buy/sell 同時でもデッドロックしない。
 
   **呼び出し側は同一 DB トランザクション内で呼ぶこと**（xact ロックは
   コミット／ロールバックで解放される）。
@@ -35,6 +36,8 @@ defmodule Bitflyer.OrderExecutor.Balances do
         :buy -> [{quote, Decimal.negate(notional)}, {base, size}]
         :sell -> [{base, Decimal.negate(size)}, {quote, notional}]
       end
+      # ロック取得順を通貨コードで固定し、buy/sell 同時のデッドロックを防ぐ
+      |> Enum.sort_by(fn {currency, _delta} -> currency end)
 
     captured_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -81,7 +84,7 @@ defmodule Bitflyer.OrderExecutor.Balances do
   defp latest_amount(trade_mode, currency) do
     case BalanceSnapshot
          |> Ash.Query.filter(trade_mode == ^trade_mode and currency == ^currency)
-         |> Ash.Query.sort(captured_at: :desc)
+         |> Ash.Query.sort(captured_at: :desc, id: :desc)
          |> Ash.Query.limit(1)
          |> Ash.read_one() do
       {:ok, nil} -> {:ok, Decimal.new(0)}
