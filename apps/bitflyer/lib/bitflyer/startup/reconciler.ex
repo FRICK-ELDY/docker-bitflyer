@@ -142,7 +142,8 @@ defmodule Bitflyer.Startup.Reconciler do
   end
 
   defp apply_result({:error, reason, details}, state) do
-    detail_meta = Map.take(details, [:product_code, :currency, :kind])
+    detail_meta =
+      if is_map(details), do: Map.take(details, [:product_code, :currency, :kind]), else: %{}
 
     Bitflyer.Telemetry.execute(
       :reconcile_mismatch,
