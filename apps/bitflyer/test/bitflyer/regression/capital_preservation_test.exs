@@ -19,6 +19,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   require Ash.Query
 
   import Bitflyer.TestSupport.MarketDataCacheHelper
+  import Bitflyer.TestSupport.OrderRateHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
   alias Bitflyer.MarketData.Cache
@@ -97,6 +98,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   setup do
     reset_readiness()
     reset_market_data_cache()
+    reset_order_rate()
     clear_default_risk_state()
 
     previous_mode = Application.get_env(:bitflyer, :trade_mode, :dry_run)
@@ -109,6 +111,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
     on_exit(fn ->
       reset_readiness()
       reset_market_data_cache()
+      reset_order_rate()
       clear_default_risk_state()
       Application.put_env(:bitflyer, :trade_mode, previous_mode)
       Application.put_env(:bitflyer, :exchange_client, previous_client)

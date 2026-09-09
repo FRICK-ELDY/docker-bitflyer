@@ -4,6 +4,7 @@ defmodule Bitflyer.RiskTest do
   require Ash.Query
 
   import Bitflyer.TestSupport.MarketDataCacheHelper
+  import Bitflyer.TestSupport.OrderRateHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
   alias Bitflyer.MarketData.Cache
@@ -16,11 +17,13 @@ defmodule Bitflyer.RiskTest do
   setup do
     reset_readiness()
     reset_market_data_cache()
+    reset_order_rate()
     clear_default_risk_state()
 
     on_exit(fn ->
       reset_readiness()
       reset_market_data_cache()
+      reset_order_rate()
     end)
 
     :ok
@@ -283,6 +286,21 @@ defmodule Bitflyer.RiskTest do
                positions: [],
                daily_loss: "150000",
                limits: %{max_daily_loss: "100000"}
+             )
+  end
+
+  test "authorize rejects when OrderRate ETS count exceeds limit" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert :ok = Bitflyer.Risk.OrderRate.record(:dry_run)
+    assert Bitflyer.Risk.OrderRate.count(:dry_run) == 1
+
+    assert {:error, :limit_exceeded, %{limit: :max_orders_per_minute, count: 1, max: 1}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               trade_mode: :dry_run,
+               limits: %{max_orders_per_minute: 1}
              )
   end
 

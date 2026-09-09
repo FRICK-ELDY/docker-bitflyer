@@ -112,6 +112,7 @@ defmodule Bitflyer.OrderExecutor do
 
     case Order |> Ash.Changeset.for_create(:create, attrs) |> Ash.create() do
       {:ok, order} ->
+        _ = Bitflyer.Risk.OrderRate.record(trade_mode)
         {:ok, order}
 
       {:error, error} ->

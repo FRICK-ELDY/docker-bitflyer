@@ -7,13 +7,16 @@ defmodule Bitflyer.Risk do
   サーキットは `open_circuit/1` / `clear_circuit/1`。
 
   検査: 同期 → 鮮度 → 注文サイズ → 建玉 → 価格逸脱 → 発注頻度 → 日次損失 → 残高（任意）。
+
+  発注ホットパスでは RiskState・発注頻度・残高のために DB 往復しない。
+  頻度は `Risk.OrderRate`（ETS）、残高は `:balances` 注入時のみ検査する。
   """
 
   require Ash.Query
 
   alias Bitflyer.MarketData.Cache
-  alias Bitflyer.Risk.{Circuit, Limits}
-  alias Bitflyer.Trading.{BalanceSnapshot, Order, Position}
+  alias Bitflyer.Risk.{Circuit, Limits, OrderRate}
+  alias Bitflyer.Trading.Position
 
   @type rejection_code ::
           :invalid_command
@@ -33,10 +36,10 @@ defmodule Bitflyer.Risk do
   - `:positions` — 建玉リスト（未指定時は DB から当該銘柄を読む）
   - `:now` / `:server` — Cache.fresh?/3・LTP 取得へ転送
   - `:check_persisted_circuit` — 既定 false。true のとき Ready でも RiskState を見る
-  - `:recent_order_count` — 直近 1 分の発注件数（テスト注入）
-  - `:daily_loss` — 当日損失額（正の Decimal。テスト注入）
-  - `:balances` — `%{currency => %{available: Decimal.t()}}` または `%{currency, available}` のリスト
-  - `:utc_now` — 発注頻度窓の基準時刻（テスト注入）
+  - `:recent_order_count` — 直近 1 分の発注件数（テスト注入。未指定時は OrderRate ETS）
+  - `:daily_loss` — 当日損失額（正の Decimal / 数値文字列。テスト注入）
+  - `:balances` — 残高マップまたはリスト（未指定時は残高検査スキップ。ホットパスで DB しない）
+  - `:now` — Cache / OrderRate 用 monotonic ms（テスト注入）
   """
   @spec authorize(map(), keyword()) :: result()
   def authorize(command, opts \\ []) when is_map(command) do
@@ -270,15 +273,12 @@ defmodule Bitflyer.Risk do
   defp check_available_balance(command, opts) do
     case fetch_balances(opts) do
       {:ok, []} ->
-        # 残高スナップが無い環境（dry_run 初期等）ではスキップ。
-        # live Ready は Reconcile の baseline が別途担保する。
+        # ホットパスで BalanceSnapshot を読まない。注入が無ければスキップ。
+        # live Ready の残高 baseline は Reconcile が別途担保する。
         :ok
 
       {:ok, balances} ->
         verify_available_balance(command, balances, opts)
-
-      {:error, _error} ->
-        {:error, :unsynced, %{reason: :balance_load_failed}}
     end
   end
 
@@ -380,7 +380,7 @@ defmodule Bitflyer.Risk do
 
   defp price_deviation_pct(%Decimal{} = price, %Decimal{} = ltp) do
     # LTP が 0 以下だと除算結果が不正になり上限比較をすり抜ける
-    if Decimal.compare(ltp, 0) != :gt do
+    if Decimal.compare(ltp, Decimal.new(0)) != :gt do
       Decimal.new("100")
     else
       price
@@ -400,24 +400,9 @@ defmodule Bitflyer.Risk do
         {:error, :invalid_recent_order_count}
 
       :error ->
-        load_recent_order_count(opts)
-    end
-  end
-
-  defp load_recent_order_count(opts) do
-    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
-
-    now =
-      Keyword.get_lazy(opts, :utc_now, fn -> DateTime.utc_now() end)
-      |> DateTime.truncate(:microsecond)
-
-    since = DateTime.add(now, -60, :second)
-
-    case Order
-         |> Ash.Query.filter(trade_mode == ^trade_mode and inserted_at >= ^since)
-         |> Ash.count() do
-      {:ok, count} -> {:ok, count}
-      {:error, error} -> {:error, error}
+        trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+        count_opts = Keyword.take(opts, [:now, :server, :window_ms])
+        {:ok, OrderRate.count(trade_mode, count_opts)}
     end
   end
 
@@ -426,7 +411,7 @@ defmodule Bitflyer.Risk do
       {:ok, raw_loss} ->
         case to_decimal(raw_loss) do
           %Decimal{} = loss ->
-            if Decimal.compare(loss, 0) == :lt do
+            if Decimal.compare(loss, Decimal.new(0)) == :lt do
               {:error, :invalid_daily_loss}
             else
               {:ok, loss}
@@ -446,25 +431,9 @@ defmodule Bitflyer.Risk do
   defp fetch_balances(opts) do
     case Keyword.fetch(opts, :balances) do
       {:ok, balances} -> {:ok, balances || []}
-      :error -> load_balances(opts)
+      # ホットパスで DB を叩かない。残高検査は明示注入時のみ。
+      :error -> {:ok, []}
     end
-  end
-
-  defp load_balances(opts) do
-    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
-
-    import Ecto.Query
-
-    query =
-      from(b in BalanceSnapshot,
-        where: b.trade_mode == ^trade_mode,
-        distinct: b.currency,
-        order_by: [asc: b.currency, desc: b.captured_at]
-      )
-
-    {:ok, Bitflyer.Repo.all(query)}
-  rescue
-    error -> {:error, error}
   end
 
   defp balance_map(balances) when is_map(balances) do
