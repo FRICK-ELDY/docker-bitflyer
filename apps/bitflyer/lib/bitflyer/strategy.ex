@@ -37,4 +37,15 @@ defmodule Bitflyer.Strategy do
     |> Keyword.get(:params, [])
     |> Map.new()
   end
+
+  @doc """
+  銘柄ごとの評価間隔（ミリ秒）。高頻度 tick での mailbox/同期 submit 負荷を抑える。
+  """
+  @spec throttle_ms() :: non_neg_integer()
+  def throttle_ms do
+    case Keyword.get(config(), :throttle_ms, 1_000) do
+      ms when is_integer(ms) and ms >= 0 -> ms
+      _ -> 1_000
+    end
+  end
 end

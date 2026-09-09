@@ -2,7 +2,8 @@ defmodule Bitflyer.Strategy.Runner do
   @moduledoc """
   Feed の tick を受け、Strategy → Risk → Executor へ渡す駆動役。
 
-  Ready 前の拒否は再試行する。submit 成功（または冪等）後は銘柄ごとに止める。
+  Ready 前の拒否は再試行する。受理済みは `internal_order_id` 単位で記録し、
+  部分成功時も未受理分だけ再送する。銘柄ごとに `throttle_ms` で評価頻度を制限する。
   """
 
   use GenServer
@@ -37,7 +38,9 @@ defmodule Bitflyer.Strategy.Runner do
     state = %{
       module: Keyword.get_lazy(opts, :module, &Strategy.module/0),
       params: Keyword.get_lazy(opts, :params, &Strategy.params/0),
-      submitted: MapSet.new()
+      throttle_ms: Keyword.get(opts, :throttle_ms, Strategy.throttle_ms()),
+      submitted: MapSet.new(),
+      last_evaluated: %{}
     }
 
     {:ok, state}
@@ -45,15 +48,18 @@ defmodule Bitflyer.Strategy.Runner do
 
   @impl true
   def handle_info({:tick, {:ticker, product_code} = key, value}, state) do
+    now = System.monotonic_time(:millisecond)
+
     state =
       cond do
         not Strategy.enabled?() ->
           state
 
-        MapSet.member?(state.submitted, product_code) ->
+        throttled?(state, product_code, now) ->
           state
 
         true ->
+          state = %{state | last_evaluated: Map.put(state.last_evaluated, product_code, now)}
           maybe_submit(product_code, key, value, state)
       end
 
@@ -62,32 +68,53 @@ defmodule Bitflyer.Strategy.Runner do
 
   def handle_info(_other, state), do: {:noreply, state}
 
+  # monotonic 時刻は負になり得るため、未評価は 0 ではなくキー欠如で表す
+  defp throttled?(%{throttle_ms: throttle_ms, last_evaluated: last_evaluated}, product_code, now) do
+    case Map.fetch(last_evaluated, product_code) do
+      :error -> false
+      {:ok, last_time} -> now - last_time < throttle_ms
+    end
+  end
+
   defp maybe_submit(product_code, key, value, state) do
     case build_market(product_code, key, value) do
       {:ok, market} ->
         commands = state.module.evaluate(market, [], state.params)
 
-        Bitflyer.Telemetry.log(
-          :info,
-          "strategy evaluated",
-          %{
-            product_code: product_code,
-            strategy: state.module,
-            command_count: length(commands),
-            trade_mode: Bitflyer.TradeMode.current()
-          }
-        )
+        pending_commands =
+          Enum.reject(commands, fn command ->
+            case command_id(command) do
+              {:ok, id} -> MapSet.member?(state.submitted, id)
+              :error -> false
+            end
+          end)
 
-        if commands == [] do
+        if pending_commands == [] do
           state
         else
-          results = Enum.map(commands, &submit_command/1)
+          Bitflyer.Telemetry.log(
+            :info,
+            "strategy evaluated",
+            %{
+              product_code: product_code,
+              strategy: state.module,
+              command_count: length(commands),
+              pending_count: length(pending_commands),
+              trade_mode: Bitflyer.TradeMode.current()
+            }
+          )
 
-          if Enum.any?(results, &accepted?/1) do
-            %{state | submitted: MapSet.put(state.submitted, product_code)}
-          else
-            state
-          end
+          submitted =
+            Enum.reduce(pending_commands, state.submitted, fn command, acc ->
+              result = submit_command(command)
+
+              case {accepted?(result), command_id(command)} do
+                {true, {:ok, id}} -> MapSet.put(acc, id)
+                _ -> acc
+              end
+            end)
+
+          %{state | submitted: submitted}
         end
 
       :error ->
@@ -136,6 +163,13 @@ defmodule Bitflyer.Strategy.Runner do
       )
 
       {:error, :strategy_submit_crashed, %{error: error}}
+  end
+
+  defp command_id(command) when is_map(command) do
+    case Map.get(command, :internal_order_id) do
+      id when is_binary(id) and id != "" -> {:ok, id}
+      _ -> :error
+    end
   end
 
   defp accepted?({:ok, _order}), do: true

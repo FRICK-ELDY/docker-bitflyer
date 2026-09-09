@@ -30,7 +30,8 @@ config :bitflyer, Bitflyer.MarketData,
 config :bitflyer, Bitflyer.Strategy,
   enabled: true,
   module: Bitflyer.Strategy.FixedOnce,
-  params: [size: "0.01", side: :buy]
+  params: [size: "0.01", side: :buy],
+  throttle_ms: 1_000
 
 config :bitflyer, Bitflyer.Risk,
   max_order_size: "1",
