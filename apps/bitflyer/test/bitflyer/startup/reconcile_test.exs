@@ -7,7 +7,10 @@ defmodule Bitflyer.Startup.ReconcileTest do
 
   alias Bitflyer.Readiness
   alias Bitflyer.Startup.{Reconcile, Reconciler}
-  alias Bitflyer.Trading.{Position, RiskState}
+  alias Bitflyer.Trading.{BalanceSnapshot, Position, RiskState}
+
+  @jpy_amount Decimal.new("1000000")
+  @btc_amount Decimal.new("0.5")
 
   defmodule EmptyExchange do
     @behaviour Bitflyer.Exchange.Client
@@ -15,6 +18,30 @@ defmodule Bitflyer.Startup.ReconcileTest do
     @impl true
     def fetch_reconcile_snapshot do
       {:ok, %{positions: [], balances: [], open_orders: []}}
+    end
+
+    @impl true
+    def place_order(_request), do: {:error, :not_used_in_reconcile}
+  end
+
+  defmodule MatchingBalancesExchange do
+    @behaviour Bitflyer.Exchange.Client
+
+    @impl true
+    def fetch_reconcile_snapshot do
+      {:ok,
+       %{
+         positions: [],
+         balances: [
+           %{
+             currency: "JPY",
+             amount: Decimal.new("1000000"),
+             available: Decimal.new("1000000")
+           },
+           %{currency: "BTC", amount: Decimal.new("0.5"), available: Decimal.new("0.5")}
+         ],
+         open_orders: []
+       }}
     end
 
     @impl true
@@ -36,7 +63,14 @@ defmodule Bitflyer.Startup.ReconcileTest do
              average_price: Decimal.new("5000000")
            }
          ],
-         balances: [],
+         balances: [
+           %{
+             currency: "JPY",
+             amount: Decimal.new("1000000"),
+             available: Decimal.new("1000000")
+           },
+           %{currency: "BTC", amount: Decimal.new("0.5"), available: Decimal.new("0.5")}
+         ],
          open_orders: []
        }}
     end
@@ -53,7 +87,14 @@ defmodule Bitflyer.Startup.ReconcileTest do
       {:ok,
        %{
          positions: [],
-         balances: [],
+         balances: [
+           %{
+             currency: "JPY",
+             amount: Decimal.new("1000000"),
+             available: Decimal.new("1000000")
+           },
+           %{currency: "BTC", amount: Decimal.new("0.5"), available: Decimal.new("0.5")}
+         ],
          open_orders: [
            %{
              exchange_order_id: "ex-1",
@@ -80,6 +121,7 @@ defmodule Bitflyer.Startup.ReconcileTest do
          positions: [],
          balances: [
            %{currency: "JPY", amount: Decimal.new("1000000"), available: Decimal.new("1000000")},
+           %{currency: "BTC", amount: Decimal.new("0.5"), available: Decimal.new("0.5")},
            %{currency: "XYZ", amount: Decimal.new("0.0001"), available: Decimal.new("0.0001")}
          ],
          open_orders: []
@@ -165,24 +207,39 @@ defmodule Bitflyer.Startup.ReconcileTest do
     assert Readiness.get() == {:halted, :exchange_unavailable}
   end
 
-  test "live matches empty exchange snapshot and can become ready" do
+  test "live empty BalanceSnapshot halts with balance_baseline_missing" do
     previous = Application.get_env(:bitflyer, :trade_mode)
 
     Application.put_env(:bitflyer, :trade_mode, :live)
-
-    on_exit(fn ->
-      Application.put_env(:bitflyer, :trade_mode, previous)
-    end)
-
-    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: EmptyExchange)
-
-    # Reconciler は Bitflyer.Exchange facade 経由なので client を差し替える
     Application.put_env(:bitflyer, :exchange_client, EmptyExchange)
 
     on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
       Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
     end)
 
+    assert {:error, :reconcile_mismatch, %{kind: :balance_baseline_missing, currency: "JPY"}} =
+             Reconcile.run(trade_mode: :live, exchange: EmptyExchange)
+
+    assert {:error, :reconcile_mismatch} = Reconciler.run_now()
+    assert Readiness.get() == {:halted, :reconcile_mismatch}
+    refute Readiness.ready?()
+  end
+
+  test "live with required balance baseline matching exchange can become ready" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, MatchingBalancesExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+    end)
+
+    seed_live_balance_baseline!()
+
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: MatchingBalancesExchange)
     assert Reconciler.run_now() == :ok
     assert Readiness.get() == :ready
   end
@@ -197,6 +254,8 @@ defmodule Bitflyer.Startup.ReconcileTest do
       Application.put_env(:bitflyer, :trade_mode, previous)
       Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
     end)
+
+    seed_live_balance_baseline!()
 
     assert {:error, :reconcile_mismatch, %{kind: :position_missing_internal}} =
              Reconcile.run(trade_mode: :live, exchange: MismatchExchange)
@@ -223,6 +282,8 @@ defmodule Bitflyer.Startup.ReconcileTest do
       Application.put_env(:bitflyer, :trade_mode, previous)
     end)
 
+    seed_live_balance_baseline!()
+
     assert {:ok, _} =
              Order
              |> Ash.Changeset.for_create(:create, %{
@@ -242,8 +303,6 @@ defmodule Bitflyer.Startup.ReconcileTest do
   end
 
   test "restore picks latest balance snapshot per currency" do
-    alias Bitflyer.Trading.BalanceSnapshot
-
     older = ~U[2026-01-01 00:00:00.000000Z]
     newer = ~U[2026-01-02 00:00:00.000000Z]
 
@@ -275,8 +334,6 @@ defmodule Bitflyer.Startup.ReconcileTest do
   end
 
   test "live ignores untracked dust currencies on exchange" do
-    alias Bitflyer.Trading.BalanceSnapshot
-
     previous = Application.get_env(:bitflyer, :trade_mode)
     Application.put_env(:bitflyer, :trade_mode, :live)
 
@@ -284,18 +341,7 @@ defmodule Bitflyer.Startup.ReconcileTest do
       Application.put_env(:bitflyer, :trade_mode, previous)
     end)
 
-    captured_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-
-    assert {:ok, _} =
-             BalanceSnapshot
-             |> Ash.Changeset.for_create(:create, %{
-               currency: "JPY",
-               amount: Decimal.new("1000000"),
-               available: Decimal.new("1000000"),
-               captured_at: captured_at,
-               trade_mode: :live
-             })
-             |> Ash.create()
+    seed_live_balance_baseline!()
 
     assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: DustExchange)
   end
@@ -305,6 +351,25 @@ defmodule Bitflyer.Startup.ReconcileTest do
     assert {:ok, _} = Reconcile.run(trade_mode: :dry_run)
     assert Reconciler.run_now() == :ok
     assert Readiness.get() == {:halted, :reconcile_mismatch}
+  end
+
+  defp seed_live_balance_baseline! do
+    captured_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    for {currency, amount} <- [{"JPY", @jpy_amount}, {"BTC", @btc_amount}] do
+      assert {:ok, _} =
+               BalanceSnapshot
+               |> Ash.Changeset.for_create(:create, %{
+                 currency: currency,
+                 amount: amount,
+                 available: amount,
+                 captured_at: captured_at,
+                 trade_mode: :live
+               })
+               |> Ash.create()
+    end
+
+    :ok
   end
 
   defp clear_default_risk_state do

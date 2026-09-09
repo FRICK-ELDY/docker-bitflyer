@@ -6,6 +6,10 @@ defmodule Bitflyer.Startup.Reconcile do
   2. モード別に突合する（dry_run/paper は内部正、live は取引所）
   3. 不整合なら `{:error, reason}` — Ready にはしない
 
+  live では `required_balance_currencies`（既定: JPY / BTC）の
+  BalanceSnapshot が無ければ `balance_baseline_missing` で失敗する。
+  空の内部残高リストだけでは compare 成功にしない。
+
   Ready / RiskState への書き込みは `Bitflyer.Startup.Reconciler` 側。
   """
 
@@ -39,15 +43,23 @@ defmodule Bitflyer.Startup.Reconcile do
 
   @doc """
   復元 → 突合。成功時は内部スナップショット、失敗時は reason。
+
+  ## Options
+  - `:trade_mode` — 既定は `TradeMode.current/0`
+  - `:exchange` — 既定は `Bitflyer.Exchange`
+  - `:required_balance_currencies` — live 必須通貨（既定は Application env）
   """
   @spec run(keyword()) :: result()
   def run(opts \\ []) do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
     exchange = Keyword.get(opts, :exchange, Bitflyer.Exchange)
 
+    required =
+      Keyword.get_lazy(opts, :required_balance_currencies, &required_balance_currencies/0)
+
     with {:ok, internal} <- restore(trade_mode),
          :ok <- check_persisted_risk(internal),
-         :ok <- reconcile_mode(internal, exchange) do
+         :ok <- reconcile_mode(internal, exchange, required) do
       {:ok, internal}
     end
   end
@@ -104,6 +116,11 @@ defmodule Bitflyer.Startup.Reconcile do
     end
   end
 
+  defp required_balance_currencies do
+    Application.get_env(:bitflyer, __MODULE__, [])
+    |> Keyword.get(:required_balance_currencies, ["JPY", "BTC"])
+  end
+
   defp check_persisted_risk(%{risk_state: nil}), do: :ok
 
   defp check_persisted_risk(%{risk_state: %RiskState{halted: false}}), do: :ok
@@ -112,7 +129,7 @@ defmodule Bitflyer.Startup.Reconcile do
     {:error, reason_from_string(reason), %{source: :risk_state}}
   end
 
-  defp reconcile_mode(%{trade_mode: mode} = internal, exchange)
+  defp reconcile_mode(%{trade_mode: mode} = internal, exchange, _required)
        when mode in [:dry_run, :paper] do
     # 内部仮想状態が正。取引所とは突合せず、建玉も書き換えない。
     _ = internal
@@ -120,10 +137,10 @@ defmodule Bitflyer.Startup.Reconcile do
     :ok
   end
 
-  defp reconcile_mode(%{trade_mode: :live} = internal, exchange) do
+  defp reconcile_mode(%{trade_mode: :live} = internal, exchange, required) do
     case exchange.fetch_reconcile_snapshot() do
       {:ok, snapshot} ->
-        compare_with_exchange(internal, snapshot)
+        compare_with_exchange(internal, snapshot, required)
 
       {:error, :exchange_unavailable} ->
         {:error, :exchange_unavailable, %{trade_mode: :live}}
@@ -133,9 +150,14 @@ defmodule Bitflyer.Startup.Reconcile do
     end
   end
 
-  defp compare_with_exchange(internal, snapshot) do
+  defp compare_with_exchange(internal, snapshot, required) do
     with :ok <- compare_positions(internal.positions, Map.get(snapshot, :positions, [])),
-         :ok <- compare_balances(internal.balance_snapshots, Map.get(snapshot, :balances, [])),
+         :ok <-
+           compare_balances(
+             internal.balance_snapshots,
+             Map.get(snapshot, :balances, []),
+             required
+           ),
          :ok <- compare_open_orders(internal.open_orders, Map.get(snapshot, :open_orders, [])) do
       :ok
     end
@@ -195,25 +217,42 @@ defmodule Bitflyer.Startup.Reconcile do
       Decimal.eq?(left_avg, right_avg)
   end
 
-  defp compare_balances(internal_snaps, external) do
-    # 追跡中の通貨だけ突合する（取引所側のダスト通貨で誤停止しない）
+  defp compare_balances(internal_snaps, external, required) do
+    # 追跡中の通貨だけ突合する（取引所側のダスト通貨で誤停止しない）。
+    # ただし必須通貨の内部 baseline が無ければ空リストでも成功にしない。
     internal_map = Map.new(internal_snaps, &{balance_currency(&1), &1})
     external_map = Map.new(external, &{balance_currency(&1), &1})
 
-    Enum.reduce_while(Map.keys(internal_map), :ok, fn currency, :ok ->
-      case Map.fetch(external_map, currency) do
-        :error ->
-          {:halt,
-           {:error, :reconcile_mismatch, %{kind: :balance_missing_exchange, currency: currency}}}
+    with :ok <- ensure_balance_baseline(internal_map, required) do
+      Enum.reduce_while(Map.keys(internal_map), :ok, fn currency, :ok ->
+        case Map.fetch(external_map, currency) do
+          :error ->
+            {:halt,
+             {:error, :reconcile_mismatch, %{kind: :balance_missing_exchange, currency: currency}}}
 
-        {:ok, right} ->
-          left = Map.fetch!(internal_map, currency)
+          {:ok, right} ->
+            left = Map.fetch!(internal_map, currency)
 
-          if balance_match?(left, right) do
-            {:cont, :ok}
-          else
-            {:halt, {:error, :reconcile_mismatch, %{kind: :balance_mismatch, currency: currency}}}
-          end
+            if balance_match?(left, right) do
+              {:cont, :ok}
+            else
+              {:halt,
+               {:error, :reconcile_mismatch, %{kind: :balance_mismatch, currency: currency}}}
+            end
+        end
+      end)
+    end
+  end
+
+  defp ensure_balance_baseline(_internal_map, []), do: :ok
+
+  defp ensure_balance_baseline(internal_map, required) when is_list(required) do
+    Enum.reduce_while(required, :ok, fn currency, :ok ->
+      if Map.has_key?(internal_map, currency) do
+        {:cont, :ok}
+      else
+        {:halt,
+         {:error, :reconcile_mismatch, %{kind: :balance_baseline_missing, currency: currency}}}
       end
     end)
   end
