@@ -74,6 +74,7 @@ GitHub Actions も同じ `mix precommit` を PR と `main` で実行する。範
 | `SECRET_KEY_BASE` | Phoenix 用（後で生成し直す） |
 | `PHX_HOST` | `localhost` |
 | `TRADE_MODE` | `dry_run` |
+| `DISCORD_WEBHOOK_URL` | 任意。Discord Incoming Webhook。未設定でも起動する |
 
 ## よく使う mix
 

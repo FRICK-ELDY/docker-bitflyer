@@ -22,13 +22,24 @@ defmodule Bitflyer.Application do
           {Task.Supervisor, name: Bitflyer.MarketData.TaskSupervisor},
           shutdown: @child_shutdown_ms
         ),
-        Supervisor.child_spec(Bitflyer.Startup.Reconciler, shutdown: @child_shutdown_ms)
+        Supervisor.child_spec(Bitflyer.Startup.Reconciler, shutdown: @child_shutdown_ms),
+        # 発注経路の兄弟。通知失敗・クラッシュで取引木を巻き込まない。
+        Supervisor.child_spec(Bitflyer.Observe.Discord, shutdown: @child_shutdown_ms)
       ] ++ market_data_feed()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Bitflyer.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    case Supervisor.start_link(children, opts) do
+      {:ok, pid} ->
+        # GenServer 再起動のたびに attach/detach しない（静的 ID で一度だけ）。
+        :ok = Bitflyer.Observe.Discord.install_telemetry()
+        {:ok, pid}
+
+      other ->
+        other
+    end
   end
 
   @doc """
@@ -39,6 +50,8 @@ defmodule Bitflyer.Application do
   """
   @impl true
   def prep_stop(state) do
+    _ = Bitflyer.Observe.Discord.uninstall_telemetry()
+
     previous =
       try do
         Bitflyer.Readiness.get()
