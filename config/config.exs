@@ -10,6 +10,9 @@ config :bitflyer, Bitflyer.Startup.Reconciler,
   boot?: true,
   interval_ms: 60_000
 
+# live 突合で必須の残高 baseline（内部 BalanceSnapshot が無いと Ready にしない）
+config :bitflyer, Bitflyer.Startup.Reconcile, required_balance_currencies: ["JPY", "BTC"]
+
 config :bitflyer, Bitflyer.MarketData.Cache, default_max_age_ms: 5_000
 
 config :bitflyer, Bitflyer.MarketData,

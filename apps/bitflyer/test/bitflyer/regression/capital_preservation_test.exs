@@ -9,6 +9,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   - risk 拒否が executor 経由でも永続化・REST を起こさない
   - live submission 不明（timeout）→ halt・再送禁止
   - live exchange_order_id 永続化失敗 → halt・再送禁止
+  - live 空 BalanceSnapshot → baseline missing で halt
   """
 
   use Bitflyer.DataCase, async: false
@@ -22,7 +23,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   alias Bitflyer.OrderExecutor
   alias Bitflyer.Readiness
   alias Bitflyer.Risk
-  alias Bitflyer.Startup.Reconciler
+  alias Bitflyer.Startup.{Reconcile, Reconciler}
   alias Bitflyer.Trading.{Order, Position, RiskState}
 
   @product "FX_BTC_JPY"
@@ -239,6 +240,25 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
                Order
                |> Ash.Query.filter(internal_order_id == "halt-1")
                |> Ash.read_one()
+    end
+
+    test "empty balance baseline on live halts and blocks submit without REST" do
+      Application.put_env(:bitflyer, :trade_mode, :live)
+      Application.put_env(:bitflyer, :live_confirmed, true)
+      Application.put_env(:bitflyer, :exchange_client, SpyExchange)
+
+      assert {:error, :reconcile_mismatch, %{kind: :balance_baseline_missing}} =
+               Reconcile.run(trade_mode: :live, exchange: SpyExchange)
+
+      assert {:error, :reconcile_mismatch} = Reconciler.run_now()
+      assert Readiness.get() == {:halted, :reconcile_mismatch}
+
+      put_fresh_market()
+
+      assert {:error, :circuit_open, _} =
+               OrderExecutor.submit(command("baseline-1"), trade_mode: :live)
+
+      assert SpyExchange.place_count() == 0
     end
 
     test "persisted risk halt blocks ready and submit" do
