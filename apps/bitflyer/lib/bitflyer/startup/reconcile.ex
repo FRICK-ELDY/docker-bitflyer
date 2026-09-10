@@ -10,6 +10,11 @@ defmodule Bitflyer.Startup.Reconcile do
   BalanceSnapshot が無ければ `balance_baseline_missing` で失敗する。
   空の内部残高リストだけでは compare 成功にしない。
 
+  取引所建玉は `{product_code, side}` で両建て並存しうるが、内部 Position は
+  銘柄×モードのネット1行。突合前に外部を net（buy−sell）へ正規化する。
+  不正な side / 平均単価は mismatch。両建て net 時は side+size を必須比較し、
+  平均は単一路線のみ厳密比較（ドテン fill 単価との偽差異を避ける）。
+
   Ready / RiskState への書き込みは `Bitflyer.Startup.Reconciler` 側。
   """
 
@@ -195,30 +200,152 @@ defmodule Bitflyer.Startup.Reconcile do
 
   defp compare_positions(internal, external) do
     # size<=0 は「建玉なし」と同等（誤検知防止）。Resource 制約でも弾くが防御的に残す。
-    internal_map = Map.new(active_positions(internal), &{position_code(&1), &1})
-    external_map = Map.new(active_positions(external), &{position_code(&1), &1})
+    # 外部は両建て（同一銘柄 buy+sell）を net してから product_code キーで比較する。
+    with {:ok, netted_external} <- net_positions(external) do
+      internal_map = Map.new(active_positions(internal), &{position_code(&1), &1})
+      external_map = Map.new(active_positions(netted_external), &{position_code(&1), &1})
 
-    codes = MapSet.union(MapSet.new(Map.keys(internal_map)), MapSet.new(Map.keys(external_map)))
+      codes = MapSet.union(MapSet.new(Map.keys(internal_map)), MapSet.new(Map.keys(external_map)))
 
-    Enum.reduce_while(codes, :ok, fn code, :ok ->
-      case {Map.get(internal_map, code), Map.get(external_map, code)} do
-        {nil, _} ->
-          {:halt,
-           {:error, :reconcile_mismatch, %{kind: :position_missing_internal, product_code: code}}}
-
-        {_, nil} ->
-          {:halt,
-           {:error, :reconcile_mismatch, %{kind: :position_missing_exchange, product_code: code}}}
-
-        {left, right} ->
-          if position_match?(left, right) do
-            {:cont, :ok}
-          else
+      Enum.reduce_while(codes, :ok, fn code, :ok ->
+        case {Map.get(internal_map, code), Map.get(external_map, code)} do
+          {nil, _} ->
             {:halt,
-             {:error, :reconcile_mismatch, %{kind: :position_mismatch, product_code: code}}}
-          end
+             {:error, :reconcile_mismatch,
+              %{kind: :position_missing_internal, product_code: code}}}
+
+          {_, nil} ->
+            {:halt,
+             {:error, :reconcile_mismatch,
+              %{kind: :position_missing_exchange, product_code: code}}}
+
+          {left, right} ->
+            if position_match?(left, right) do
+              {:cont, :ok}
+            else
+              {:halt,
+               {:error, :reconcile_mismatch, %{kind: :position_mismatch, product_code: code}}}
+            end
+        end
+      end)
+    end
+  end
+
+  # bitFlyer は同一銘柄の buy/sell を別行で返しうる。内部ネット建玉へ寄せる。
+  # 不正 side / 非 Decimal 平均は黙って捨てず fail-closed。
+  defp net_positions(positions) do
+    positions
+    |> Enum.group_by(&position_code/1)
+    |> Enum.reduce_while({:ok, []}, fn {product_code, rows}, {:ok, acc} ->
+      case net_product_positions(product_code, rows) do
+        {:ok, []} -> {:cont, {:ok, acc}}
+        {:ok, [netted]} -> {:cont, {:ok, [netted | acc]}}
+        {:error, _, _} = error -> {:halt, error}
       end
     end)
+  end
+
+  defp net_product_positions(product_code, rows) do
+    case Enum.reduce_while(
+           rows,
+           {:ok, {Decimal.new(0), Decimal.new(0), Decimal.new(0), Decimal.new(0)}},
+           fn row, {:ok, acc} ->
+             case accumulate_side(row, acc) do
+               {:ok, next} -> {:cont, {:ok, next}}
+               {:error, _, _} = error -> {:halt, error}
+             end
+           end
+         ) do
+      {:error, _, _} = error ->
+        error
+
+      {:ok, {buy_size, buy_notional, sell_size, sell_notional}} ->
+        hedged? =
+          Decimal.compare(buy_size, 0) == :gt and Decimal.compare(sell_size, 0) == :gt
+
+        net = Decimal.sub(buy_size, sell_size)
+
+        cond do
+          Decimal.compare(net, 0) == :gt ->
+            {:ok,
+             [
+               netted_position(
+                 product_code,
+                 :buy,
+                 net,
+                 Decimal.div(buy_notional, buy_size),
+                 hedged?
+               )
+             ]}
+
+          Decimal.compare(net, 0) == :lt ->
+            {:ok,
+             [
+               netted_position(
+                 product_code,
+                 :sell,
+                 Decimal.abs(net),
+                 Decimal.div(sell_notional, sell_size),
+                 hedged?
+               )
+             ]}
+
+          true ->
+            {:ok, []}
+        end
+    end
+  end
+
+  defp accumulate_side(row, {buy_sz, buy_n, sell_sz, sell_n}) do
+    size = Map.get(row, :size)
+    avg = Map.get(row, :average_price)
+    side = Map.get(row, :side)
+
+    cond do
+      not match?(%Decimal{}, size) or Decimal.compare(size, 0) != :gt ->
+        # ゼロ・不正サイズは建玉なし扱い（active_positions と同趣旨）
+        {:ok, {buy_sz, buy_n, sell_sz, sell_n}}
+
+      side not in [:buy, :sell] or not match?(%Decimal{}, avg) ->
+        Bitflyer.Telemetry.log(
+          :warning,
+          "reconcile rejected invalid exchange position row",
+          %{
+            product_code: Map.get(row, :product_code),
+            side: side,
+            size: size,
+            average_price: avg,
+            kind: :position_invalid_exchange
+          }
+        )
+
+        {:error, :reconcile_mismatch,
+         %{
+           kind: :position_invalid_exchange,
+           product_code: Map.get(row, :product_code),
+           side: side
+         }}
+
+      side == :buy ->
+        {:ok,
+         {Decimal.add(buy_sz, size), Decimal.add(buy_n, Decimal.mult(size, avg)), sell_sz, sell_n}}
+
+      side == :sell ->
+        {:ok,
+         {buy_sz, buy_n, Decimal.add(sell_sz, size), Decimal.add(sell_n, Decimal.mult(size, avg))}}
+    end
+  end
+
+  defp netted_position(product_code, side, size, average_price, hedged?) do
+    %{
+      product_code: product_code,
+      side: side,
+      size: size,
+      average_price: average_price,
+      # 両建て net 後の勝ちサイド全量 VWAP は、内部の部分決済据え置き／ドテン fill 単価とズレうる。
+      # エクスポージャ（side+size）は必ず突合し、平均は単一路線のみ厳密比較する。
+      compare_average_price?: not hedged?
+    }
   end
 
   defp active_positions(positions) do
@@ -237,14 +364,27 @@ defmodule Bitflyer.Startup.Reconcile do
     right_size = Map.get(right, :size)
     left_avg = Map.get(left, :average_price)
     right_avg = Map.get(right, :average_price)
+    compare_avg? = Map.get(right, :compare_average_price?, true)
 
-    Map.get(left, :side) == Map.get(right, :side) and
-      match?(%Decimal{}, left_size) and
-      match?(%Decimal{}, right_size) and
-      match?(%Decimal{}, left_avg) and
-      match?(%Decimal{}, right_avg) and
-      Decimal.eq?(left_size, right_size) and
-      Decimal.eq?(left_avg, right_avg)
+    side_size_ok =
+      Map.get(left, :side) == Map.get(right, :side) and
+        match?(%Decimal{}, left_size) and
+        match?(%Decimal{}, right_size) and
+        Decimal.eq?(left_size, right_size)
+
+    cond do
+      not side_size_ok ->
+        false
+
+      compare_avg? ->
+        match?(%Decimal{}, left_avg) and
+          match?(%Decimal{}, right_avg) and
+          Decimal.eq?(left_avg, right_avg)
+
+      true ->
+        # hedged net: 平均は参考値のみ。内部に平均があることだけ確認する。
+        match?(%Decimal{}, left_avg)
+    end
   end
 
   defp compare_balances(internal_snaps, external, required) do

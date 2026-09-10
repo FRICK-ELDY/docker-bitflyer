@@ -159,6 +159,33 @@ defmodule Bitflyer.Startup.ReconcileTest do
     def place_order(_request), do: {:error, :not_used_in_reconcile}
   end
 
+  defmodule HedgePositionsExchange do
+    @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
+
+    @impl true
+    def fetch_reconcile_snapshot do
+      positions = Application.get_env(:bitflyer, :test_hedge_positions, [])
+
+      {:ok,
+       %{
+         positions: positions,
+         balances: [
+           %{
+             currency: "JPY",
+             amount: Decimal.new("1000000"),
+             available: Decimal.new("1000000")
+           },
+           %{currency: "BTC", amount: Decimal.new("0.5"), available: Decimal.new("0.5")}
+         ],
+         open_orders: []
+       }}
+    end
+
+    @impl true
+    def place_order(_request), do: {:error, :not_used_in_reconcile}
+  end
+
   setup do
     reset_readiness()
     clear_default_risk_state()
@@ -374,6 +401,251 @@ defmodule Bitflyer.Startup.ReconcileTest do
     seed_live_balance_baseline!()
 
     assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: DustExchange)
+  end
+
+  test "live hedges net to internal position regardless of buy/sell list order" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, HedgePositionsExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_hedge_positions)
+    end)
+
+    seed_live_balance_baseline!()
+
+    assert {:ok, _} =
+             Position
+             |> Ash.Changeset.for_create(:create, %{
+               product_code: "FX_BTC_JPY",
+               side: :buy,
+               size: Decimal.new("0.01"),
+               average_price: Decimal.new("5000000"),
+               trade_mode: :live
+             })
+             |> Ash.create()
+
+    buy = %{
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.03"),
+      average_price: Decimal.new("5000000")
+    }
+
+    sell = %{
+      product_code: "FX_BTC_JPY",
+      side: :sell,
+      size: Decimal.new("0.02"),
+      average_price: Decimal.new("5100000")
+    }
+
+    for order <- [[buy, sell], [sell, buy]] do
+      Application.put_env(:bitflyer, :test_hedge_positions, order)
+      assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: HedgePositionsExchange)
+      assert Reconciler.run_now() == :ok
+      assert Readiness.get() == :ready
+      assert Readiness.mark_not_ready() == :ok
+    end
+  end
+
+  test "live hedge nets to short regardless of buy/sell list order" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, HedgePositionsExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_hedge_positions)
+    end)
+
+    seed_live_balance_baseline!()
+
+    assert {:ok, _} =
+             Position
+             |> Ash.Changeset.for_create(:create, %{
+               product_code: "FX_BTC_JPY",
+               side: :sell,
+               size: Decimal.new("0.01"),
+               average_price: Decimal.new("5100000"),
+               trade_mode: :live
+             })
+             |> Ash.create()
+
+    buy = %{
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      average_price: Decimal.new("5000000")
+    }
+
+    sell = %{
+      product_code: "FX_BTC_JPY",
+      side: :sell,
+      size: Decimal.new("0.03"),
+      average_price: Decimal.new("5100000")
+    }
+
+    for order <- [[buy, sell], [sell, buy]] do
+      Application.put_env(:bitflyer, :test_hedge_positions, order)
+      assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: HedgePositionsExchange)
+      assert Reconciler.run_now() == :ok
+      assert Readiness.get() == :ready
+      assert Readiness.mark_not_ready() == :ok
+    end
+  end
+
+  test "live hedged net matches side+size even when winning-side VWAP differs from internal" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, HedgePositionsExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_hedge_positions)
+    end)
+
+    seed_live_balance_baseline!()
+
+    # ドテン後の内部平均（fill 単価）と、勝ちサイド全量 VWAP が食い違うケース
+    assert {:ok, _} =
+             Position
+             |> Ash.Changeset.for_create(:create, %{
+               product_code: "FX_BTC_JPY",
+               side: :sell,
+               size: Decimal.new("0.01"),
+               average_price: Decimal.new("5200000"),
+               trade_mode: :live
+             })
+             |> Ash.create()
+
+    Application.put_env(:bitflyer, :test_hedge_positions, [
+      %{
+        product_code: "FX_BTC_JPY",
+        side: :buy,
+        size: Decimal.new("0.02"),
+        average_price: Decimal.new("5000000")
+      },
+      %{
+        product_code: "FX_BTC_JPY",
+        side: :sell,
+        size: Decimal.new("0.03"),
+        average_price: Decimal.new("5100000")
+      }
+    ])
+
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: HedgePositionsExchange)
+    assert Reconciler.run_now() == :ok
+    assert Readiness.get() == :ready
+  end
+
+  test "live invalid exchange position side fail-closes" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, HedgePositionsExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_hedge_positions)
+    end)
+
+    seed_live_balance_baseline!()
+
+    Application.put_env(:bitflyer, :test_hedge_positions, [
+      %{
+        product_code: "FX_BTC_JPY",
+        side: :unknown,
+        size: Decimal.new("0.01"),
+        average_price: Decimal.new("5000000")
+      }
+    ])
+
+    assert {:error, :reconcile_mismatch, %{kind: :position_invalid_exchange}} =
+             Reconcile.run(trade_mode: :live, exchange: HedgePositionsExchange)
+  end
+
+  test "live hedge that only matches one leg (not net) still mismatches" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, HedgePositionsExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_hedge_positions)
+    end)
+
+    seed_live_balance_baseline!()
+
+    # 旧実装は product_code Map で buy だけ残ると誤 Ready になり得た
+    assert {:ok, _} =
+             Position
+             |> Ash.Changeset.for_create(:create, %{
+               product_code: "FX_BTC_JPY",
+               side: :buy,
+               size: Decimal.new("0.03"),
+               average_price: Decimal.new("5000000"),
+               trade_mode: :live
+             })
+             |> Ash.create()
+
+    buy = %{
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.03"),
+      average_price: Decimal.new("5000000")
+    }
+
+    sell = %{
+      product_code: "FX_BTC_JPY",
+      side: :sell,
+      size: Decimal.new("0.02"),
+      average_price: Decimal.new("5100000")
+    }
+
+    for order <- [[buy, sell], [sell, buy]] do
+      Application.put_env(:bitflyer, :test_hedge_positions, order)
+
+      assert {:error, :reconcile_mismatch, %{kind: :position_mismatch}} =
+               Reconcile.run(trade_mode: :live, exchange: HedgePositionsExchange)
+    end
+  end
+
+  test "live equal buy+sell hedge nets to flat" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, HedgePositionsExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_hedge_positions)
+    end)
+
+    seed_live_balance_baseline!()
+
+    Application.put_env(:bitflyer, :test_hedge_positions, [
+      %{
+        product_code: "FX_BTC_JPY",
+        side: :sell,
+        size: Decimal.new("0.01"),
+        average_price: Decimal.new("5100000")
+      },
+      %{
+        product_code: "FX_BTC_JPY",
+        side: :buy,
+        size: Decimal.new("0.01"),
+        average_price: Decimal.new("5000000")
+      }
+    ])
+
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: HedgePositionsExchange)
+    assert Reconciler.run_now() == :ok
+    assert Readiness.get() == :ready
   end
 
   test "halted readiness is not auto-cleared on successful reconcile" do
