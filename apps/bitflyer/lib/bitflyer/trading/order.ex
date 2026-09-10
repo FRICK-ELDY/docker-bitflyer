@@ -37,6 +37,7 @@ defmodule Bitflyer.Trading.Order do
         :price,
         :size,
         :filled_size,
+        :filled_notional,
         :trade_mode,
         :strategy_parameter_revision_id,
         :strategy_module,
@@ -47,7 +48,8 @@ defmodule Bitflyer.Trading.Order do
         :status,
         :price,
         :size,
-        :filled_size
+        :filled_size,
+        :filled_notional
       ]
     ]
   end
@@ -112,6 +114,15 @@ defmodule Bitflyer.Trading.Order do
     end
 
     attribute :filled_size, :decimal do
+      allow_nil? false
+      public? true
+      default Decimal.new("0")
+      constraints min: 0
+    end
+
+    # 取引所累積約定金額の baseline（remote_avg × remote_filled）。
+    # Fill 行の Σ(price×size) とは丸め差で一致しないことがある。
+    attribute :filled_notional, :decimal do
       allow_nil? false
       public? true
       default Decimal.new("0")

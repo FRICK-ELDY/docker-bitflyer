@@ -47,7 +47,9 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
     if order.trade_mode != :live or is_nil(order.exchange_order_id) do
       :ok
     else
-      do_sync(order, exchange)
+      with :ok <- ensure_consistent_filled_baseline(order) do
+        do_sync(order, exchange)
+      end
     end
   end
 
@@ -175,15 +177,23 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
 
   defp reflect_fill(%Order{} = order, info, delta, exchange) do
     case fill_price(order, info, exchange) do
-      {:ok, price} ->
-        apply_fill_transaction(order, info, delta, price)
+      {:ok, price, new_filled_notional} ->
+        apply_fill_transaction(order, info, delta, price, new_filled_notional)
 
       {:error, _, _} = error ->
         error
     end
   end
 
+  # 取引所の累積 average_price から、未反映分の増分約定価格を求める。
+  # incremental = (remote_avg × remote_filled − local_notional) / delta
   defp fill_price(%Order{} = order, info, exchange) do
+    with {:ok, remote_avg} <- remote_average_price(order, info, exchange) do
+      incremental_fill_price(order, remote_avg, info.filled_size)
+    end
+  end
+
+  defp remote_average_price(%Order{} = order, info, exchange) do
     cond do
       match?(%Decimal{}, info.average_price) and Decimal.positive?(info.average_price) ->
         {:ok, info.average_price}
@@ -202,6 +212,90 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
     end
   end
 
+  defp incremental_fill_price(%Order{} = order, remote_avg, remote_filled) do
+    local_notional = order.filled_notional || Decimal.new("0")
+    local_filled = order.filled_size || Decimal.new("0")
+    delta = Decimal.sub(remote_filled, local_filled)
+    remote_notional = Decimal.mult(remote_avg, remote_filled)
+    incremental_notional = Decimal.sub(remote_notional, local_notional)
+
+    cond do
+      inconsistent_filled_baseline?(local_filled, local_notional) ->
+        refuse_inconsistent_filled_notional(order, local_filled, local_notional)
+
+      Decimal.compare(delta, 0) != :gt ->
+        {:error, :fill_price_unavailable, %{reason: :non_positive_delta}}
+
+      Decimal.compare(incremental_notional, 0) != :gt ->
+        Bitflyer.Telemetry.log(
+          :error,
+          "live fill refused: non-positive incremental notional",
+          %{
+            internal_order_id: order.internal_order_id,
+            exchange_order_id: order.exchange_order_id,
+            local_notional: local_notional,
+            remote_notional: remote_notional,
+            incremental_notional: incremental_notional,
+            trade_mode: :live
+          }
+        )
+
+        {:error, :fill_price_unavailable,
+         %{
+           reason: :non_positive_incremental_notional,
+           local_notional: local_notional,
+           remote_notional: remote_notional,
+           incremental_notional: incremental_notional,
+           internal_order_id: order.internal_order_id
+         }}
+
+      true ->
+        {:ok, Decimal.div(incremental_notional, delta), remote_notional}
+    end
+  end
+
+  # オープン注文の列挙・sync 入口で検査する。delta=0 でも黙って通さない。
+  defp ensure_consistent_filled_baseline(%Order{} = order) do
+    local_filled = order.filled_size || Decimal.new("0")
+    local_notional = order.filled_notional || Decimal.new("0")
+
+    if inconsistent_filled_baseline?(local_filled, local_notional) do
+      refuse_inconsistent_filled_notional(order, local_filled, local_notional)
+    else
+      :ok
+    end
+  end
+
+  defp refuse_inconsistent_filled_notional(%Order{} = order, local_filled, local_notional) do
+    Bitflyer.Telemetry.log(
+      :error,
+      "live fill refused: inconsistent filled_notional baseline",
+      %{
+        internal_order_id: order.internal_order_id,
+        exchange_order_id: order.exchange_order_id,
+        filled_size: local_filled,
+        filled_notional: local_notional,
+        trade_mode: :live
+      }
+    )
+
+    {:error, :fill_price_unavailable,
+     %{
+       reason: :inconsistent_filled_notional,
+       filled_size: local_filled,
+       filled_notional: local_notional,
+       internal_order_id: order.internal_order_id
+     }}
+  end
+
+  # filled_size と filled_notional は対で進む。片方だけ動いている状態では増分を計算しない。
+  defp inconsistent_filled_baseline?(local_filled, local_notional) do
+    size_positive? = Decimal.compare(local_filled, 0) == :gt
+    notional_positive? = Decimal.compare(local_notional, 0) == :gt
+
+    (size_positive? and not notional_positive?) or (notional_positive? and not size_positive?)
+  end
+
   defp avg_from_executions([]), do: {:error, :fill_price_unavailable, %{}}
 
   defp avg_from_executions(executions) do
@@ -217,7 +311,7 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
     end
   end
 
-  defp apply_fill_transaction(%Order{} = order, info, delta, fill_price) do
+  defp apply_fill_transaction(%Order{} = order, info, delta, fill_price, new_filled_notional) do
     new_filled = Decimal.add(order.filled_size || Decimal.new("0"), delta)
     status = status_after_fill(order.size, new_filled, info.status)
 
@@ -227,7 +321,11 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
     Bitflyer.OrderExecutor.DailyLossSync.around_fill(:live, fn ->
       case Bitflyer.Repo.transaction(fn ->
              with {:ok, updated, order_notifications} <-
-                    update_order(order, %{status: status, filled_size: new_filled}),
+                    update_order(order, %{
+                      status: status,
+                      filled_size: new_filled,
+                      filled_notional: new_filled_notional
+                    }),
                   {:ok, position_notifications, _fill_meta} <-
                     Positions.apply_fill(delta_order, fill_price) do
                {updated, order_notifications ++ position_notifications}
@@ -307,14 +405,46 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
   defp map_terminal_status(_), do: :cancelled
 
   defp mark_terminal(%Order{} = order, status, filled_size) do
-    case update_order(order, %{status: status, filled_size: filled_size}) do
-      {:ok, updated, notifications} ->
-        _ = Ash.Notifier.notify(notifications)
-        _ = settle_hold_on_terminal(updated)
-        {:ok, updated}
+    local_filled = order.filled_size || Decimal.new("0")
+    local_notional = order.filled_notional || Decimal.new("0")
 
-      {:error, _, _} = error ->
-        error
+    cond do
+      # 終端化だけで filled_size を動かすと notional と対にならず増分 baseline が壊れる
+      Decimal.compare(filled_size, local_filled) != :eq ->
+        Bitflyer.Telemetry.log(
+          :error,
+          "live fill refused: terminal filled_size mismatch without notional update",
+          %{
+            internal_order_id: order.internal_order_id,
+            exchange_order_id: order.exchange_order_id,
+            local_filled: local_filled,
+            terminal_filled: filled_size,
+            trade_mode: :live
+          }
+        )
+
+        {:error, :fill_price_unavailable,
+         %{
+           reason: :terminal_filled_size_mismatch,
+           local_filled: local_filled,
+           terminal_filled: filled_size,
+           internal_order_id: order.internal_order_id
+         }}
+
+      # size 一致でも notional 欠落のまま cancelled にすると Fill 未記帳のまま閉じる
+      inconsistent_filled_baseline?(local_filled, local_notional) ->
+        refuse_inconsistent_filled_notional(order, local_filled, local_notional)
+
+      true ->
+        case update_order(order, %{status: status, filled_size: filled_size}) do
+          {:ok, updated, notifications} ->
+            _ = Ash.Notifier.notify(notifications)
+            _ = settle_hold_on_terminal(updated)
+            {:ok, updated}
+
+          {:error, _, _} = error ->
+            error
+        end
     end
   end
 

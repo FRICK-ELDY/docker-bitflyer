@@ -18,7 +18,8 @@ defmodule Bitflyer.Risk.HaltReason do
            :submission_unknown,
            :manual_halt,
            :persist_failed,
-           :daily_loss_exceeded
+           :daily_loss_exceeded,
+           :fill_price_unavailable
          ])
 
   @type t :: atom()
