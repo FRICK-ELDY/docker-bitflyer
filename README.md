@@ -17,7 +17,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 - UI は `http://127.0.0.1:4000/`（稼働確認用 Status。取引 UI ではない）
 - 稼働 API: `GET /health/live`（プロセス生存・Compose healthcheck）、`GET /health/ready`（DB + Ready + Feed/鮮度）、`GET /health`（従来互換）
 - 品質ゲートはローカルも CI も `mix precommit`
-- CD: 明示タグ `v*` または手動で GHCR へ push（`main` マージ alone ではデプロイしない）
+- CD: 明示タグ `v*` または手動で GHCR へ push（**対象 SHA の CI 緑が前提**。`main` マージ alone ではデプロイしない）
 
 ### コンポーネント別
 
@@ -36,9 +36,9 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | observe — health | implemented | `/health/live`・`/health/ready`・`/health` |
 | observe — LiveDashboard | implemented | BasicAuth 配下 `/ops/dashboard`（prod/dev）。Ecto/RequestLogger オフ。mailbox は dev のみ |
 | UI StatusLive | implemented | 発注可否・Feed・鮮度・モード色分け |
-| CI（`mix precommit` / GitHub Actions） | implemented | PR と `main` |
+| CI（`mix precommit` / GitHub Actions） | implemented | PR と `main`。`Dockerfile.prod` ビルド検証（push なし）も実行 |
 | deps audit（`mix deps.audit`） | implemented | ゲート外の可視化。CI artifact。Hex のみ（GitHub 依存は対象外） |
-| CD（GHCR push） | implemented | `v*` タグ / `workflow_dispatch`。digest を Compose に固定 |
+| CD（GHCR push） | implemented | `v*` / `workflow_dispatch`。**最新 CI（workflow 全体）success の SHA のみ**。digest を Compose に固定 |
 | private bitFlyer API（署名付き REST） | implemented | `Exchange.Rest`。cancel / 照会 / 約定反映。live+キーで差し込み。既定は Unavailable |
 | UI 認証（BasicAuth） | implemented | `UI_BASIC_AUTH_*`。prod 必須。`/health*` は対象外 |
 | 本番 release Compose | implemented | `Dockerfile.prod` / `compose.prod.yaml` / backup・rollback 手順 |
@@ -103,7 +103,7 @@ docker compose run --rm -e MIX_ENV=test app mix ash.setup --domains Bitflyer.Sys
 
 （上書きしたいときは `TEST_DATABASE_URL` を設定する。CI はジョブ内で setup してから `precommit` する。）
 
-GitHub Actions も同じ `mix precommit` を PR と `main` で実行する。範囲の詳細は [architecture/ci-cd.md](.workspace/0_doc/architecture/ci-cd.md)。**CI が赤のまま `main` へマージしない。**
+GitHub Actions は PR / `main` で `mix precommit` に加え `Dockerfile.prod` ビルド検証（push なし）も行う。範囲の詳細は [architecture/ci-cd.md](.workspace/0_doc/architecture/ci-cd.md)。**CI が赤のまま `main` へマージしない。** CD（GHCR）は対象 SHA の**最新** `ci.yml`（workflow 全体）success を前提とする（未完了時は待たず失敗・再実行）。
 
 ### deps audit（ゲート外・可視化）
 

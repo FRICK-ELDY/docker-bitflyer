@@ -215,7 +215,7 @@ remote console だけに頼らず、再突合成功時のみ halt を外す。
 
 イメージ参照は `APP_IMAGE`（**digest 固定推奨**）。未設定時のみローカル `docker-bitflyer:local` を build する。`:latest` だけに頼らない。
 
-配布の流れ（誰がいつ更新するか）は [ci-cd.md](../ci-cd.md) を正とする。成果物は GHCR。`main` マージ alone では実弾デプロイしない。
+配布の流れ（誰がいつ更新するか）は [ci-cd.md](../ci-cd.md) を正とする。成果物は GHCR。`main` マージ alone では実弾デプロイしない。Actions CD は **対象 SHA の最新 `ci.yml`（workflow 全体）成功**を前提に push する。
 
 ### ローカル／本番PC での一度上げ（実弾なし）
 
