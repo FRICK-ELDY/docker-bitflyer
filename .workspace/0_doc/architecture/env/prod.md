@@ -94,7 +94,7 @@
 
 ### 停止（グレースフル）
 
-コンテナへの SIGTERM / `docker compose stop app` で `Application.prep_stop/1` が走り、発注ゲートが閉じる（`Readiness` を not_ready）。子プロセス停止の猶予は Compose の `stop_grace_period`（45s）を正とする。
+コンテナへの SIGTERM / `docker compose stop app` で `Application.prep_stop/1` が走り、発注ゲートが閉じたあと進行中の submit/cancel を drain する（既定 10s。timeout 時は ID 未確定の pending を `submission_unknown` + halt）。その後に子の `shutdown`（明示指定は各 5s、Supervisor 直列）が続き、全体は Compose の `stop_grace_period`（45s）に収める。
 
 ### halted の見え方
 

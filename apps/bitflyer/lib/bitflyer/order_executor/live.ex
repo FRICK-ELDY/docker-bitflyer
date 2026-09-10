@@ -123,9 +123,56 @@ defmodule Bitflyer.OrderExecutor.Live do
         fun.(order, exchange_order_id)
 
       _ ->
-        order
-        |> Ash.Changeset.for_update(:update, %{exchange_order_id: exchange_order_id})
-        |> Ash.update()
+        case reload_order(order) do
+          {:ok, %Order{} = current} ->
+            attrs = persist_attrs(current, exchange_order_id)
+
+            case current
+                 |> Ash.Changeset.for_update(:update, attrs)
+                 |> Ash.update() do
+              {:ok, _updated} = ok ->
+                if current.status == :submission_unknown do
+                  Bitflyer.Telemetry.log(
+                    :warning,
+                    "live order recovered from submission_unknown after place_order id persist",
+                    %{
+                      internal_order_id: current.internal_order_id,
+                      exchange_order_id: exchange_order_id,
+                      product_code: current.product_code,
+                      side: current.side,
+                      trade_mode: :live,
+                      status: :pending
+                    }
+                  )
+                end
+
+                ok
+
+              {:error, _} = error ->
+                error
+            end
+
+          {:error, error} ->
+            {:error, error}
+        end
+    end
+  end
+
+  # place 成功で ID を埋めるときは status も pending に揃える。
+  # reload 後〜update 前に drain が unknown 化しても、unknown+ID にならないようにする。
+  defp persist_attrs(%Order{status: status}, exchange_order_id)
+       when status in [:filled, :partially_filled, :cancelled, :rejected, :expired] do
+    %{exchange_order_id: exchange_order_id}
+  end
+
+  defp persist_attrs(_order, exchange_order_id) do
+    %{exchange_order_id: exchange_order_id, status: :pending}
+  end
+
+  defp reload_order(%Order{} = order) do
+    case Ash.get(Order, order.id) do
+      {:ok, %Order{} = current} -> {:ok, current}
+      {:error, error} -> {:error, error}
     end
   end
 

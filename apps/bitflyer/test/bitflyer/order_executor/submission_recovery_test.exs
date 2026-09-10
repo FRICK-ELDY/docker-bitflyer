@@ -446,6 +446,56 @@ defmodule Bitflyer.OrderExecutor.SubmissionRecoveryTest do
                exchange: UniqueExchange
              )
 
+    {:ok, unknown_with_id} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "ord-unknown-with-id",
+        product_code: "FX_BTC_JPY",
+        side: :buy,
+        status: :submission_unknown,
+        order_type: :limit,
+        price: @price,
+        size: @size,
+        trade_mode: :live,
+        exchange_order_id: "JRF-orphan-id"
+      })
+      |> Ash.create()
+
+    assert {:error, :already_resolved, meta} =
+             SubmissionRecovery.recover(
+               dry_run?: true,
+               operator: "alice",
+               internal_order_id: unknown_with_id.internal_order_id,
+               exchange: UniqueExchange
+             )
+
+    assert meta.healed_from == :submission_unknown
+    assert meta.heal_pending? == true
+    assert meta.exchange_order_id == "JRF-orphan-id"
+
+    # dry-run は DB を書かない
+    assert {:ok, %Order{status: :submission_unknown, exchange_order_id: "JRF-orphan-id"}} =
+             Order
+             |> Ash.Query.filter(internal_order_id == "ord-unknown-with-id")
+             |> Ash.read_one()
+
+    assert {:error, :already_resolved, confirm_meta} =
+             SubmissionRecovery.recover(
+               confirm?: true,
+               operator: "alice",
+               internal_order_id: unknown_with_id.internal_order_id,
+               expected_hash: "unused-because-already-resolved",
+               exchange: UniqueExchange
+             )
+
+    assert confirm_meta.healed_from == :submission_unknown
+    refute Map.get(confirm_meta, :heal_pending?)
+
+    assert {:ok, %Order{status: :pending, exchange_order_id: "JRF-orphan-id"}} =
+             Order
+             |> Ash.Query.filter(internal_order_id == "ord-unknown-with-id")
+             |> Ash.read_one()
+
     {:ok, paper} =
       Order
       |> Ash.Changeset.for_create(:create, %{

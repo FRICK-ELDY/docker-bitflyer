@@ -53,7 +53,8 @@ defmodule Bitflyer.Telemetry do
                         :currency,
                         :limit,
                         :operator,
-                        :snapshot_hash
+                        :snapshot_hash,
+                        :timeout_ms
                       ])
 
   @doc """

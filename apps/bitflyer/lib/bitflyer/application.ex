@@ -7,7 +7,7 @@ defmodule Bitflyer.Application do
 
   # Supervisor は子を直列停止する。1 子あたりの上限を短くし、
   # Compose stop_grace_period（45s）内に Repo 等の後続クリーンアップ余地を残す。
-  # 発注停止自体は prep_stop で即時に行う。
+  # 発注停止と in-flight drain は prep_stop で行う（子 shutdown より前）。
   @child_shutdown_ms 5_000
 
   @impl true
@@ -19,6 +19,7 @@ defmodule Bitflyer.Application do
         Bitflyer.MarketData.Cache,
         Bitflyer.Risk.OrderRate,
         Bitflyer.Risk.FailureRate,
+        Bitflyer.OrderExecutor.InFlight,
         Bitflyer.Risk.DailyLoss,
         Bitflyer.Risk.BalanceCache,
         Supervisor.child_spec(
@@ -46,10 +47,12 @@ defmodule Bitflyer.Application do
   end
 
   @doc """
-  アプリケーション停止前に発注ゲートを閉じる（SIGTERM / `Application.stop`）。
+  アプリケーション停止前に発注ゲートを閉じ、進行中 submit/cancel を drain する。
 
-  OTP コールバックは `prep_stop/1`。`Readiness.mark_not_ready_safe/0` により以降の
-  `Risk.authorize` が新規 submit を拒否する。halted 中は halted を維持する。
+  OTP コールバックは `prep_stop/1`。順序:
+  1. Discord telemetry 解除
+  2. `Readiness.mark_not_ready_safe/0`（新規 submit 拒否。halted は維持）
+  3. `InFlight.drain/1`（進行中完了待ち。timeout 時は pending を submission_unknown 化）
   """
   @impl true
   def prep_stop(state) do
@@ -68,8 +71,75 @@ defmodule Bitflyer.Application do
     })
 
     _ = Bitflyer.Readiness.mark_not_ready_safe()
+
+    drain_timeout_ms = Bitflyer.OrderExecutor.InFlight.drain_timeout_ms()
+
+    Bitflyer.Telemetry.log(:info, "prep_stop: draining in-flight submissions", %{
+      reason: :application_stop,
+      timeout_ms: drain_timeout_ms
+    })
+
+    case Bitflyer.OrderExecutor.InFlight.drain(timeout_ms: drain_timeout_ms) do
+      :ok ->
+        Bitflyer.Telemetry.log(:info, "prep_stop: in-flight drain complete", %{
+          reason: :application_stop
+        })
+
+      {:error, :timeout, leftovers} ->
+        Bitflyer.Telemetry.log(
+          :critical,
+          "prep_stop: in-flight drain timed out",
+          %{
+            reason: :application_stop,
+            count: length(leftovers)
+          }
+        )
+
+        _ = finalize_drain_timeout(leftovers)
+    end
+
     state
   end
+
+  defp finalize_drain_timeout(leftovers) when is_list(leftovers) do
+    marked? =
+      Enum.reduce(leftovers, false, fn entry, acc ->
+        case maybe_mark_submission_unknown(entry) do
+          :marked -> true
+          _ -> acc
+        end
+      end)
+
+    # submit mark が無く cancel のみでも、途中打ち切りは不明扱いしてゲートを閉じる
+    if marked? or leftovers != [] do
+      _ = Bitflyer.Risk.open_circuit(:submission_unknown)
+    end
+
+    :ok
+  end
+
+  defp maybe_mark_submission_unknown(%{kind: :submit, internal_order_id: id})
+       when is_binary(id) and id != "" do
+    require Ash.Query
+    alias Bitflyer.Trading.Order
+
+    case Order
+         |> Ash.Query.filter(internal_order_id == ^id)
+         |> Ash.read_one() do
+      {:ok, %Order{status: :pending, exchange_order_id: nil} = order} ->
+        case order
+             |> Ash.Changeset.for_update(:update, %{status: :submission_unknown})
+             |> Ash.update() do
+          {:ok, _} -> :marked
+          {:error, _} -> :error
+        end
+
+      _ ->
+        :skipped
+    end
+  end
+
+  defp maybe_mark_submission_unknown(_entry), do: :skipped
 
   defp market_data_feed do
     if Bitflyer.MarketData.enabled?() do
