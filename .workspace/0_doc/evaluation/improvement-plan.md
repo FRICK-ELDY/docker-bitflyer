@@ -47,7 +47,7 @@
 | 12 | ~~source timestamp / clock skew / permissions~~ **済** | Normalize が `source_timestamp` を保持。Risk に skew ゲート。live 起動で `getpermissions` 出金禁止＋ticker 時刻検査 | live 起動時に権限・時刻で halt できる |
 | 13 | ~~OrderRate の再起動復元~~ **済** | 起動時 / `warm_from_db` で直近 1 分の Order を ETS に温める（壁時計→monotonic）。`:duplicate_bag` で同一 ms も計上 | クラッシュ直後に頻度上限を回避できない |
 | 14 | ~~CD↔CI 結合~~ **済** | CD が対象 SHA の**最新** `ci.yml`（workflow 全体）success を必須化。CI に `Dockerfile.prod` ビルド検証（push なし） | 赤のまま配布しない |
-| 15 | 戦略パラメータ履歴 | Revision Resource + Order への由来記録 | どの設定が注文を生んだか追える |
+| 15 | ~~戦略パラメータ履歴~~ **済** | `StrategyParameterRevision` + Order に revision_id / module / command_hash。Runner 起動時に ensure（同 hash 再利用） | どの設定が注文を生んだか追える |
 
 ---
 

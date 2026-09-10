@@ -6,6 +6,7 @@ defmodule Bitflyer.Strategy.Runner do
   単位で settled とし再送しない。
 
   起動時は Order から ID を復元するまで tick を無視する。
+  revision 確定と submitted 復元は `handle_continue` で行い、`init/1` では DB をブロックしない。
   ロード完了時刻より前に送られた tick（メールボックス滞留分）は破棄する。
   復元は lookback＋戦略 ID 接頭辞で絞り、古い行の二重 REST は Executor 冪等に委ねる。
   銘柄ごとに `throttle_ms` で評価頻度を制限する。
@@ -16,7 +17,9 @@ defmodule Bitflyer.Strategy.Runner do
   require Ash.Query
 
   alias Bitflyer.Strategy
+  alias Bitflyer.Strategy.Revision
   alias Bitflyer.Trading.Order
+  alias Bitflyer.Trading.StrategyParameterRevision
 
   @name __MODULE__
 
@@ -67,22 +70,70 @@ defmodule Bitflyer.Strategy.Runner do
     {submitted, schedule_load?, ticks_ready_at} =
       submitted_boot(Keyword.get(opts, :load_submitted?, true))
 
+    module = Keyword.get_lazy(opts, :module, &Strategy.module/0)
+    params = normalize_params(Keyword.get_lazy(opts, :params, &Strategy.params/0))
+    throttle_ms = Keyword.get(opts, :throttle_ms, Strategy.throttle_ms())
+
+    {revision_id, continue} =
+      case Keyword.fetch(opts, :revision_id) do
+        # 明示 UUID のみ上書き可。nil では provenance 無し起動にしない
+        {:ok, id} when is_binary(id) and id != "" ->
+          cont = if schedule_load?, do: {:continue, :load_submitted}, else: :no_continue
+          {id, cont}
+
+        {:ok, _invalid} ->
+          raise ArgumentError,
+                "revision_id must be a non-empty UUID string; omit the key to ensure from DB"
+
+        :error ->
+          {nil,
+           {:continue, {:ensure_revision, schedule_load?, module, params, throttle_ms, opts}}}
+      end
+
     state = %{
-      module: Keyword.get_lazy(opts, :module, &Strategy.module/0),
-      params: normalize_params(Keyword.get_lazy(opts, :params, &Strategy.params/0)),
-      throttle_ms: Keyword.get(opts, :throttle_ms, Strategy.throttle_ms()),
-      # ロード完了まで nil。tick を無視して起動レースでの二重評価を防ぐ
+      module: module,
+      params: params,
+      throttle_ms: throttle_ms,
+      # continue 完了まで nil。tick は revision / submitted 待ちで無視
+      revision_id: revision_id,
       submitted: submitted,
-      # この時刻より前に送られた tick はブート滞留とみなして破棄
       ticks_ready_at: ticks_ready_at,
       last_evaluated: %{}
     }
 
-    if schedule_load? do
-      send(self(), :load_submitted)
+    case continue do
+      :no_continue -> {:ok, state}
+      cont -> {:ok, state, cont}
     end
+  end
 
-    {:ok, state}
+  @impl true
+  def handle_continue(
+        {:ensure_revision, schedule_load?, module, params, throttle_ms, opts},
+        state
+      ) do
+    case ensure_revision(module, params, throttle_ms, opts) do
+      {:ok, %StrategyParameterRevision{id: id}} ->
+        state = %{state | revision_id: id}
+
+        if schedule_load? do
+          {:noreply, state, {:continue, :load_submitted}}
+        else
+          {:noreply, state}
+        end
+
+      {:error, error} ->
+        raise "failed to ensure strategy parameter revision: #{inspect(error)}"
+    end
+  end
+
+  def handle_continue(:load_submitted, state) do
+    {:noreply,
+     %{
+       state
+       | submitted: load_submitted_ids(),
+         ticks_ready_at: System.monotonic_time(:millisecond)
+     }}
   end
 
   @impl true
@@ -101,7 +152,7 @@ defmodule Bitflyer.Strategy.Runner do
 
     state =
       cond do
-        is_nil(state.submitted) or is_nil(state.ticks_ready_at) ->
+        is_nil(state.revision_id) or is_nil(state.submitted) or is_nil(state.ticks_ready_at) ->
           state
 
         # ロード完了前にキューされた tick（固定 100ms TTL より意図が明確）
@@ -182,7 +233,7 @@ defmodule Bitflyer.Strategy.Runner do
 
           submitted =
             Enum.reduce(pending_commands, state.submitted, fn command, acc ->
-              result = submit_command(command)
+              result = submit_command(command, state)
               maybe_settle(acc, command, result)
             end)
 
@@ -301,7 +352,9 @@ defmodule Bitflyer.Strategy.Runner do
     end
   end
 
-  defp submit_command(command) when is_map(command) do
+  defp submit_command(command, state) when is_map(command) do
+    command = attach_provenance(command, state)
+
     Bitflyer.Telemetry.log(
       :info,
       "strategy intent",
@@ -309,6 +362,7 @@ defmodule Bitflyer.Strategy.Runner do
         internal_order_id: Map.get(command, :internal_order_id),
         product_code: Map.get(command, :product_code),
         side: Map.get(command, :side),
+        strategy_parameter_revision_id: Map.get(command, :strategy_parameter_revision_id),
         trade_mode: Bitflyer.TradeMode.current()
       }
     )
@@ -332,6 +386,24 @@ defmodule Bitflyer.Strategy.Runner do
       )
 
       {:error, :strategy_submit_exit, %{reason: reason}}
+  end
+
+  defp attach_provenance(command, state) do
+    Map.merge(command, %{
+      strategy_parameter_revision_id: state.revision_id,
+      strategy_module: Atom.to_string(state.module),
+      command_hash: Revision.command_hash(command)
+    })
+  end
+
+  defp ensure_revision(module, params, throttle_ms, opts) do
+    Revision.ensure_current(
+      module: module,
+      params: params,
+      throttle_ms: throttle_ms,
+      source: Keyword.get(opts, :revision_source, :boot),
+      operator: Keyword.get(opts, :revision_operator, "system")
+    )
   end
 
   defp command_id(command) when is_map(command) do
