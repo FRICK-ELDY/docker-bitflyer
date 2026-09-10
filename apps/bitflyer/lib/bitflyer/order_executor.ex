@@ -241,16 +241,23 @@ defmodule Bitflyer.OrderExecutor do
   defp create_pending(command, trade_mode) do
     order_type = Map.get(command, :order_type, :market)
 
-    attrs = %{
-      internal_order_id: Map.fetch!(command, :internal_order_id),
-      product_code: Map.fetch!(command, :product_code),
-      side: Map.fetch!(command, :side),
-      size: Map.fetch!(command, :size),
-      order_type: order_type,
-      price: Map.get(command, :price),
-      status: :pending,
-      trade_mode: trade_mode
-    }
+    attrs =
+      %{
+        internal_order_id: Map.fetch!(command, :internal_order_id),
+        product_code: Map.fetch!(command, :product_code),
+        side: Map.fetch!(command, :side),
+        size: Map.fetch!(command, :size),
+        order_type: order_type,
+        price: Map.get(command, :price),
+        status: :pending,
+        trade_mode: trade_mode
+      }
+      |> maybe_put_attr(
+        :strategy_parameter_revision_id,
+        Map.get(command, :strategy_parameter_revision_id)
+      )
+      |> maybe_put_attr(:strategy_module, Map.get(command, :strategy_module))
+      |> maybe_put_attr(:command_hash, Map.get(command, :command_hash))
 
     case Order |> Ash.Changeset.for_create(:create, attrs) |> Ash.create() do
       {:ok, order} ->
@@ -265,6 +272,9 @@ defmodule Bitflyer.OrderExecutor do
         end
     end
   end
+
+  defp maybe_put_attr(attrs, _key, nil), do: attrs
+  defp maybe_put_attr(attrs, key, value), do: Map.put(attrs, key, value)
 
   defp create_pending_releasing(command, trade_mode, hold) do
     case create_pending(command, trade_mode) do

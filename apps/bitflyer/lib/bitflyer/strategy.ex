@@ -4,6 +4,8 @@ defmodule Bitflyer.Strategy do
 
   市場スナップショットから内部発注意図（command map）を返す。
   取引所 API・OrderExecutor は呼ばない（Runner が `System.submit_order/2` へ渡す）。
+
+  適用履歴は `Bitflyer.Strategy.Revision` / `Trading.StrategyParameterRevision`。
   """
 
   @type market :: %{

@@ -150,7 +150,8 @@ config :logger, :default_formatter,
     :operator,
     :snapshot_hash,
     :skew_ms,
-    :max_ms
+    :max_ms,
+    :strategy_parameter_revision_id
   ]
 
 # Use Jason for JSON parsing in Phoenix

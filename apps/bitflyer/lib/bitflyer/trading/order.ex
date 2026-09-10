@@ -17,6 +17,9 @@ defmodule Bitflyer.Trading.Order do
     custom_indexes do
       index [:exchange_order_id], name: "orders_exchange_order_id_index"
       index [:inserted_at], name: "orders_inserted_at_index"
+
+      index [:strategy_parameter_revision_id],
+        name: "orders_strategy_parameter_revision_id_index"
     end
   end
 
@@ -34,7 +37,10 @@ defmodule Bitflyer.Trading.Order do
         :price,
         :size,
         :filled_size,
-        :trade_mode
+        :trade_mode,
+        :strategy_parameter_revision_id,
+        :strategy_module,
+        :command_hash
       ],
       update: [
         :exchange_order_id,
@@ -116,6 +122,22 @@ defmodule Bitflyer.Trading.Order do
       allow_nil? false
       public? true
       constraints one_of: [:dry_run, :paper, :live]
+    end
+
+    # 戦略由来（任意）。人手・テスト経路の注文は nil のまま。
+    attribute :strategy_parameter_revision_id, :uuid do
+      allow_nil? true
+      public? true
+    end
+
+    attribute :strategy_module, :string do
+      allow_nil? true
+      public? true
+    end
+
+    attribute :command_hash, :string do
+      allow_nil? true
+      public? true
     end
 
     create_timestamp :inserted_at

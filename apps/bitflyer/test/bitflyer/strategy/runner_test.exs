@@ -73,10 +73,14 @@ defmodule Bitflyer.Strategy.RunnerTest do
     assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
     _ = :sys.get_state(Runner)
 
-    assert {:ok, %Order{status: :pending, trade_mode: :dry_run}} =
+    assert {:ok, %Order{status: :pending, trade_mode: :dry_run} = order} =
              Order
              |> Ash.Query.filter(internal_order_id == ^@order_id)
              |> Ash.read_one()
+
+    assert is_binary(order.strategy_parameter_revision_id)
+    assert order.strategy_module == "Elixir.Bitflyer.Strategy.FixedOnce"
+    assert byte_size(order.command_hash) == 64
   end
 
   test "successful intent is only submitted once per internal_order_id" do

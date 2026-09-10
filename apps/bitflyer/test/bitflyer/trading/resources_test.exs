@@ -2,7 +2,7 @@ defmodule Bitflyer.Trading.ResourcesTest do
   use Bitflyer.DataCase, async: true
 
   alias Bitflyer.Trading
-  alias Bitflyer.Trading.{BalanceSnapshot, Order, Position, RiskState}
+  alias Bitflyer.Trading.{BalanceSnapshot, Order, Position, RiskState, StrategyParameterRevision}
 
   describe "Order" do
     test "creates with decimal size/price and unique internal_order_id" do
@@ -133,6 +133,104 @@ defmodule Bitflyer.Trading.ResourcesTest do
                |> Ash.create()
 
       assert order.status == :expired
+    end
+
+    test "accepts optional strategy provenance fields with valid FK" do
+      applied_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      assert {:ok, revision} =
+               StrategyParameterRevision
+               |> Ash.Changeset.for_create(:create, %{
+                 trade_mode: :dry_run,
+                 strategy_module: "Elixir.Bitflyer.Strategy.FixedOnce",
+                 params: %{"size" => "0.01", "side" => "buy"},
+                 params_hash: String.duplicate("c", 64),
+                 throttle_ms: 1_000,
+                 source: :boot,
+                 operator: "test",
+                 applied_at: applied_at
+               })
+               |> Ash.create()
+
+      assert {:ok, order} =
+               Order
+               |> Ash.Changeset.for_create(:create, %{
+                 internal_order_id: "ord-with-revision",
+                 product_code: "FX_BTC_JPY",
+                 side: :buy,
+                 order_type: :market,
+                 size: Decimal.new("0.01"),
+                 trade_mode: :dry_run,
+                 strategy_parameter_revision_id: revision.id,
+                 strategy_module: "Elixir.Bitflyer.Strategy.FixedOnce",
+                 command_hash: String.duplicate("a", 64)
+               })
+               |> Ash.create()
+
+      assert order.strategy_parameter_revision_id == revision.id
+      assert order.strategy_module == "Elixir.Bitflyer.Strategy.FixedOnce"
+      assert order.command_hash == String.duplicate("a", 64)
+
+      assert {:error, %Ash.Error.Unknown{}} =
+               Order
+               |> Ash.Changeset.for_create(:create, %{
+                 internal_order_id: "ord-orphan-revision",
+                 product_code: "FX_BTC_JPY",
+                 side: :buy,
+                 order_type: :market,
+                 size: Decimal.new("0.01"),
+                 trade_mode: :dry_run,
+                 strategy_parameter_revision_id: Ash.UUIDv7.generate()
+               })
+               |> Ash.create()
+    end
+  end
+
+  describe "StrategyParameterRevision" do
+    test "stores immutable strategy params snapshot" do
+      applied_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      assert {:ok, revision} =
+               StrategyParameterRevision
+               |> Ash.Changeset.for_create(:create, %{
+                 trade_mode: :dry_run,
+                 strategy_module: "Elixir.Bitflyer.Strategy.FixedOnce",
+                 params: %{"size" => "0.01", "side" => "buy"},
+                 params_hash: String.duplicate("b", 64),
+                 throttle_ms: 1_000,
+                 source: :boot,
+                 operator: "test",
+                 applied_at: applied_at
+               })
+               |> Ash.create()
+
+      assert revision.source == :boot
+      assert revision.params["size"] == "0.01"
+    end
+
+    test "rejects duplicate trade_mode and params_hash" do
+      applied_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      attrs = %{
+        trade_mode: :paper,
+        strategy_module: "Elixir.Bitflyer.Strategy.FixedOnce",
+        params: %{"size" => "0.01"},
+        params_hash: String.duplicate("d", 64),
+        throttle_ms: 1_000,
+        source: :boot,
+        operator: "test",
+        applied_at: applied_at
+      }
+
+      assert {:ok, _} =
+               StrategyParameterRevision
+               |> Ash.Changeset.for_create(:create, attrs)
+               |> Ash.create()
+
+      assert {:error, %Ash.Error.Invalid{}} =
+               StrategyParameterRevision
+               |> Ash.Changeset.for_create(:create, attrs)
+               |> Ash.create()
     end
   end
 
@@ -314,6 +412,7 @@ defmodule Bitflyer.Trading.ResourcesTest do
     assert Bitflyer.Trading.Fill in resources
     assert Bitflyer.Trading.BalanceSnapshot in resources
     assert Bitflyer.Trading.BaselineImport in resources
+    assert Bitflyer.Trading.StrategyParameterRevision in resources
     assert Bitflyer.Trading.RiskState in resources
   end
 end
