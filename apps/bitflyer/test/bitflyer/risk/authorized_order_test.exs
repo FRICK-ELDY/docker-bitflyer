@@ -164,7 +164,7 @@ defmodule Bitflyer.Risk.AuthorizedOrderTest do
              OrderExecutor.submit(auth, trade_mode: :dry_run, positions: [])
   end
 
-  test "expired tokens are purged from ETS without consume" do
+  test "background purge removes expired tokens" do
     Application.put_env(:bitflyer, :trade_mode, :dry_run)
     assert Readiness.mark_ready() == :ok
     put_fresh_ticker(@market_key)
@@ -191,15 +191,11 @@ defmodule Bitflyer.Risk.AuthorizedOrderTest do
 
     assert AuthorizedOrder.size() == 1
 
-    assert {:ok, _} =
-             Risk.authorize(valid_command("purge-2"),
-               positions: [],
-               trade_mode: :dry_run,
-               now_ms: now
-             )
+    pid = Process.whereis(AuthorizedOrder)
+    send(pid, :purge_expired)
+    _ = :sys.get_state(pid)
 
-    # mint 時の purge で期限切れを落とす
-    assert AuthorizedOrder.size() == 1
+    assert AuthorizedOrder.size() == 0
   end
 
   defp valid_command(id, overrides \\ %{}) do

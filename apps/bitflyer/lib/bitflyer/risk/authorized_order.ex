@@ -4,6 +4,7 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
 
   公開コンストラクタは無い。`OrderExecutor.submit/2` は `consume/1` で
   ワンショット検証し、偽造・再利用・TTL 超過を拒否する。
+  未消費の期限切れトークンは周期スイープで ETS から除去する（発注ホットパスでは掃除しない）。
 
   GenServer 差し替えは `:authorized_order_server`（MarketData Cache の `:server` と衝突させない）。
   """
@@ -80,8 +81,6 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
   @impl true
   def handle_call({:mint, command, opts}, _from, state) when is_map(command) do
     now_ms = Keyword.get_lazy(opts, :now_ms, &monotonic_ms/0)
-    ttl = ttl_ms()
-    _ = purge_expired(state.table, now_ms, ttl)
 
     token = make_ref()
     true = :ets.insert(state.table, {token, command, now_ms})
@@ -100,7 +99,6 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
     now_ms = Keyword.get_lazy(opts, :now_ms, &monotonic_ms/0)
     ttl = Keyword.get_lazy(opts, :ttl_ms, &ttl_ms/0)
 
-    # 対象 token を先に take してから掃除（期限切れ理由を missing に潰さない）
     reply =
       case :ets.take(state.table, token) do
         [{^token, stored_command, stored_at}] ->
@@ -119,7 +117,6 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
           {:error, :unauthorized, %{reason: :authorization_missing}}
       end
 
-    _ = purge_expired(state.table, now_ms, ttl)
     {:reply, reply, state}
   end
 
@@ -144,9 +141,10 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
   end
 
   defp purge_expired(table, now_ms, ttl) do
-    # {token, command, authorized_at_ms} where now - at > ttl
+    expired_before = now_ms - ttl
+
     match_spec = [
-      {{:"$1", :"$2", :"$3"}, [{:>, {:-, now_ms, :"$3"}, ttl}], [true]}
+      {{:"$1", :"$2", :"$3"}, [{:<, :"$3", expired_before}], [true]}
     ]
 
     :ets.select_delete(table, match_spec)
