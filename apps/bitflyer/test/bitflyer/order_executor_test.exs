@@ -12,7 +12,7 @@ defmodule Bitflyer.OrderExecutorTest do
 
   alias Bitflyer.OrderExecutor
   alias Bitflyer.Readiness
-  alias Bitflyer.Trading.{BalanceSnapshot, Order, Position, RiskState}
+  alias Bitflyer.Trading.{BalanceSnapshot, Fill, Order, Position, RiskState}
 
   @market_key {:ticker, "FX_BTC_JPY"}
 
@@ -202,6 +202,141 @@ defmodule Bitflyer.OrderExecutorTest do
 
     assert Decimal.equal?(by_currency["BTC"], Decimal.new("0.01"))
     assert Decimal.equal?(by_currency["JPY"], Decimal.new("950000"))
+  end
+
+  test "paper market fill applies fee and slippage adversely" do
+    previous = Application.get_env(:bitflyer, Bitflyer.OrderExecutor.Paper)
+
+    Application.put_env(:bitflyer, Bitflyer.OrderExecutor.Paper,
+      slippage_bps: "0",
+      fee_bps: "10"
+    )
+
+    on_exit(fn -> Application.put_env(:bitflyer, Bitflyer.OrderExecutor.Paper, previous) end)
+
+    Application.put_env(:bitflyer, :trade_mode, :paper)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_paper_balance!("JPY", "1000000")
+    seed_paper_balance!("BTC", "0")
+
+    assert {:ok, %Order{status: :filled, price: price}} =
+             OrderExecutor.submit(valid_command("paper-fee-1"),
+               positions: [],
+               trade_mode: :paper
+             )
+
+    # LTP 5_000_000 * (1 + 10bps) = 5_005_000
+    assert Decimal.equal?(price, Decimal.new("5005000"))
+
+    assert {:ok, balances} =
+             BalanceSnapshot
+             |> Ash.Query.filter(trade_mode == :paper)
+             |> Ash.Query.sort(captured_at: :desc)
+             |> Ash.read()
+
+    by_currency =
+      balances
+      |> Enum.reduce(%{}, fn row, acc -> Map.put_new(acc, row.currency, row.amount) end)
+
+    assert Decimal.equal?(by_currency["JPY"], Decimal.new("949950"))
+  end
+
+  test "paper buy reserve uses adverse price so fill cannot overspend" do
+    previous = Application.get_env(:bitflyer, Bitflyer.OrderExecutor.Paper)
+
+    Application.put_env(:bitflyer, Bitflyer.OrderExecutor.Paper,
+      slippage_bps: "0",
+      fee_bps: "10"
+    )
+
+    on_exit(fn -> Application.put_env(:bitflyer, Bitflyer.OrderExecutor.Paper, previous) end)
+
+    Application.put_env(:bitflyer, :trade_mode, :paper)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    # LTP 5_000_000 * 0.01 = 50_000、fee 10bps 後は 50_050 必要
+    seed_paper_balance!("JPY", "50000")
+    seed_paper_balance!("BTC", "0")
+
+    assert {:error, :limit_exceeded, %{limit: :insufficient_balance}} =
+             OrderExecutor.submit(valid_command("paper-reserve-1"),
+               positions: [],
+               trade_mode: :paper
+             )
+  end
+
+  test "paper limit Order.price matches adverse fill price" do
+    previous = Application.get_env(:bitflyer, Bitflyer.OrderExecutor.Paper)
+
+    Application.put_env(:bitflyer, Bitflyer.OrderExecutor.Paper,
+      slippage_bps: "50",
+      fee_bps: "10"
+    )
+
+    on_exit(fn -> Application.put_env(:bitflyer, Bitflyer.OrderExecutor.Paper, previous) end)
+
+    Application.put_env(:bitflyer, :trade_mode, :paper)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_paper_balance!("JPY", "1000000")
+
+    assert {:ok, %Order{status: :filled, price: price}} =
+             OrderExecutor.submit(
+               valid_command("paper-limit-fee", %{
+                 order_type: :limit,
+                 price: Decimal.new("5100000"),
+                 side: :buy
+               }),
+               positions: [],
+               trade_mode: :paper
+             )
+
+    # 指値は fee のみ（slippage 無視）: 5_100_000 * 1.001
+    assert Decimal.equal?(price, Decimal.new("5105100"))
+  end
+
+  test "paper round-trip at same LTP realizes fee loss" do
+    previous = Application.get_env(:bitflyer, Bitflyer.OrderExecutor.Paper)
+
+    Application.put_env(:bitflyer, Bitflyer.OrderExecutor.Paper,
+      slippage_bps: "0",
+      fee_bps: "10"
+    )
+
+    on_exit(fn -> Application.put_env(:bitflyer, Bitflyer.OrderExecutor.Paper, previous) end)
+
+    Application.put_env(:bitflyer, :trade_mode, :paper)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_paper_balance!("JPY", "1000000")
+    seed_paper_balance!("BTC", "0")
+
+    assert {:ok, %Order{status: :filled}} =
+             OrderExecutor.submit(valid_command("paper-rt-buy", %{side: :buy}),
+               positions: [],
+               trade_mode: :paper
+             )
+
+    assert {:ok, %Order{status: :filled}} =
+             OrderExecutor.submit(valid_command("paper-rt-sell", %{side: :sell}),
+               positions: [],
+               trade_mode: :paper
+             )
+
+    assert {:ok, fills} =
+             Fill
+             |> Ash.Query.filter(trade_mode == :paper)
+             |> Ash.read()
+
+    realized =
+      fills
+      |> Enum.map(& &1.realized_pnl)
+      |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
+
+    # open 5_005_000 / close 4_995_000 → (4_995_000 - 5_005_000) * 0.01 = -100
+    assert Decimal.lt?(realized, Decimal.new(0))
+    assert Decimal.equal?(realized, Decimal.new("-100"))
   end
 
   test "paper limit fills when LTP crosses and grows balance rows" do

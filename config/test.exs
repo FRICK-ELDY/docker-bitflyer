@@ -57,3 +57,8 @@ config :bitflyer, Bitflyer.Risk, allow_test_injections: true
 
 # 実 Webhook を叩かない。個別テストは start_supervised で注入する。
 config :bitflyer, Bitflyer.Observe.Discord, webhook_url: nil
+
+# 既存 paper 期待値（LTP/指値ちょうど）を壊さない。fee/slip は専用テストで明示する。
+config :bitflyer, Bitflyer.OrderExecutor.Paper,
+  slippage_bps: "0",
+  fee_bps: "0"
