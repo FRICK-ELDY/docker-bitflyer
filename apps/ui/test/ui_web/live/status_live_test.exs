@@ -105,6 +105,7 @@ defmodule UiWeb.StatusLiveTest do
     refute has_element?(view, "#ops-resume")
 
     view |> element("#ops-kill-switch") |> render_click()
+    _ = render_async(view)
 
     assert has_element?(view, "#readiness", "halted:manual_halt")
     assert has_element?(view, "#halt-reason", "manual_halt")
@@ -121,6 +122,7 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#halt-reason", "reconcile_mismatch")
 
     view |> element("#ops-kill-switch") |> render_click()
+    _ = render_async(view)
 
     assert has_element?(view, "#halt-reason", "reconcile_mismatch")
     assert Readiness.get() == {:halted, :reconcile_mismatch}
@@ -134,6 +136,7 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#ops-resume")
 
     view |> element("#ops-resume") |> render_click()
+    _ = render_async(view)
 
     assert has_element?(view, "#readiness", "ready")
     refute has_element?(view, "#ops-resume")
@@ -147,6 +150,7 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#ops-reconcile-now")
 
     view |> element("#ops-reconcile-now") |> render_click()
+    _ = render_async(view)
 
     assert match?({:halted, _}, Readiness.get())
     assert has_element?(view, "#ops-resume")

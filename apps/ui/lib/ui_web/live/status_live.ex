@@ -30,15 +30,14 @@ defmodule UiWeb.StatusLive do
   end
 
   def handle_event("kill_switch", _params, socket) do
-    socket = assign(socket, :ops_busy, true)
-
-    result = Bitflyer.System.halt_trading(operator: socket.assigns.ops_operator)
+    operator = socket.assigns.ops_operator
 
     {:noreply,
      socket
-     |> assign(:ops_busy, false)
-     |> flash_ops_result(:kill, result)
-     |> assign_status()}
+     |> assign(:ops_busy, true)
+     |> start_async(:ops_kill, fn ->
+       Bitflyer.System.halt_trading(operator: operator)
+     end)}
   end
 
   def handle_event("resume", _params, %{assigns: %{ops_busy: true}} = socket) do
@@ -46,15 +45,14 @@ defmodule UiWeb.StatusLive do
   end
 
   def handle_event("resume", _params, socket) do
-    socket = assign(socket, :ops_busy, true)
-
-    result = Bitflyer.System.resume(operator: socket.assigns.ops_operator)
+    operator = socket.assigns.ops_operator
 
     {:noreply,
      socket
-     |> assign(:ops_busy, false)
-     |> flash_ops_result(:resume, result)
-     |> assign_status()}
+     |> assign(:ops_busy, true)
+     |> start_async(:ops_resume, fn ->
+       Bitflyer.System.resume(operator: operator)
+     end)}
   end
 
   def handle_event("reconcile_now", _params, %{assigns: %{ops_busy: true}} = socket) do
@@ -62,15 +60,39 @@ defmodule UiWeb.StatusLive do
   end
 
   def handle_event("reconcile_now", _params, socket) do
-    socket = assign(socket, :ops_busy, true)
-
-    result = Bitflyer.System.reconcile_now(operator: socket.assigns.ops_operator)
+    operator = socket.assigns.ops_operator
 
     {:noreply,
      socket
-     |> assign(:ops_busy, false)
-     |> flash_ops_result(:reconcile, result)
-     |> assign_status()}
+     |> assign(:ops_busy, true)
+     |> start_async(:ops_reconcile, fn ->
+       Bitflyer.System.reconcile_now(operator: operator)
+     end)}
+  end
+
+  @impl true
+  def handle_async(:ops_kill, {:ok, result}, socket) do
+    {:noreply, finish_ops(socket, :kill, result)}
+  end
+
+  def handle_async(:ops_kill, {:exit, reason}, socket) do
+    {:noreply, finish_ops_exit(socket, reason)}
+  end
+
+  def handle_async(:ops_resume, {:ok, result}, socket) do
+    {:noreply, finish_ops(socket, :resume, result)}
+  end
+
+  def handle_async(:ops_resume, {:exit, reason}, socket) do
+    {:noreply, finish_ops_exit(socket, reason)}
+  end
+
+  def handle_async(:ops_reconcile, {:ok, result}, socket) do
+    {:noreply, finish_ops(socket, :reconcile, result)}
+  end
+
+  def handle_async(:ops_reconcile, {:exit, reason}, socket) do
+    {:noreply, finish_ops_exit(socket, reason)}
   end
 
   @impl true
@@ -373,6 +395,23 @@ defmodule UiWeb.StatusLive do
     |> assign(:market_entries, status.market_data.entries)
     |> assign(:db_ok?, db_ok?)
     |> assign(:db_error, db_error)
+  end
+
+  defp finish_ops(socket, kind, result) do
+    socket
+    |> assign(:ops_busy, false)
+    |> flash_ops_result(kind, result)
+    |> assign_status()
+  end
+
+  defp finish_ops_exit(socket, reason) do
+    socket
+    |> assign(:ops_busy, false)
+    |> put_flash(
+      :error,
+      gettext("Operation failed: %{reason}", reason: inspect(reason))
+    )
+    |> assign_status()
   end
 
   defp flash_ops_result(socket, :kill, :ok) do

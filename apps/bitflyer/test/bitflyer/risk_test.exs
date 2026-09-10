@@ -199,7 +199,7 @@ defmodule Bitflyer.RiskTest do
              )
   end
 
-  test "authorize rejects persisted RiskState by default when Ready" do
+  test "authorize ignores persisted RiskState by default until CircuitSync" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
 
@@ -215,11 +215,17 @@ defmodule Bitflyer.RiskTest do
              })
              |> Ash.create()
 
-    assert {:error, :circuit_open, %{source: :risk_state}} =
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(valid_command(), positions: [])
+
+    assert {:ok, :synced} = Bitflyer.Risk.CircuitSync.sync_now()
+    assert match?({:halted, _}, Readiness.get())
+
+    assert {:error, :circuit_open, %{readiness: _}} =
              Risk.authorize(valid_command(), positions: [])
   end
 
-  test "authorize can skip persisted circuit check for tests" do
+  test "authorize can opt into persisted circuit check without CircuitSync" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
 

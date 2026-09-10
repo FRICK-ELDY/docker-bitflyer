@@ -6,9 +6,9 @@ defmodule Mix.Tasks.Bitflyer.Halt do
   `Bitflyer.Release.halt_trading` rpc。**
 
   `docker compose exec … mix bitflyer.halt` は常駐 `phx.server` と別 BEAM のため、
-  このタスクだけでは常駐側 ETS は変わらない。ただし `Risk.authorize` は永続
-  RiskState を見るので、DB 反映後は新規発注は拒否される（画面の Ready 表示と
-  ずれる場合あり）。ETS 表示を揃えるには StatusLive / rpc / `restart app`。
+  このタスクだけでは常駐側 ETS は即時更新されない。常駐の `Risk.CircuitSync`
+  （既定 2s）が DB→ETS を同期すると新規発注は止まる（その間の遅れと画面 Ready
+  表示とのずれがありうる）。即停止の正本は StatusLive / Release rpc。
   """
 
   use Mix.Task
@@ -25,10 +25,9 @@ defmodule Mix.Tasks.Bitflyer.Halt do
 
         Mix.shell().error("""
         WARNING: Mix runs in a separate BEAM from phx.server.
-        - New orders: blocked via persisted RiskState (authorize fail-closed).
-        - Running app Readiness ETS is NOT updated by this task.
-        Prefer: StatusLive Kill switch, or rpc \"Bitflyer.Release.halt_trading()\".
-        To sync ETS display: StatusLive Kill, Release rpc, or restart app.
+        - Running app Readiness ETS is NOT updated immediately by this task.
+        - CircuitSync (default 2s) will sync DB halt into ETS on the running app.
+        Prefer immediate stop: StatusLive Kill, or rpc \"Bitflyer.Release.halt_trading()\".
         """)
 
         :ok

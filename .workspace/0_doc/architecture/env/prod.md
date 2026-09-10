@@ -178,7 +178,7 @@ docker compose -f compose.prod.yaml exec app \
   /app/bin/docker_bitflyer rpc "Bitflyer.Release.halt_trading()"
 ```
 
-`mix bitflyer.halt` は **RiskState 永続化の補助**。`compose exec` の Mix は別 BEAM のため常駐の Readiness ETS は更新しない。ただし authorize は永続 RiskState を見るので新規発注は拒否される。ETS 表示を揃えるには StatusLive / rpc / `restart app`。
+`mix bitflyer.halt` は **RiskState 永続化の補助**。`compose exec` の Mix は別 BEAM のため常駐の Readiness ETS は即時更新しない。常駐の `Risk.CircuitSync`（既定 2s）が DB→ETS を同期すると新規発注は止まる。即停止は StatusLive / rpc を使う。
 
 ```bash
 docker compose exec app mix bitflyer.halt

@@ -41,6 +41,9 @@ config :bitflyer, Bitflyer.Startup.Reconciler,
   boot?: false,
   interval_ms: :infinity
 
+# テストでは周期同期を止め、明示 sync_now で検証する
+config :bitflyer, Bitflyer.Risk.CircuitSync, interval_ms: :disabled
+
 # 実ネット禁止。テストは Feed を明示起動し Local socket / Stub REST を注入する
 config :bitflyer, Bitflyer.MarketData,
   enabled: false,
