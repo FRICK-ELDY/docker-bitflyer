@@ -159,6 +159,7 @@ defmodule Bitflyer.OrderExecutor.Paper do
     attrs = %{
       status: :filled,
       filled_size: order.size,
+      filled_notional: Decimal.mult(fill_price, order.size),
       # paper は Fill/建玉と同じ不利化後価格を Order にも残す
       price: fill_price,
       exchange_order_id: order.exchange_order_id || "paper:#{order.internal_order_id}"

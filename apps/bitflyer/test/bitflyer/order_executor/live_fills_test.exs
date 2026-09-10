@@ -6,7 +6,8 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
   import Bitflyer.TestSupport.DailyLossHelper
 
   alias Bitflyer.OrderExecutor.LiveFills
-  alias Bitflyer.Trading.{BalanceSnapshot, Order, Position}
+  alias Bitflyer.Risk.DailyLoss
+  alias Bitflyer.Trading.{BalanceSnapshot, Fill, Order, Position}
 
   defmodule FillExchange do
     @behaviour Bitflyer.Exchange.Client
@@ -188,17 +189,423 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
     assert unchanged.status == :pending
   end
 
-  defp create_live_order(internal_id, exchange_id) do
+  test "successive partial fills use incremental prices for position VWAP" do
+    # 取引所累積 avg を差分 Fill に掛けると内部 VWAP がずれる回帰を塞ぐ。
+    # 1回目 0.01@1_000_000 → 2回目累積 avg=1_500_000（実増分は 2_000_000）
+    {:ok, order} =
+      create_live_order("live-partial-vwap", "JRF-partial-vwap", size: Decimal.new("0.02"))
+
+    Process.put({:fill_order, "JRF-partial-vwap"}, %{
+      exchange_order_id: "JRF-partial-vwap",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.01"),
+      average_price: Decimal.new("1000000"),
+      status: :active
+    })
+
+    assert :ok = LiveFills.sync_open_orders(exchange: FillExchange)
+
+    {:ok, after_first} = reload_order(order)
+    assert after_first.status == :partially_filled
+    assert Decimal.eq?(after_first.filled_size, Decimal.new("0.01"))
+    assert Decimal.eq?(after_first.filled_notional, Decimal.new("10000"))
+
+    {:ok, [pos1]} = live_positions()
+    assert Decimal.eq?(pos1.size, Decimal.new("0.01"))
+    assert Decimal.eq?(pos1.average_price, Decimal.new("1000000"))
+
+    {:ok, [fill1]} = fills_for(order.internal_order_id)
+    assert Decimal.eq?(fill1.price, Decimal.new("1000000"))
+    assert Decimal.eq?(fill1.size, Decimal.new("0.01"))
+
+    Process.put({:fill_order, "JRF-partial-vwap"}, %{
+      exchange_order_id: "JRF-partial-vwap",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.02"),
+      average_price: Decimal.new("1500000"),
+      status: :completed
+    })
+
+    assert :ok = LiveFills.sync_open_orders(exchange: FillExchange)
+
+    {:ok, after_second} = reload_order(order)
+    assert after_second.status == :filled
+    assert Decimal.eq?(after_second.filled_size, Decimal.new("0.02"))
+    assert Decimal.eq?(after_second.filled_notional, Decimal.new("30000"))
+
+    {:ok, [pos2]} = live_positions()
+    assert Decimal.eq?(pos2.size, Decimal.new("0.02"))
+    # 誤実装だと (1M+1.5M)/2 = 1.25M。正しくは取引所 VWAP 1.5M
+    assert Decimal.eq?(pos2.average_price, Decimal.new("1500000"))
+
+    {:ok, fills} = fills_for(order.internal_order_id)
+    assert length(fills) == 2
+
+    prices =
+      fills
+      |> Enum.map(& &1.price)
+      |> Enum.sort(&(Decimal.compare(&1, &2) != :gt))
+
+    assert Decimal.eq?(Enum.at(prices, 0), Decimal.new("1000000"))
+    assert Decimal.eq?(Enum.at(prices, 1), Decimal.new("2000000"))
+  end
+
+  test "partial open then partial close keeps realized_pnl and DailyLoss consistent" do
+    {:ok, _buy} =
+      create_live_order("live-open-partial", "JRF-open-partial", size: Decimal.new("0.02"))
+
+    Process.put({:fill_order, "JRF-open-partial"}, %{
+      exchange_order_id: "JRF-open-partial",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.01"),
+      average_price: Decimal.new("1000000"),
+      status: :active
+    })
+
+    assert :ok = LiveFills.sync_open_orders(exchange: FillExchange)
+
+    Process.put({:fill_order, "JRF-open-partial"}, %{
+      exchange_order_id: "JRF-open-partial",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.02"),
+      average_price: Decimal.new("1500000"),
+      status: :completed
+    })
+
+    assert :ok = LiveFills.sync_open_orders(exchange: FillExchange)
+
+    {:ok, [pos]} = live_positions()
+    assert Decimal.eq?(pos.average_price, Decimal.new("1500000"))
+    assert Decimal.eq?(pos.size, Decimal.new("0.02"))
+
+    {:ok, sell} =
+      create_live_order("live-close-partial", "JRF-close-partial",
+        side: :sell,
+        size: Decimal.new("0.02")
+      )
+
+    # 途中決済: 0.01 @ 1_000_000 → 実現損 = (1.5M - 1M) * 0.01 = 5000
+    Process.put({:fill_order, "JRF-close-partial"}, %{
+      exchange_order_id: "JRF-close-partial",
+      product_code: "FX_BTC_JPY",
+      side: :sell,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.01"),
+      average_price: Decimal.new("1000000"),
+      status: :active
+    })
+
+    assert :ok = LiveFills.sync_open_orders(exchange: FillExchange)
+
+    {:ok, sell_after} = reload_order(sell)
+    assert sell_after.status == :partially_filled
+    assert Decimal.eq?(sell_after.filled_size, Decimal.new("0.01"))
+    assert Decimal.eq?(sell_after.filled_notional, Decimal.new("10000"))
+
+    {:ok, [pos_after]} = live_positions()
+    assert Decimal.eq?(pos_after.size, Decimal.new("0.01"))
+    assert Decimal.eq?(pos_after.average_price, Decimal.new("1500000"))
+
+    {:ok, close_fills} =
+      Fill
+      |> Ash.Query.filter(internal_order_id == ^sell.internal_order_id)
+      |> Ash.read()
+
+    assert length(close_fills) == 1
+    assert Decimal.eq?(hd(close_fills).price, Decimal.new("1000000"))
+    assert Decimal.eq?(hd(close_fills).realized_pnl, Decimal.new("-5000"))
+
+    assert {:ok, loss} = DailyLoss.get(:live)
+    assert Decimal.eq?(loss, Decimal.new("5000"))
+
+    # 残りも別価格で約定 → 増分価格と追加実現損が正しいこと
+    Process.put({:fill_order, "JRF-close-partial"}, %{
+      exchange_order_id: "JRF-close-partial",
+      product_code: "FX_BTC_JPY",
+      side: :sell,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.02"),
+      # 累積 avg 1_200_000 → 2回目増分 = (24000 - 10000) / 0.01 = 1_400_000
+      average_price: Decimal.new("1200000"),
+      status: :completed
+    })
+
+    assert :ok = LiveFills.sync_open_orders(exchange: FillExchange)
+
+    {:ok, sell_done} = reload_order(sell)
+    assert sell_done.status == :filled
+    assert Decimal.eq?(sell_done.filled_notional, Decimal.new("24000"))
+
+    assert {:ok, []} = live_positions()
+
+    {:ok, all_close} =
+      Fill
+      |> Ash.Query.filter(internal_order_id == ^sell.internal_order_id)
+      |> Ash.Query.sort(filled_at: :asc)
+      |> Ash.read()
+
+    assert length(all_close) == 2
+    assert Decimal.eq?(Enum.at(all_close, 1).price, Decimal.new("1400000"))
+    # 2回目実現損 = (1.5M - 1.4M) * 0.01 = 1000
+    assert Decimal.eq?(Enum.at(all_close, 1).realized_pnl, Decimal.new("-1000"))
+
+    assert {:ok, loss_total} = DailyLoss.get(:live)
+    assert Decimal.eq?(loss_total, Decimal.new("6000"))
+  end
+
+  test "filled_notional survives DB reload between successive partial fills" do
+    {:ok, order} =
+      create_live_order("live-restart-vwap", "JRF-restart-vwap", size: Decimal.new("0.02"))
+
+    Process.put({:fill_order, "JRF-restart-vwap"}, %{
+      exchange_order_id: "JRF-restart-vwap",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.01"),
+      average_price: Decimal.new("1000000"),
+      status: :active
+    })
+
+    assert :ok = LiveFills.sync_open_orders(exchange: FillExchange)
+
+    # プロセス再起動相当: DB から読み直した Order だけで次増分を計算する
+    {:ok, reloaded} = reload_order(order)
+    assert Decimal.eq?(reloaded.filled_notional, Decimal.new("10000"))
+
+    Process.put({:fill_order, "JRF-restart-vwap"}, %{
+      exchange_order_id: "JRF-restart-vwap",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.02"),
+      average_price: Decimal.new("1500000"),
+      status: :completed
+    })
+
+    assert {:ok, _} = LiveFills.sync_order(reloaded, exchange: FillExchange)
+
+    {:ok, [pos]} = live_positions()
+    assert Decimal.eq?(pos.average_price, Decimal.new("1500000"))
+
+    {:ok, done} = reload_order(order)
+    assert Decimal.eq?(done.filled_notional, Decimal.new("30000"))
+  end
+
+  test "filled_size without filled_notional is fail-closed and does not book fill" do
+    {:ok, order} =
+      create_live_order("live-bad-baseline", "JRF-bad-baseline", size: Decimal.new("0.02"))
+
+    # アップグレード後に notional が 0 のまま残った部分約定を模擬
+    {:ok, broken, _} =
+      order
+      |> Ash.Changeset.for_update(:update, %{
+        status: :partially_filled,
+        filled_size: Decimal.new("0.01"),
+        filled_notional: Decimal.new("0")
+      })
+      |> Ash.update(return_notifications?: true)
+
+    Process.put({:fill_order, "JRF-bad-baseline"}, %{
+      exchange_order_id: "JRF-bad-baseline",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.02"),
+      average_price: Decimal.new("1500000"),
+      status: :completed
+    })
+
+    assert {:error, :fill_price_unavailable, meta} =
+             LiveFills.sync_order(broken, exchange: FillExchange)
+
+    assert meta.reason == :inconsistent_filled_notional
+
+    {:ok, unchanged} = reload_order(order)
+    assert unchanged.status == :partially_filled
+    assert Decimal.eq?(unchanged.filled_size, Decimal.new("0.01"))
+    assert Decimal.eq?(unchanged.filled_notional, Decimal.new("0"))
+
+    assert {:ok, []} = live_positions()
+    assert {:ok, []} = fills_for(order.internal_order_id)
+  end
+
+  test "inconsistent baseline fails even when exchange has no new fill" do
+    {:ok, order} =
+      create_live_order("live-baseline-idle", "JRF-baseline-idle", size: Decimal.new("0.02"))
+
+    {:ok, broken, _} =
+      order
+      |> Ash.Changeset.for_update(:update, %{
+        status: :partially_filled,
+        filled_size: Decimal.new("0.01"),
+        filled_notional: Decimal.new("0")
+      })
+      |> Ash.update(return_notifications?: true)
+
+    # 新規約定なし（delta=0）。旧実装は :ok で認可前 sync を通していた
+    Process.put({:fill_order, "JRF-baseline-idle"}, %{
+      exchange_order_id: "JRF-baseline-idle",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.01"),
+      average_price: Decimal.new("1000000"),
+      status: :active
+    })
+
+    assert {:error, :fill_price_unavailable, meta} =
+             LiveFills.sync_open_orders(exchange: FillExchange)
+
+    assert meta.reason == :inconsistent_filled_notional
+
+    {:ok, unchanged} = reload_order(broken)
+    assert unchanged.status == :partially_filled
+    assert Decimal.eq?(unchanged.filled_notional, Decimal.new("0"))
+  end
+
+  test "inconsistent baseline refuses terminal cancel without booking fill" do
+    {:ok, order} = create_live_order("live-baseline-cancel", "JRF-baseline-cancel")
+
+    {:ok, broken, _} =
+      order
+      |> Ash.Changeset.for_update(:update, %{
+        status: :partially_filled,
+        filled_size: Decimal.new("0.004"),
+        filled_notional: Decimal.new("0")
+      })
+      |> Ash.update(return_notifications?: true)
+
+    Process.put({:fill_order, "JRF-baseline-cancel"}, %{
+      exchange_order_id: "JRF-baseline-cancel",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.01"),
+      filled_size: Decimal.new("0.004"),
+      average_price: Decimal.new("5000000"),
+      status: :canceled
+    })
+
+    assert {:error, :fill_price_unavailable, meta} =
+             LiveFills.sync_order(broken, exchange: FillExchange)
+
+    assert meta.reason == :inconsistent_filled_notional
+
+    {:ok, unchanged} = reload_order(order)
+    assert unchanged.status == :partially_filled
+    refute unchanged.status == :cancelled
+  end
+
+  test "zero incremental notional is fail-closed" do
+    {:ok, order} =
+      create_live_order("live-zero-incr", "JRF-zero-incr", size: Decimal.new("0.02"))
+
+    {:ok, primed, _} =
+      order
+      |> Ash.Changeset.for_update(:update, %{
+        status: :partially_filled,
+        filled_size: Decimal.new("0.01"),
+        # remote_avg×remote_filled と同額 → 増分 notional 0
+        filled_notional: Decimal.new("30000")
+      })
+      |> Ash.update(return_notifications?: true)
+
+    Process.put({:fill_order, "JRF-zero-incr"}, %{
+      exchange_order_id: "JRF-zero-incr",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.02"),
+      average_price: Decimal.new("1500000"),
+      status: :completed
+    })
+
+    assert {:error, :fill_price_unavailable, meta} =
+             LiveFills.sync_order(primed, exchange: FillExchange)
+
+    assert meta.reason == :non_positive_incremental_notional
+    assert {:ok, []} = live_positions()
+  end
+
+  test "negative incremental notional is fail-closed" do
+    {:ok, order} =
+      create_live_order("live-neg-incr", "JRF-neg-incr", size: Decimal.new("0.02"))
+
+    {:ok, primed, _} =
+      order
+      |> Ash.Changeset.for_update(:update, %{
+        status: :partially_filled,
+        filled_size: Decimal.new("0.01"),
+        filled_notional: Decimal.new("50000")
+      })
+      |> Ash.update(return_notifications?: true)
+
+    Process.put({:fill_order, "JRF-neg-incr"}, %{
+      exchange_order_id: "JRF-neg-incr",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.02"),
+      average_price: Decimal.new("1500000"),
+      status: :completed
+    })
+
+    assert {:error, :fill_price_unavailable, meta} =
+             LiveFills.sync_order(primed, exchange: FillExchange)
+
+    assert meta.reason == :non_positive_incremental_notional
+    assert {:ok, []} = live_positions()
+  end
+
+  test "terminal path refuses filled_size change without matching local fill" do
+    {:ok, order} = create_live_order("live-term-mismatch", "JRF-term-mismatch")
+
+    # ローカルが取引所より先に進んでいる（size 不一致）終端化は notional 対を壊すので拒否
+    {:ok, ahead, _} =
+      order
+      |> Ash.Changeset.for_update(:update, %{
+        status: :partially_filled,
+        filled_size: Decimal.new("0.01"),
+        filled_notional: Decimal.new("50000")
+      })
+      |> Ash.update(return_notifications?: true)
+
+    Process.put({:fill_order, "JRF-term-mismatch"}, %{
+      exchange_order_id: "JRF-term-mismatch",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.01"),
+      filled_size: Decimal.new("0.004"),
+      average_price: Decimal.new("5000000"),
+      status: :canceled
+    })
+
+    assert {:error, :fill_price_unavailable, meta} =
+             LiveFills.sync_order(ahead, exchange: FillExchange)
+
+    assert meta.reason == :terminal_filled_size_mismatch
+  end
+
+  defp create_live_order(internal_id, exchange_id, opts \\ []) do
     Order
     |> Ash.Changeset.for_create(:create, %{
       internal_order_id: internal_id,
       exchange_order_id: exchange_id,
       product_code: "FX_BTC_JPY",
-      side: :buy,
+      side: Keyword.get(opts, :side, :buy),
       status: :pending,
       order_type: :market,
-      size: Decimal.new("0.01"),
+      size: Keyword.get(opts, :size, Decimal.new("0.01")),
       filled_size: Decimal.new("0"),
+      filled_notional: Decimal.new("0"),
       trade_mode: :live
     })
     |> Ash.create()
@@ -208,6 +615,19 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
     Order
     |> Ash.Query.filter(id == ^order.id)
     |> Ash.read_one()
+  end
+
+  defp live_positions do
+    Position
+    |> Ash.Query.filter(trade_mode == :live and product_code == "FX_BTC_JPY")
+    |> Ash.read()
+  end
+
+  defp fills_for(internal_order_id) do
+    Fill
+    |> Ash.Query.filter(internal_order_id == ^internal_order_id)
+    |> Ash.Query.sort(filled_at: :asc)
+    |> Ash.read()
   end
 
   defp latest_balance(currency) do
