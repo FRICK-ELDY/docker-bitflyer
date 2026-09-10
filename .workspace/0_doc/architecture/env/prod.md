@@ -101,6 +101,7 @@
 - `GET /health/ready` または `GET /health` が 503、またはレスポンスの readiness が `halted:...`
 - 新規 submit は拒否される（`:circuit_open` / `:unsynced`）
 - Feed 切断・市場データ stale は `GET /health/ready` が 503（`reason` が `feed_disconnected` / `stale_market_data` 等）。Compose の `/health/live` は落とさない
+- WS が生きたまま tick が止まった場合は Feed の stall watchdog（既定は `market_data_max_age_ms × 3`、`stall_timeout_ms` で上書き可）で `:stale_watchdog` 切断→自動再接続。人手再起動は不要
 
 ### 初回 baseline（`mix bitflyer.baseline`）
 

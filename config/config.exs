@@ -34,6 +34,8 @@ config :bitflyer, Bitflyer.MarketData,
   reconnect_base_ms: 500,
   reconnect_max_ms: 30_000
 
+# stall_timeout_ms 未設定時は Risk の market_data_max_age_ms × 3（Feed 既定）
+
 # Feed → Strategy → Risk → Executor（dry_run 既定で意図を 1 回出す）
 # live では runtime が enabled を false にし、FixedOnce 有効化を拒否する。
 config :bitflyer, Bitflyer.Strategy,

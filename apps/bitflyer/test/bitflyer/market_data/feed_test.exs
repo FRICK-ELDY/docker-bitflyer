@@ -244,4 +244,115 @@ defmodule Bitflyer.MarketData.FeedTest do
     assert {:ok, %{ltp: ltp}, ^newer} = Cache.get(@market_key)
     assert Decimal.equal?(ltp, Decimal.new("5000000"))
   end
+
+  test "silent stall disconnects socket and reconnects without manual restart" do
+    parent = self()
+    disc_id = "md-stall-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        disc_id,
+        [:bitflyer, :market_data, :disconnected],
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(disc_id) end)
+
+    feed =
+      start_supervised!(
+        {Feed,
+         name: :"feed-#{System.unique_integer([:positive])}",
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         gap_fill_on_connect?: true,
+         reconnect_base_ms: 20,
+         reconnect_max_ms: 20,
+         stall_timeout_ms: 40}
+      )
+
+    assert_receive {:fetch_ticker, @product}, 500
+    fetches_after_connect = FakeRest.fetch_count()
+
+    status = Feed.status(feed)
+    assert status.connected?
+    assert status.stall_timeout_ms == 40
+    refute is_nil(status.last_frame_at)
+
+    assert_receive {:telemetry, [:bitflyer, :market_data, :disconnected], %{count: 1},
+                    %{reason: :stale_watchdog}},
+                   500
+
+    # 再接続で再購読 + 穴埋め（人手再起動なし）
+    assert_receive {:fetch_ticker, @product}, 500
+    assert FakeRest.fetch_count() > fetches_after_connect
+
+    status = Feed.status(feed)
+    assert status.connected?
+  end
+
+  test "ws tick resets stall watchdog so healthy feed stays connected" do
+    parent = self()
+    disc_id = "md-stall-reset-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        disc_id,
+        [:bitflyer, :market_data, :disconnected],
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(disc_id) end)
+
+    feed =
+      start_supervised!(
+        {Feed,
+         name: :"feed-#{System.unique_integer([:positive])}",
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         gap_fill_on_connect?: false,
+         reconnect_base_ms: 20,
+         reconnect_max_ms: 20,
+         stall_timeout_ms: 5_000}
+      )
+
+    _ = Feed.status(feed)
+    %{stall_ref: old_ref} = :sys.get_state(feed)
+    socket = Feed.status(feed).socket
+
+    frame =
+      Jason.encode!(%{
+        "method" => "channelMessage",
+        "params" => %{
+          "channel" => MarketData.ticker_channel(@product),
+          "message" => %{"product_code" => @product, "ltp" => "5100000"}
+        }
+      })
+
+    Socket.Local.push_frame(socket, frame)
+    _ = Feed.status(feed)
+
+    %{stall_ref: new_ref, stall_timer: active_timer} = :sys.get_state(feed)
+    assert new_ref != old_ref
+    assert is_reference(active_timer)
+
+    # 張り直し前の timer 発火は無視され、現行 stall_timer は残る
+    send(feed, {:stall_watchdog, old_ref})
+    _ = Feed.status(feed)
+
+    %{stall_ref: ^new_ref, stall_timer: ^active_timer} = :sys.get_state(feed)
+
+    refute_receive {:telemetry, [:bitflyer, :market_data, :disconnected], _,
+                    %{reason: :stale_watchdog}},
+                   50
+
+    assert Feed.status(feed).connected?
+  end
 end

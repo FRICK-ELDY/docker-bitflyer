@@ -6,6 +6,9 @@ defmodule Bitflyer.MarketData.Feed do
   - 切断時: telemetry → backoff 再接続（古い Cache のままなので risk は stale 拒否）
   - フレーム: 正規化 → Cache.put → tick telemetry
   - socket は link + trap_exit（Feed 終了時のリーク防止、切断は EXIT で検知）
+  - サイレントストール: 最終フレーム（または接続）から
+    `stall_timeout_ms`（未設定時は `market_data_max_age_ms * 3`）無通信なら
+    socket を落として再接続（`:stale_watchdog`）。Risk の鮮度窓より長く取る
   """
 
   use GenServer
@@ -63,10 +66,19 @@ defmodule Bitflyer.MarketData.Feed do
         Keyword.get(opts, :reconnect_base_ms, Keyword.get(cfg, :reconnect_base_ms, 500)),
       reconnect_max_ms:
         Keyword.get(opts, :reconnect_max_ms, Keyword.get(cfg, :reconnect_max_ms, 30_000)),
+      stall_timeout_ms:
+        Keyword.get(
+          opts,
+          :stall_timeout_ms,
+          Keyword.get(cfg, :stall_timeout_ms, default_stall_timeout_ms())
+        ),
       socket: nil,
       connected?: false,
       reconnect_attempt: 0,
       reconnect_timer: nil,
+      stall_timer: nil,
+      stall_ref: nil,
+      last_frame_at: nil,
       subscribe_count: 0
     }
 
@@ -89,7 +101,9 @@ defmodule Bitflyer.MarketData.Feed do
       product_codes: state.product_codes,
       subscribe_count: state.subscribe_count,
       reconnect_attempt: state.reconnect_attempt,
-      socket: state.socket
+      socket: state.socket,
+      last_frame_at: state.last_frame_at,
+      stall_timeout_ms: state.stall_timeout_ms
     }
 
     {:reply, status, state}
@@ -111,12 +125,19 @@ defmodule Bitflyer.MarketData.Feed do
         state
       end
 
-    {:noreply, state}
+    # 接続直後は tick 待ちの猶予を開始（無通信が続けば stale_watchdog）
+    {:noreply, arm_stall_watchdog(state)}
   end
 
   def handle_info({:socket_frame, frame}, state) do
+    # 正規化結果に関わらずフレーム到着＝ソケット生存。薄商いでも無通信誤認を避ける
     _ = ingest_frame(frame)
-    {:noreply, state}
+
+    if state.connected? do
+      {:noreply, arm_stall_watchdog(state)}
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_info({:socket_disconnected, reason}, state) do
@@ -140,9 +161,29 @@ defmodule Bitflyer.MarketData.Feed do
     end
   end
 
-  def handle_info({:gap_fill_tick, key, value, product_code, gap_fill_started_at}, state) do
-    _ = maybe_apply_gap_fill(key, value, product_code, gap_fill_started_at)
+  def handle_info({:stall_watchdog, ref}, %{stall_ref: ref} = state) do
+    state = %{state | stall_timer: nil, stall_ref: nil}
+
+    if state.connected? do
+      {:noreply, handle_disconnect(state, :stale_watchdog)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:stall_watchdog, _ref}, state) do
+    # cancel 後に遅延到着した旧 ref。現行 timer 参照を壊さない
     {:noreply, state}
+  end
+
+  def handle_info({:gap_fill_tick, key, value, product_code, gap_fill_started_at}, state) do
+    case maybe_apply_gap_fill(key, value, product_code, gap_fill_started_at) do
+      :applied when state.connected? ->
+        {:noreply, arm_stall_watchdog(state)}
+
+      _ ->
+        {:noreply, state}
+    end
   end
 
   def handle_info(_other, state), do: {:noreply, state}
@@ -153,6 +194,7 @@ defmodule Bitflyer.MarketData.Feed do
     emit_disconnected(reason)
 
     state
+    |> cancel_stall_timer()
     |> stop_socket()
     |> Map.put(:connected?, false)
     |> schedule_reconnect()
@@ -258,10 +300,11 @@ defmodule Bitflyer.MarketData.Feed do
   defp maybe_apply_gap_fill(key, value, product_code, gap_fill_started_at) do
     case Cache.get(key) do
       {:ok, _current, received_at} when received_at >= gap_fill_started_at ->
-        :ok
+        :skipped
 
       _ ->
         put_tick(key, value, product_code, received_at: gap_fill_started_at)
+        :applied
     end
   end
 
@@ -269,9 +312,10 @@ defmodule Bitflyer.MarketData.Feed do
     case Normalize.from_ws_frame(frame) do
       {:ok, key, value} ->
         put_tick(key, value, elem(key, 1))
+        :tick
 
       :ignore ->
-        :ok
+        :ignore
 
       :error ->
         # フレーム全文はログに載せない（肥大・ノイズ回避）
@@ -280,6 +324,8 @@ defmodule Bitflyer.MarketData.Feed do
           "market_data ws frame normalization failed",
           %{reason: :normalization_failed, status: :ws_frame_failed}
         )
+
+        :error
     end
   end
 
@@ -324,5 +370,31 @@ defmodule Bitflyer.MarketData.Feed do
   defp cancel_reconnect_timer(%{reconnect_timer: timer} = state) do
     _ = Process.cancel_timer(timer)
     %{state | reconnect_timer: nil}
+  end
+
+  defp arm_stall_watchdog(state) do
+    state = cancel_stall_timer(state)
+    ref = make_ref()
+    timer = Process.send_after(self(), {:stall_watchdog, ref}, state.stall_timeout_ms)
+
+    %{
+      state
+      | last_frame_at: Cache.monotonic_ms(),
+        stall_timer: timer,
+        stall_ref: ref
+    }
+  end
+
+  defp cancel_stall_timer(%{stall_timer: nil} = state), do: %{state | stall_ref: nil}
+
+  defp cancel_stall_timer(%{stall_timer: timer} = state) do
+    _ = Process.cancel_timer(timer)
+    %{state | stall_timer: nil, stall_ref: nil}
+  end
+
+  defp default_stall_timeout_ms do
+    Application.get_env(:bitflyer, Bitflyer.Risk, [])
+    |> Keyword.get(:market_data_max_age_ms, 5_000)
+    |> Kernel.*(3)
   end
 end
