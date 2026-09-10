@@ -35,6 +35,7 @@ config :bitflyer, Bitflyer.MarketData,
   reconnect_max_ms: 30_000
 
 # Feed → Strategy → Risk → Executor（dry_run 既定で意図を 1 回出す）
+# live では runtime が enabled を false にし、FixedOnce 有効化を拒否する。
 config :bitflyer, Bitflyer.Strategy,
   enabled: true,
   module: Bitflyer.Strategy.FixedOnce,
@@ -43,6 +44,7 @@ config :bitflyer, Bitflyer.Strategy,
   submitted_lookback_days: 7,
   submitted_id_prefix: "strategy-"
 
+# dry_run / paper 用の開発上限。live では runtime が環境変数必須で上書きする。
 config :bitflyer, Bitflyer.Risk,
   max_order_size: "1",
   max_position_size: "5",

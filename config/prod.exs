@@ -30,3 +30,4 @@ config :logger, level: :info
 
 # Runtime production configuration, including reading
 # of environment variables, is done on config/runtime.exs.
+# Strategy の live 既定オフは runtime（TRADE_MODE=live）側。prod の dry_run/paper は config.exs のまま。

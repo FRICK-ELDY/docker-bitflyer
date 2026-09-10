@@ -11,7 +11,7 @@
 
 前回計画の P0 #1–#4、P1 全般、P2 全般、P3 #15–#19（UI 認証、API キー枠、本番 release、Exchange.Rest、deps audit）はコード上で解決済み。再掲しない。
 
-**未消化として持ち越すもの:** 旧 P0 #5 のうち Decode strict 等。日次損失（#1）・残高検査（#2）・両建て建玉突合（#3）は解決済み。
+**未消化として持ち越すもの:** 旧 P0 #5 のうち Decode strict 等。日次損失（#1）・残高検査（#2）・両建て建玉突合（#3）・live 既定安全化（#4）は解決済み。
 
 ---
 
@@ -22,7 +22,7 @@
 | 1 | ~~日次損失の実効化~~ **済** | Fill 正本 + invalidate→reload fail-closed。突合/resume で再同期。縦貫通回帰あり。含み損はスコープ外（実現のみ） | live/paper で Fill→DailyLoss→halt が緑。README risk 行を partial に正直化 |
 | 2 | ~~残高検査の実効化~~ **済** | ETS + invalidate/reload（paper、残 hold 再適用）+ `reserve(hold_id)` / 部分約定 `consume_*` / `release_hold` 残額返却 + 突合一致時 exchange `put(clear_holds)`。baseline 更新は P1 #6 | pending+別 fill・部分約定 cancel・market 取消 LTP 差分などが緑 |
 | 3 | ~~両建て建玉突合~~ **済** | 外部 `{product_code,side}` を突合前に net（buy−sell）正規化。順序反転 fixture で Ready/halt が一致 | buy+sell 並存でも片側上書きせず、ネット一致時 Ready・片脚一致のみは mismatch |
-| 4 | live 既定の安全化 | prod/live で Strategy 既定 `enabled: false`。live 専用上限を明示必須。FixedOnce の自動成行を live で止める | live+confirm だけでは意図が出ない |
+| 4 | ~~live 既定の安全化~~ **済** | live で Strategy 既定 enabled: false（BITFLYER_STRATEGY_ENABLED=true のみ有効）。FixedOnce 有効化は起動拒否＋evaluate 空。Risk 5 上限は環境変数必須 | live+confirm だけでは意図も開発上限も載らない |
 | 5 | Decode strict 化 | 不正・欠損数値を 0 に丸めず snapshot 失敗 → halt | malformed/null fixture で halt するテストが緑 |
 
 ---

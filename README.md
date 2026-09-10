@@ -24,7 +24,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | コンポーネント | 状態 | メモ |
 | --- | --- | --- |
 | market-data（Feed / Cache / 再接続 / gap-fill） | implemented | ETS 鮮度。stale は risk / `/health/ready` で拒否・検知 |
-| strategy（Behaviour / Runner / FixedOnce） | implemented | 縦貫通の骨。高度なアルゴリズムは後続 |
+| strategy（Behaviour / Runner / FixedOnce） | implemented | dry_run/paper の骨。live は既定オフ・FixedOnce 禁止・Risk 上限は env 必須 |
 | risk-manager（limits / circuit / 鮮度） | partial | サイズ・建玉・頻度・価格逸脱は実効。日次損失は Fill/DailyLoss。残高は BalanceCache（paper invalidate+reload、live reserve、突合は取引所残高）。含み損は未計上 |
 | order-executor（dry_run / paper / live 出口） | implemented | 冪等キーあり。live 出口はゲート通過時のみ REST |
 | datastore（Ash: Order / Position / Fill / Balance / RiskState） | implemented | `Bitflyer.Repo` に閉じる |
@@ -127,6 +127,7 @@ Hex の既知 advisory が対象。`heroicons` / `daisyui` など GitHub タグ�
 | `TRADE_MODE` | `dry_run` |
 | `BITFLYER_LIVE_CONFIRM` | live 時のみ。UTC 当日 `YYYY-MM-DD` |
 | `BITFLYER_API_KEY` / `BITFLYER_API_SECRET` | Private API。`TRADE_MODE=live` 時のみ必須。出金権限は付けない |
+| `BITFLYER_MAX_*` / `BITFLYER_STRATEGY_ENABLED` | live 専用。上限 5 項目は必須。戦略は既定オフ（FixedOnce 不可） |
 | `DISCORD_WEBHOOK_URL` | 任意。Discord Incoming Webhook。未設定でも起動する |
 | `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` | Status UI。prod 必須。dev は両方揃ったときだけ有効 |
 | `PHX_HTTP_IP` | prod のみ。既定 `127.0.0.1`（公開面最小化） |

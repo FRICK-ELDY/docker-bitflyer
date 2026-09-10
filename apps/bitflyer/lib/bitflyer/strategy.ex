@@ -26,7 +26,7 @@ defmodule Bitflyer.Strategy do
   def config, do: Application.get_env(:bitflyer, __MODULE__, [])
 
   @spec enabled?() :: boolean()
-  def enabled?, do: Keyword.get(config(), :enabled, true) == true
+  def enabled?, do: Keyword.get(config(), :enabled, false) == true
 
   @spec module() :: module()
   def module, do: Keyword.get(config(), :module, Bitflyer.Strategy.FixedOnce)
