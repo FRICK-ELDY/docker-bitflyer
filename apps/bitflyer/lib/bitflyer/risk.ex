@@ -6,17 +6,16 @@ defmodule Bitflyer.Risk do
   上限超過・stale・未同期は必ず拒否する。
   サーキットは `open_circuit/1` / `clear_circuit/1`。
 
-  検査: 同期 → 鮮度 → 注文サイズ → 建玉 → 価格逸脱 → 発注頻度 → 日次損失 → 残高（任意）。
+  検査: 同期 → 鮮度 → 注文サイズ → 建玉 → 価格逸脱 → 発注頻度 → 日次損失 → 残高。
 
   発注ホットパスでは RiskState・発注頻度・日次損失・残高のために DB 往復しない。
-  頻度は `Risk.OrderRate`（ETS）、日次損失は `Risk.DailyLoss`（ETS / Fill 正本）。
-  残高は `:balances` 注入時のみ検査する。
+  頻度は `Risk.OrderRate`、日次損失は `Risk.DailyLoss`、残高は `Risk.BalanceCache`（ETS）。
   """
 
   require Ash.Query
 
   alias Bitflyer.MarketData.Cache
-  alias Bitflyer.Risk.{Circuit, DailyLoss, Limits, OrderRate}
+  alias Bitflyer.Risk.{BalanceCache, Circuit, DailyLoss, Limits, OrderRate}
   alias Bitflyer.Trading.{Position, Product}
 
   @type rejection_code ::
@@ -39,7 +38,7 @@ defmodule Bitflyer.Risk do
   - `:check_persisted_circuit` — 既定 false。true のとき Ready でも RiskState を見る
   - `:recent_order_count` — 直近 1 分の発注件数（テスト注入。未指定時は OrderRate ETS）
   - `:daily_loss` — 当日損失額（テスト注入。`allow_test_injections: true` のときのみ。未指定時は DailyLoss ETS）
-  - `:balances` — 残高マップまたはリスト（未指定時は残高検査スキップ。ホットパスで DB しない）
+  - `:balances` — 残高マップまたはリスト（テスト注入。未指定時は BalanceCache ETS。paper/live 必須）
   - `:now` — Cache / OrderRate 用 monotonic ms（テスト注入）
   """
   @spec authorize(map(), keyword()) :: result()
@@ -69,6 +68,41 @@ defmodule Bitflyer.Risk do
       {:error, code, meta} = error ->
         emit_rejected(command, code, meta)
         error
+    end
+  end
+
+  @doc """
+  発注が拘束する通貨と額。`BalanceCache.reserve/4` 用。
+
+  dry_run は残高モデル無しのため `{:ok, :skip}`。
+  """
+  @spec balance_hold(map(), keyword()) ::
+          {:ok, :skip}
+          | {:ok, %{currency: String.t(), amount: Decimal.t()}}
+          | {:error, rejection_code(), map()}
+  def balance_hold(command, opts \\ []) when is_map(command) do
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+
+    if trade_mode == :dry_run do
+      {:ok, :skip}
+    else
+      side = Map.fetch!(command, :side)
+      size = Map.fetch!(command, :size)
+      product_code = Map.fetch!(command, :product_code)
+
+      case side do
+        :buy ->
+          case quote_notional(command, opts) do
+            {:ok, notional} ->
+              {:ok, %{currency: quote_currency(product_code), amount: notional}}
+
+            other ->
+              other
+          end
+
+        :sell ->
+          {:ok, %{currency: base_currency(product_code), amount: size}}
+      end
     end
   end
 
@@ -272,14 +306,19 @@ defmodule Bitflyer.Risk do
   end
 
   defp check_available_balance(command, opts) do
-    case fetch_balances(opts) do
-      {:ok, []} ->
-        # ホットパスで BalanceSnapshot を読まない。注入が無ければスキップ。
-        # live Ready の残高 baseline は Reconcile が別途担保する。
-        :ok
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
 
-      {:ok, balances} ->
-        verify_available_balance(command, balances, opts)
+    # dry_run は残高モデルを持たない（送らない・動かさない）
+    if trade_mode == :dry_run do
+      :ok
+    else
+      case resolve_balances(opts, trade_mode) do
+        {:ok, balances} ->
+          verify_available_balance(command, balances, opts)
+
+        {:error, :unsynced} ->
+          {:error, :unsynced, %{reason: :balance_unsynced}}
+      end
     end
   end
 
@@ -293,17 +332,18 @@ defmodule Bitflyer.Risk do
       :buy ->
         case quote_notional(command, opts) do
           {:ok, notional} ->
-            available = Map.get(balance_map, quote_currency(product_code))
+            currency = quote_currency(product_code)
+            available = Map.get(balance_map, currency)
 
             cond do
               is_nil(available) ->
-                :ok
+                {:error, :unsynced, %{reason: :balance_currency_missing, currency: currency}}
 
               Decimal.lt?(available, notional) ->
                 {:error, :limit_exceeded,
                  %{
                    limit: :insufficient_balance,
-                   currency: quote_currency(product_code),
+                   currency: currency,
                    available: available,
                    required: notional
                  }}
@@ -317,17 +357,18 @@ defmodule Bitflyer.Risk do
         end
 
       :sell ->
-        available = Map.get(balance_map, base_currency(product_code))
+        currency = base_currency(product_code)
+        available = Map.get(balance_map, currency)
 
         cond do
           is_nil(available) ->
-            :ok
+            {:error, :unsynced, %{reason: :balance_currency_missing, currency: currency}}
 
           Decimal.lt?(available, size) ->
             {:error, :limit_exceeded,
              %{
                limit: :insufficient_balance,
-               currency: base_currency(product_code),
+               currency: currency,
                available: available,
                required: size
              }}
@@ -454,11 +495,23 @@ defmodule Bitflyer.Risk do
     |> Keyword.get(:allow_test_injections, false) == true
   end
 
-  defp fetch_balances(opts) do
+  defp resolve_balances(opts, trade_mode) do
     case Keyword.fetch(opts, :balances) do
-      {:ok, balances} -> {:ok, balances || []}
-      # ホットパスで DB を叩かない。残高検査は明示注入時のみ。
-      :error -> {:ok, []}
+      {:ok, balances} ->
+        if test_injections_allowed?() do
+          {:ok, balances || []}
+        else
+          resolve_balances(Keyword.delete(opts, :balances), trade_mode)
+        end
+
+      :error ->
+        balance_opts =
+          case Keyword.fetch(opts, :balance_cache_server) do
+            {:ok, server} -> [server: server]
+            :error -> []
+          end
+
+        BalanceCache.get(trade_mode, balance_opts)
     end
   end
 

@@ -100,7 +100,11 @@ defmodule Bitflyer.Startup.Reconciler do
     Reconcile.run(trade_mode: Bitflyer.TradeMode.current(), exchange: state.exchange)
   end
 
-  defp apply_result({:ok, _internal}, state) do
+  defp apply_result({:ok, internal}, state) do
+    trade_mode = Bitflyer.TradeMode.current()
+
+    balance_result = sync_balance_cache(trade_mode, internal)
+
     # barrier 中は synced にしない（force も使わない）
     daily_loss_result = Bitflyer.Risk.DailyLoss.reload()
 
@@ -144,8 +148,9 @@ defmodule Bitflyer.Startup.Reconciler do
         end
 
       :not_ready ->
-        # DailyLoss が synced でない間は Ready にしない（Ready と発注可否のずれを防ぐ）
-        if daily_loss_synced?(daily_loss_result) do
+        # paper/live は DailyLoss + BalanceCache が synced のときだけ Ready
+        # （Ready と発注可否のずれを防ぐ。dry_run は残高検査なし）
+        if risk_caches_synced?(trade_mode, daily_loss_result, balance_result) do
           case ensure_risk_cleared() do
             :ok ->
               case state.readiness.mark_ready() do
@@ -171,6 +176,8 @@ defmodule Bitflyer.Startup.Reconciler do
   defp apply_result({:error, reason, details}, state) do
     detail_meta =
       if is_map(details), do: Map.take(details, [:product_code, :currency, :kind]), else: %{}
+
+    _ = Bitflyer.Risk.BalanceCache.mark_unsynced(Bitflyer.TradeMode.current())
 
     Bitflyer.Telemetry.execute(
       :reconcile_mismatch,
@@ -216,6 +223,64 @@ defmodule Bitflyer.Startup.Reconciler do
 
   defp daily_loss_synced?(:ok), do: true
   defp daily_loss_synced?(_), do: false
+
+  defp risk_caches_synced?(:dry_run, daily_loss_result, _balance_result),
+    do: daily_loss_synced?(daily_loss_result)
+
+  defp risk_caches_synced?(_trade_mode, daily_loss_result, :ok),
+    do: daily_loss_synced?(daily_loss_result)
+
+  defp risk_caches_synced?(_trade_mode, _daily_loss_result, _balance_result), do: false
+
+  defp sync_balance_cache(:live, %{exchange_balances: balances}) when is_map(balances) do
+    case Bitflyer.Risk.BalanceCache.put(:live, balances, clear_holds: true) do
+      :ok ->
+        :ok
+
+      {:ok, :deferred} ->
+        Bitflyer.Telemetry.log(
+          :info,
+          "balance cache put after live reconcile deferred (fill barrier)",
+          %{trade_mode: :live}
+        )
+
+        {:ok, :deferred}
+
+      {:error, reason} ->
+        Bitflyer.Telemetry.log(
+          :error,
+          "balance cache put after live reconcile failed; authorize may stay unsynced",
+          %{reason: inspect(reason), trade_mode: :live}
+        )
+
+        {:error, reason}
+    end
+  end
+
+  defp sync_balance_cache(trade_mode, _internal) do
+    case Bitflyer.Risk.BalanceCache.refresh(trade_mode) do
+      :ok ->
+        :ok
+
+      {:ok, :deferred} ->
+        Bitflyer.Telemetry.log(
+          :info,
+          "balance cache refresh after reconcile deferred (fill barrier)",
+          %{trade_mode: trade_mode}
+        )
+
+        {:ok, :deferred}
+
+      {:error, reason} ->
+        Bitflyer.Telemetry.log(
+          :error,
+          "balance cache refresh after reconcile failed; authorize may stay unsynced",
+          %{reason: inspect(reason), trade_mode: trade_mode}
+        )
+
+        {:error, reason}
+    end
+  end
 
   defp ensure_risk_cleared do
     case RiskState

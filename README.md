@@ -25,7 +25,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | --- | --- | --- |
 | market-data（Feed / Cache / 再接続 / gap-fill） | implemented | ETS 鮮度。stale は risk / `/health/ready` で拒否・検知 |
 | strategy（Behaviour / Runner / FixedOnce） | implemented | 縦貫通の骨。高度なアルゴリズムは後続 |
-| risk-manager（limits / circuit / 鮮度） | partial | サイズ・建玉・頻度・価格逸脱は実効。日次損失は Fill/DailyLoss で実効。残高は注入時のみ（ETS 未整備） |
+| risk-manager（limits / circuit / 鮮度） | partial | サイズ・建玉・頻度・価格逸脱は実効。日次損失は Fill/DailyLoss。残高は BalanceCache（paper invalidate+reload、live reserve、突合は取引所残高）。含み損は未計上 |
 | order-executor（dry_run / paper / live 出口） | implemented | 冪等キーあり。live 出口はゲート通過時のみ REST |
 | datastore（Ash: Order / Position / Fill / Balance / RiskState） | implemented | `Bitflyer.Repo` に閉じる |
 | cache（ETS） | implemented | 単一ノード前提。Redis なし |

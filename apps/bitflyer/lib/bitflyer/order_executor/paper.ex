@@ -28,45 +28,48 @@ defmodule Bitflyer.OrderExecutor.Paper do
 
   defp apply_fill_transaction(%Order{} = order, fill_price) do
     Bitflyer.OrderExecutor.DailyLossSync.around_fill(:paper, fn ->
-      case Bitflyer.Repo.transaction(fn ->
-             with {:ok, filled_order, order_notifications} <- mark_filled(order, fill_price),
-                  {:ok, position_notifications, _fill_meta} <-
-                    Positions.apply_fill(filled_order, fill_price),
-                  {:ok, balance_notifications} <- Balances.apply_fill(filled_order, fill_price) do
-               {filled_order,
-                order_notifications ++ position_notifications ++ balance_notifications}
-             else
-               {:error, code, meta} when is_atom(code) and is_map(meta) ->
-                 Bitflyer.Repo.rollback({code, meta})
+      Bitflyer.OrderExecutor.BalanceCacheSync.around_fill(:paper, fn ->
+        case Bitflyer.Repo.transaction(fn ->
+               with {:ok, filled_order, order_notifications} <- mark_filled(order, fill_price),
+                    {:ok, position_notifications, _fill_meta} <-
+                      Positions.apply_fill(filled_order, fill_price),
+                    {:ok, balance_notifications} <- Balances.apply_fill(filled_order, fill_price) do
+                 {filled_order,
+                  order_notifications ++ position_notifications ++ balance_notifications}
+               else
+                 {:error, code, meta} when is_atom(code) and is_map(meta) ->
+                   Bitflyer.Repo.rollback({code, meta})
 
-               other ->
-                 Bitflyer.Repo.rollback(other)
-             end
-           end) do
-        {:ok, {filled_order, notifications}} ->
-          _ = Ash.Notifier.notify(notifications)
+                 other ->
+                   Bitflyer.Repo.rollback(other)
+               end
+             end) do
+          {:ok, {filled_order, notifications}} ->
+            _ = Ash.Notifier.notify(notifications)
+            _ = Bitflyer.Risk.BalanceCache.discard_hold(:paper, filled_order.internal_order_id)
 
-          Bitflyer.Telemetry.execute(
-            :order_filled,
-            %{count: 1},
-            %{
-              internal_order_id: filled_order.internal_order_id,
-              exchange_order_id: filled_order.exchange_order_id,
-              product_code: filled_order.product_code,
-              side: filled_order.side,
-              trade_mode: :paper,
-              status: :filled
-            }
-          )
+            Bitflyer.Telemetry.execute(
+              :order_filled,
+              %{count: 1},
+              %{
+                internal_order_id: filled_order.internal_order_id,
+                exchange_order_id: filled_order.exchange_order_id,
+                product_code: filled_order.product_code,
+                side: filled_order.side,
+                trade_mode: :paper,
+                status: :filled
+              }
+            )
 
-          {:ok, filled_order}
+            {:ok, filled_order}
 
-        {:error, {code, meta}} when is_atom(code) and is_map(meta) ->
-          {:error, code, meta}
+          {:error, {code, meta}} when is_atom(code) and is_map(meta) ->
+            {:error, code, meta}
 
-        {:error, error} ->
-          {:error, :persist_failed, %{error: error}}
-      end
+          {:error, error} ->
+            {:error, :persist_failed, %{error: error}}
+        end
+      end)
     end)
   end
 

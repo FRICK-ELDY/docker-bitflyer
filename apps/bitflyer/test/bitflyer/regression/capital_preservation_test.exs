@@ -22,6 +22,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   import Bitflyer.TestSupport.MarketDataCacheHelper
   import Bitflyer.TestSupport.OrderRateHelper
   import Bitflyer.TestSupport.DailyLossHelper
+  import Bitflyer.TestSupport.BalanceCacheHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
   alias Bitflyer.MarketData.Cache
@@ -51,6 +52,96 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
     def start_counter, do: Agent.start_link(fn -> 0 end, name: __MODULE__.Counter)
     def place_count, do: Agent.get(__MODULE__.Counter, & &1)
+  end
+
+  defmodule CancelOkExchange do
+    @behaviour Bitflyer.Exchange.Client
+
+    @impl true
+    def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
+
+    @impl true
+    def place_order(_), do: {:error, :not_used}
+
+    @impl true
+    def cancel_order(_request), do: :ok
+
+    @impl true
+    def fetch_order(%{exchange_order_id: id}) do
+      case Process.get({:fill_order, id}) do
+        %{} = info ->
+          {:ok, Map.put(info, :status, :canceled)}
+
+        _ ->
+          {:ok,
+           %{
+             exchange_order_id: id,
+             product_code: "FX_BTC_JPY",
+             side: :buy,
+             size: Decimal.new("0.01"),
+             filled_size: Decimal.new("0"),
+             average_price: nil,
+             status: :canceled
+           }}
+      end
+    end
+
+    @impl true
+    def fetch_executions(_), do: {:ok, []}
+  end
+
+  defmodule CancelKeepOpenExchange do
+    @behaviour Bitflyer.Exchange.Client
+
+    @impl true
+    def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
+
+    @impl true
+    def place_order(_), do: {:error, :not_used}
+
+    @impl true
+    def cancel_order(_request), do: :ok
+
+    @impl true
+    def fetch_order(%{exchange_order_id: id}) do
+      {:ok,
+       %{
+         exchange_order_id: id,
+         product_code: "FX_BTC_JPY",
+         side: :buy,
+         size: Decimal.new("0.01"),
+         filled_size: Decimal.new("0"),
+         average_price: nil,
+         status: :active
+       }}
+    end
+
+    @impl true
+    def fetch_executions(_), do: {:ok, []}
+  end
+
+  defmodule PartialFillExchange do
+    @behaviour Bitflyer.Exchange.Client
+
+    @impl true
+    def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
+
+    @impl true
+    def place_order(_), do: {:error, :not_used}
+
+    @impl true
+    def cancel_order(_), do: {:error, :not_used}
+
+    @impl true
+    def fetch_order(%{exchange_order_id: id}) do
+      case Process.get({:fill_order, id}) do
+        nil -> {:error, :order_not_found}
+        info -> {:ok, info}
+      end
+    end
+
+    @impl true
+    def fetch_executions(_), do: {:ok, []}
   end
 
   defmodule LossFillExchange do
@@ -120,8 +211,19 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
     def start_counter, do: Agent.start_link(fn -> 0 end, name: __MODULE__.Counter)
     def place_count, do: Agent.get(__MODULE__.Counter, & &1)
 
-    def stop_counter,
-      do: if(Process.whereis(__MODULE__.Counter), do: Agent.stop(__MODULE__.Counter))
+    def stop_counter do
+      case Process.whereis(__MODULE__.Counter) do
+        nil ->
+          :ok
+
+        pid ->
+          try do
+            Agent.stop(pid)
+          catch
+            :exit, _ -> :ok
+          end
+      end
+    end
   end
 
   setup do
@@ -129,6 +231,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
     reset_market_data_cache()
     reset_order_rate()
     reset_daily_loss()
+    reset_balance_cache()
     clear_default_risk_state()
 
     previous_mode = Application.get_env(:bitflyer, :trade_mode, :dry_run)
@@ -143,6 +246,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       reset_market_data_cache()
       reset_order_rate()
       reset_daily_loss()
+      reset_balance_cache()
       clear_default_risk_state()
       Application.put_env(:bitflyer, :trade_mode, previous_mode)
       Application.put_env(:bitflyer, :exchange_client, previous_client)
@@ -159,6 +263,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       Application.put_env(:bitflyer, :trade_mode, :paper)
       assert Readiness.mark_ready() == :ok
       put_fresh_market()
+      seed_paper_balances!()
 
       assert {:ok, %Order{status: :filled}} =
                OrderExecutor.submit(command("dup-1"), trade_mode: :paper)
@@ -198,6 +303,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       Application.put_env(:bitflyer, :trade_mode, :paper)
       assert Readiness.mark_ready() == :ok
       put_fresh_market()
+      seed_paper_balances!()
 
       assert {:ok, %Order{status: :filled, trade_mode: :paper}} =
                OrderExecutor.submit(command("iso-paper-1"), trade_mode: :paper)
@@ -234,6 +340,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       Application.put_env(:bitflyer, :trade_mode, :paper)
       assert Readiness.mark_ready() == :ok
       put_fresh_market()
+      seed_paper_balances!()
 
       limits = %{
         max_order_size: Decimal.new("1"),
@@ -483,6 +590,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       Application.put_env(:bitflyer, :trade_mode, :paper)
       assert Readiness.mark_ready() == :ok
       put_fresh_market(Decimal.new("5000000"))
+      seed_paper_balances!()
 
       # 建玉 0.1 @ 5M。決済 0.1 @ 3.999M → 実現損 100_100 > 100_000
       assert {:ok, %Order{status: :filled}} =
@@ -602,9 +710,10 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
     end
 
     test "insufficient balance rejects submit without persistence" do
-      Application.put_env(:bitflyer, :trade_mode, :dry_run)
+      Application.put_env(:bitflyer, :trade_mode, :paper)
       assert Readiness.mark_ready() == :ok
       put_fresh_market()
+      seed_balance_cache!(:paper, %{"JPY" => Decimal.new("1"), "BTC" => Decimal.new("0")})
 
       assert {:error, :limit_exceeded, %{limit: :insufficient_balance}} =
                OrderExecutor.submit(
@@ -612,9 +721,8 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
                    order_type: :limit,
                    price: Decimal.new("5000000")
                  }),
-                 trade_mode: :dry_run,
-                 positions: [],
-                 balances: %{"JPY" => %{available: Decimal.new("1")}}
+                 trade_mode: :paper,
+                 positions: []
                )
 
       assert SpyExchange.place_count() == 0
@@ -623,6 +731,309 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
                Order
                |> Ash.Query.filter(internal_order_id == "bal-1")
                |> Ash.read_one()
+    end
+
+    test "paper BalanceCache unsynced rejects submit without injection" do
+      Application.put_env(:bitflyer, :trade_mode, :paper)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market()
+      assert :ok = Bitflyer.Risk.BalanceCache.mark_unsynced(:paper)
+
+      assert {:error, :unsynced, %{reason: :balance_unsynced}} =
+               OrderExecutor.submit(command("bal-unsynced-1"),
+                 trade_mode: :paper,
+                 positions: []
+               )
+
+      assert SpyExchange.place_count() == 0
+
+      assert {:ok, nil} =
+               Order
+               |> Ash.Query.filter(internal_order_id == "bal-unsynced-1")
+               |> Ash.read_one()
+    end
+
+    test "paper fill reduces BalanceCache and blocks next overspend without injection" do
+      Application.put_env(:bitflyer, :trade_mode, :paper)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market(Decimal.new("5000000"))
+
+      seed_paper_balances!(%{
+        "JPY" => Decimal.new("60000"),
+        "BTC" => Decimal.new("0")
+      })
+
+      assert {:ok, %Order{status: :filled}} =
+               OrderExecutor.submit(
+                 command("paper-bal-1", %{
+                   order_type: :limit,
+                   price: Decimal.new("5000000"),
+                   size: Decimal.new("0.01")
+                 }),
+                 trade_mode: :paper,
+                 positions: []
+               )
+
+      assert {:ok, balances} = Bitflyer.Risk.BalanceCache.get(:paper)
+      assert Decimal.equal?(balances["JPY"], Decimal.new("10000"))
+
+      assert {:error, :limit_exceeded, %{limit: :insufficient_balance}} =
+               OrderExecutor.submit(
+                 command("paper-bal-2", %{
+                   order_type: :limit,
+                   price: Decimal.new("5000000"),
+                   size: Decimal.new("0.01")
+                 }),
+                 trade_mode: :paper,
+                 positions: []
+               )
+
+      assert SpyExchange.place_count() == 0
+    end
+
+    test "paper pending hold survives another order fill reload without inflate" do
+      Application.put_env(:bitflyer, :trade_mode, :paper)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market(Decimal.new("5000000"))
+
+      seed_paper_balances!(%{
+        "JPY" => Decimal.new("200000"),
+        "BTC" => Decimal.new("0")
+      })
+
+      # LTP 未交差の指値 → pending + hold 49_000
+      assert {:ok, %Order{status: :pending} = pending} =
+               OrderExecutor.submit(
+                 command("paper-pend-a", %{
+                   order_type: :limit,
+                   price: Decimal.new("4900000"),
+                   size: Decimal.new("0.01")
+                 }),
+                 trade_mode: :paper,
+                 positions: []
+               )
+
+      assert {:ok, after_pend} = Bitflyer.Risk.BalanceCache.get(:paper)
+      assert Decimal.equal?(after_pend["JPY"], Decimal.new("151000"))
+
+      # 別注文が fill → Snapshot reload。pending hold は再適用される
+      assert {:ok, %Order{status: :filled}} =
+               OrderExecutor.submit(
+                 command("paper-fill-b", %{
+                   order_type: :limit,
+                   price: Decimal.new("5000000"),
+                   size: Decimal.new("0.01")
+                 }),
+                 trade_mode: :paper,
+                 positions: []
+               )
+
+      assert {:ok, after_fill} = Bitflyer.Risk.BalanceCache.get(:paper)
+      # tip: 200000 - 50000(fill B) = 150000、再適用 hold A 49_000 → 101000
+      assert Decimal.equal?(after_fill["JPY"], Decimal.new("101000"))
+
+      assert {:ok, _} = OrderExecutor.cancel(pending)
+
+      assert {:ok, after_cancel} = Bitflyer.Risk.BalanceCache.get(:paper)
+      assert Decimal.equal?(after_cancel["JPY"], Decimal.new("150000"))
+    end
+
+    test "live reserve blocks second submit before reconcile without overstating" do
+      Application.put_env(:bitflyer, :trade_mode, :live)
+      Application.put_env(:bitflyer, :live_confirmed, true)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market(Decimal.new("5000000"))
+
+      seed_balance_cache!(:live, %{
+        "JPY" => Decimal.new("60000"),
+        "BTC" => Decimal.new("0")
+      })
+
+      assert {:ok, %Order{status: :pending}} =
+               OrderExecutor.submit(
+                 command("live-reserve-1", %{
+                   order_type: :limit,
+                   price: Decimal.new("5000000"),
+                   size: Decimal.new("0.01")
+                 }),
+                 trade_mode: :live,
+                 positions: []
+               )
+
+      assert SpyExchange.place_count() == 1
+
+      assert {:ok, balances} = Bitflyer.Risk.BalanceCache.get(:live)
+      assert Decimal.equal?(balances["JPY"], Decimal.new("10000"))
+
+      assert {:error, :limit_exceeded, %{limit: :insufficient_balance}} =
+               OrderExecutor.submit(
+                 command("live-reserve-2", %{
+                   order_type: :limit,
+                   price: Decimal.new("5000000"),
+                   size: Decimal.new("0.01")
+                 }),
+                 trade_mode: :live,
+                 positions: []
+               )
+
+      assert SpyExchange.place_count() == 1
+    end
+
+    test "live market cancel releases reserved LTP1 not a higher LTP2" do
+      Application.put_env(:bitflyer, :trade_mode, :live)
+      Application.put_env(:bitflyer, :live_confirmed, true)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market(Decimal.new("5000000"))
+
+      seed_balance_cache!(:live, %{
+        "JPY" => Decimal.new("100000"),
+        "BTC" => Decimal.new("0")
+      })
+
+      assert {:ok, order} =
+               OrderExecutor.submit(
+                 command("live-mkt-cancel-1", %{
+                   order_type: :market,
+                   size: Decimal.new("0.01")
+                 }),
+                 trade_mode: :live,
+                 positions: []
+               )
+
+      assert {:ok, after_reserve} = Bitflyer.Risk.BalanceCache.get(:live)
+      assert Decimal.equal?(after_reserve["JPY"], Decimal.new("50000"))
+
+      # cancel 時に LTP が上がっても、拘束は submit 時の 50_000 だけ戻る
+      put_fresh_market(Decimal.new("8000000"))
+
+      assert {:ok, _} = OrderExecutor.cancel(order, exchange: CancelOkExchange)
+
+      assert {:ok, after_cancel} = Bitflyer.Risk.BalanceCache.get(:live)
+      assert Decimal.equal?(after_cancel["JPY"], Decimal.new("100000"))
+    end
+
+    test "live partial fill then cancel releases only remaining hold" do
+      Application.put_env(:bitflyer, :trade_mode, :live)
+      Application.put_env(:bitflyer, :live_confirmed, true)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market(Decimal.new("5000000"))
+
+      seed_balance_cache!(:live, %{
+        "JPY" => Decimal.new("100000"),
+        "BTC" => Decimal.new("0")
+      })
+
+      assert {:ok, order} =
+               OrderExecutor.submit(
+                 command("live-partial-1", %{
+                   order_type: :limit,
+                   price: Decimal.new("5000000"),
+                   size: Decimal.new("0.02")
+                 }),
+                 trade_mode: :live,
+                 positions: []
+               )
+
+      assert {:ok, after_reserve} = Bitflyer.Risk.BalanceCache.get(:live)
+      assert Decimal.equal?(after_reserve["JPY"], Decimal.new("0"))
+
+      Process.put({:fill_order, order.exchange_order_id}, %{
+        exchange_order_id: order.exchange_order_id,
+        product_code: @product,
+        side: :buy,
+        size: Decimal.new("0.02"),
+        filled_size: Decimal.new("0.01"),
+        average_price: Decimal.new("5000000"),
+        status: :active
+      })
+
+      assert {:ok, %Order{status: :partially_filled} = partial} =
+               Bitflyer.OrderExecutor.LiveFills.sync_order(order, exchange: PartialFillExchange)
+
+      assert {:ok, _} = OrderExecutor.cancel(partial, exchange: CancelOkExchange)
+
+      assert {:ok, after_cancel} = Bitflyer.Risk.BalanceCache.get(:live)
+      # 半分消費・半分返却 → 50_000（フル返却の 100_000 にならない）
+      assert Decimal.equal?(after_cancel["JPY"], Decimal.new("50000"))
+    end
+
+    test "live cancel that stays open keeps hold until delayed fill settles" do
+      Application.put_env(:bitflyer, :trade_mode, :live)
+      Application.put_env(:bitflyer, :live_confirmed, true)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market(Decimal.new("5000000"))
+
+      seed_balance_cache!(:live, %{
+        "JPY" => Decimal.new("50000"),
+        "BTC" => Decimal.new("0")
+      })
+
+      assert {:ok, order} =
+               OrderExecutor.submit(
+                 command("live-open-cancel-1", %{
+                   order_type: :limit,
+                   price: Decimal.new("5000000"),
+                   size: Decimal.new("0.01")
+                 }),
+                 trade_mode: :live,
+                 positions: []
+               )
+
+      assert {:ok, reserved} = Bitflyer.Risk.BalanceCache.get(:live)
+      assert Decimal.equal?(reserved["JPY"], Decimal.new("0"))
+
+      assert {:ok, %Order{status: status} = open} =
+               OrderExecutor.cancel(order, exchange: CancelKeepOpenExchange)
+
+      assert status in [:pending, :partially_filled]
+
+      # 未終端なので hold は残る（残高を戻さない）
+      assert {:ok, still_held} = Bitflyer.Risk.BalanceCache.get(:live)
+      assert Decimal.equal?(still_held["JPY"], Decimal.new("0"))
+
+      Process.put({:fill_order, open.exchange_order_id}, %{
+        exchange_order_id: open.exchange_order_id,
+        product_code: @product,
+        side: :buy,
+        size: Decimal.new("0.01"),
+        filled_size: Decimal.new("0.01"),
+        average_price: Decimal.new("5000000"),
+        status: :completed
+      })
+
+      assert {:ok, %Order{status: :filled}} =
+               Bitflyer.OrderExecutor.LiveFills.sync_order(open, exchange: PartialFillExchange)
+
+      assert {:ok, after_fill} = Bitflyer.Risk.BalanceCache.get(:live)
+      assert Decimal.equal?(after_fill["JPY"], Decimal.new("0"))
+    end
+
+    test "align_hold_to_filled prevents full release after missed consume" do
+      Application.put_env(:bitflyer, :trade_mode, :live)
+      assert Readiness.mark_ready() == :ok
+
+      seed_balance_cache!(:live, %{
+        "JPY" => Decimal.new("100000"),
+        "BTC" => Decimal.new("0")
+      })
+
+      assert :ok =
+               Bitflyer.Risk.BalanceCache.reserve(:live, "JPY", Decimal.new("100000"),
+                 hold_id: "missed-consume-1"
+               )
+
+      # consume 欠落を模擬: filled 半分なのに hold は当初のまま
+      assert :ok =
+               Bitflyer.Risk.BalanceCache.align_hold_to_filled(
+                 :live,
+                 "missed-consume-1",
+                 Decimal.new("0.01"),
+                 Decimal.new("0.02")
+               )
+
+      assert :ok = Bitflyer.Risk.BalanceCache.release_hold(:live, "missed-consume-1")
+      assert {:ok, balances} = Bitflyer.Risk.BalanceCache.get(:live)
+      assert Decimal.equal?(balances["JPY"], Decimal.new("50000"))
     end
   end
 
@@ -639,6 +1050,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       Application.put_env(:bitflyer, :exchange_client, TimeoutExchange)
       assert Readiness.mark_ready() == :ok
       put_fresh_market()
+      seed_balance_cache!(:live)
 
       assert {:error, :submission_unknown, %{reason: :timeout}} =
                OrderExecutor.submit(command("unknown-1"),
@@ -676,6 +1088,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       Application.put_env(:bitflyer, :live_confirmed, true)
       assert Readiness.mark_ready() == :ok
       put_fresh_market()
+      seed_balance_cache!(:live)
 
       persist_fail = fn _order, _id -> {:error, :forced_persist_failure} end
 

@@ -6,6 +6,7 @@ defmodule Bitflyer.RiskTest do
   import Bitflyer.TestSupport.MarketDataCacheHelper
   import Bitflyer.TestSupport.OrderRateHelper
   import Bitflyer.TestSupport.DailyLossHelper
+  import Bitflyer.TestSupport.BalanceCacheHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
   alias Bitflyer.MarketData.Cache
@@ -20,6 +21,7 @@ defmodule Bitflyer.RiskTest do
     reset_market_data_cache()
     reset_order_rate()
     reset_daily_loss()
+    reset_balance_cache()
     clear_default_risk_state()
 
     on_exit(fn ->
@@ -27,6 +29,7 @@ defmodule Bitflyer.RiskTest do
       reset_market_data_cache()
       reset_order_rate()
       reset_daily_loss()
+      reset_balance_cache()
     end)
 
     :ok
@@ -396,6 +399,7 @@ defmodule Bitflyer.RiskTest do
                  size: Decimal.new("0.01")
                }),
                positions: [],
+               trade_mode: :paper,
                balances: %{JPY: %{available: Decimal.new("1000")}}
              )
   end
@@ -427,6 +431,7 @@ defmodule Bitflyer.RiskTest do
                  size: Decimal.new("0.01")
                }),
                positions: [],
+               trade_mode: :paper,
                balances: %{"JPY" => %{available: Decimal.new("1000")}}
              )
   end
@@ -439,7 +444,75 @@ defmodule Bitflyer.RiskTest do
              Risk.authorize(
                valid_command(%{side: :sell, size: Decimal.new("0.01")}),
                positions: [],
+               trade_mode: :paper,
                balances: %{"BTC" => %{available: Decimal.new("0.001")}}
+             )
+  end
+
+  test "authorize rejects when BalanceCache ETS is unsynced" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    assert :ok = Bitflyer.Risk.BalanceCache.mark_unsynced(:paper)
+
+    assert {:error, :unsynced, %{reason: :balance_unsynced}} =
+             Risk.authorize(valid_command(), positions: [], trade_mode: :paper)
+  end
+
+  test "authorize rejects missing required currency from BalanceCache without injection" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_balance_cache!(:paper, %{"BTC" => Decimal.new("1")})
+
+    assert {:error, :unsynced, %{reason: :balance_currency_missing, currency: "JPY"}} =
+             Risk.authorize(
+               valid_command(%{
+                 order_type: :limit,
+                 price: Decimal.new("5000000"),
+                 size: Decimal.new("0.01")
+               }),
+               positions: [],
+               trade_mode: :paper
+             )
+  end
+
+  test "authorize uses BalanceCache without balances injection" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_balance_cache!(:paper, %{"JPY" => Decimal.new("1000"), "BTC" => Decimal.new("0")})
+
+    assert {:error, :limit_exceeded, %{limit: :insufficient_balance, currency: "JPY"}} =
+             Risk.authorize(
+               valid_command(%{
+                 order_type: :limit,
+                 price: Decimal.new("5000000"),
+                 size: Decimal.new("0.01")
+               }),
+               positions: [],
+               trade_mode: :paper
+             )
+  end
+
+  test "authorize ignores balances injection when test injections disabled" do
+    previous = Application.get_env(:bitflyer, Bitflyer.Risk, [])
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.Risk,
+      Keyword.put(previous, :allow_test_injections, false)
+    )
+
+    on_exit(fn -> Application.put_env(:bitflyer, Bitflyer.Risk, previous) end)
+
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    assert :ok = Bitflyer.Risk.BalanceCache.mark_unsynced(:paper)
+
+    assert {:error, :unsynced, %{reason: :balance_unsynced}} =
+             Risk.authorize(
+               valid_command(),
+               positions: [],
+               trade_mode: :paper,
+               balances: %{"JPY" => %{available: Decimal.new("10000000")}}
              )
   end
 
