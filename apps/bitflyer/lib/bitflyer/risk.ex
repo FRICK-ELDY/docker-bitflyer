@@ -327,8 +327,8 @@ defmodule Bitflyer.Risk do
       {:ok, _count} ->
         :ok
 
-      {:error, _error} ->
-        {:error, :unsynced, %{reason: :order_rate_load_failed}}
+      {:error, _} ->
+        {:error, :unsynced, %{reason: :order_rate_unsynced}}
     end
   end
 
@@ -493,7 +493,11 @@ defmodule Bitflyer.Risk do
       :error ->
         trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
         count_opts = Keyword.take(opts, [:now, :server, :window_ms])
-        {:ok, OrderRate.count(trade_mode, count_opts)}
+
+        case OrderRate.count(trade_mode, count_opts) do
+          {:ok, count} -> {:ok, count}
+          {:error, :unsynced} -> {:error, :order_rate_unsynced}
+        end
     end
   end
 
