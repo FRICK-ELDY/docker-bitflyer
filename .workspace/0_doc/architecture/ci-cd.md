@@ -15,6 +15,7 @@ PR と `main` への push で、ローカルと同じ品質ゲート（`mix prec
 | 未使用 deps | `mix deps.unlock --check-unused` |
 | ランタイム | Elixir / OTP は開発用 `Dockerfile`・本番 `Dockerfile.prod` と揃える（現状 1.18.3 / 27） |
 | DB | GitHub Actions の `postgres:16-alpine` service。接続はジョブの `TEST_DATABASE_URL`（なければ `DATABASE_URL` から `*_test` を導出） |
+| 本番イメージ | 同ワークフローの `docker-prod` で `Dockerfile.prod` を **push なし**ビルド。PR ごとにも走る（時間・Actions 分増は意図的。CD ゲートも本ジョブを含む workflow 全体を見る） |
 
 ローカル（Compose）では次と同等とする。
 
@@ -55,6 +56,7 @@ docker compose run --rm app mix precommit
 | 成果物 | `Dockerfile.prod` でビルドした Umbrella release（`docker_bitflyer`）。非 root・assets digest 込み |
 | レジストリ | GitHub Container Registry（`ghcr.io/<owner>/<repo>`） |
 | トリガー | 明示タグ `v*`、または `workflow_dispatch`（GitHub Environment `production`） |
+| CI 前提 | **対象 SHA の最新 `ci.yml` run が workflow 全体 success**（`mix precommit` + `docker-prod`）。過去の success は見ない。未完了・失敗なら push しない（**自動 wait なし**・完了後に CD 再実行） |
 | タグ | semver / `sha-<short>`。Compose では **digest 固定**（`APP_IMAGE=...@sha256:...`）を推奨 |
 | ロールバック単位 | 直前の `APP_IMAGE`（digest）へ戻して `compose up -d` |
 | ワークフロー | [`.github/workflows/cd.yml`](../../../.github/workflows/cd.yml) |
@@ -78,7 +80,8 @@ VLAN3（作業用）→ VLAN1（本番）の到達は最小ポートのみ（Vis
 
 ## 運用ルール
 
-- **CI が赤のまま `main` へマージしない**（対象は `mix precommit` の品質ゲート）
+- **CI が赤のまま `main` へマージしない**（`ci.yml` 全体: `mix precommit` + `Dockerfile.prod` ビルド検証）
+- **CD は対象 SHA の最新 CI run の success を前提とする**。未完了・失敗ならすぐ失敗し、自動では待たない（CI 完了後に CD を再実行）
 - deps audit の黄ステップ / artifact はマージ前に目視する運用とする（ゲート化は後続）
 - `main` には CI 必須チェック（Branch protection）を掛ける方針とする。GitHub 上の設定は権限がある人が行う
 - CD の GitHub Environment `production` にレビュー必須を付けられるなら付ける
@@ -89,7 +92,7 @@ VLAN3（作業用）→ VLAN1（本番）の到達は最小ポートのみ（Vis
 
 | ファイル | 役割 |
 | --- | --- |
-| [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml) | `pull_request` / `push` to `main` → `mix precommit` + deps audit（可視化） |
-| [`.github/workflows/cd.yml`](../../../.github/workflows/cd.yml) | `v*` タグ / 手動 → GHCR push |
+| [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml) | `pull_request` / `push` to `main` → `mix precommit` + deps audit（可視化）+ `Dockerfile.prod` ビルド検証（push なし。PR でも走る＝コスト増は意図的） |
+| [`.github/workflows/cd.yml`](../../../.github/workflows/cd.yml) | `v*` タグ / 手動 → **最新** `ci.yml` が success の SHA のみ GHCR push |
 
 ソースの改行は LF 固定（`.gitattributes`）。Windows で CRLF にすると `format --check-formatted` が落ちる。
