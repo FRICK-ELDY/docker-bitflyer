@@ -12,6 +12,7 @@ defmodule Bitflyer.RiskTest do
   alias Bitflyer.MarketData.Cache
   alias Bitflyer.Readiness
   alias Bitflyer.Risk
+  alias Bitflyer.Risk.AuthorizedOrder
   alias Bitflyer.Trading.RiskState
 
   @market_key {:ticker, "FX_BTC_JPY"}
@@ -81,7 +82,7 @@ defmodule Bitflyer.RiskTest do
              source_timestamp: DateTime.utc_now()
            }) == :ok
 
-    assert :ok = Risk.authorize(valid_command(), positions: [])
+    assert {:ok, %AuthorizedOrder{}} = Risk.authorize(valid_command(), positions: [])
   end
 
   test "authorize rejects order size over limit" do
@@ -140,7 +141,7 @@ defmodule Bitflyer.RiskTest do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
 
-    assert :ok = Risk.authorize(valid_command(), positions: [])
+    assert {:ok, %AuthorizedOrder{}} = Risk.authorize(valid_command(), positions: [])
   end
 
   test "authorize rejects when circuit is open and open_circuit persists RiskState" do
@@ -288,7 +289,7 @@ defmodule Bitflyer.RiskTest do
       market_data_max_age_ms: 5_000
     }
 
-    assert :ok =
+    assert {:ok, %AuthorizedOrder{}} =
              Risk.authorize(
                valid_command(%{
                  order_type: :limit,
@@ -304,7 +305,7 @@ defmodule Bitflyer.RiskTest do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
 
-    assert :ok =
+    assert {:ok, %AuthorizedOrder{}} =
              Risk.authorize(valid_command(%{order_type: :market}),
                positions: [],
                limits: %{max_price_deviation_pct: Decimal.new("0.01")}
@@ -376,7 +377,8 @@ defmodule Bitflyer.RiskTest do
                release_barrier: true
              )
 
-    assert :ok = Risk.authorize(valid_command(), positions: [], trade_mode: :dry_run)
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(valid_command(), positions: [], trade_mode: :dry_run)
   end
 
   test "authorize rejects from DailyLoss ETS without daily_loss injection" do

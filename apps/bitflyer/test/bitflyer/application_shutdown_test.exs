@@ -9,9 +9,9 @@ defmodule Bitflyer.ApplicationShutdownTest do
   import Bitflyer.TestSupport.ReadinessHelper
   import Bitflyer.TestSupport.InFlightHelper
 
-  alias Bitflyer.OrderExecutor
   alias Bitflyer.OrderExecutor.InFlight
   alias Bitflyer.Readiness
+  alias Bitflyer.System
   alias Bitflyer.Trading.Order
 
   @market_key {:ticker, "FX_BTC_JPY"}
@@ -83,7 +83,7 @@ defmodule Bitflyer.ApplicationShutdownTest do
     assert Readiness.get() == :not_ready
 
     assert {:error, :shutting_down, %{reason: :inflight_closed}} =
-             OrderExecutor.submit(valid_command("shutdown-1"),
+             System.submit_order(valid_command("shutdown-1"),
                positions: [],
                trade_mode: :dry_run
              )
@@ -100,7 +100,7 @@ defmodule Bitflyer.ApplicationShutdownTest do
     assert Readiness.get() == {:halted, :reconcile_mismatch}
 
     assert {:error, :shutting_down, %{reason: :inflight_closed}} =
-             OrderExecutor.submit(valid_command("shutdown-halt-1"),
+             System.submit_order(valid_command("shutdown-halt-1"),
                positions: [],
                trade_mode: :dry_run
              )

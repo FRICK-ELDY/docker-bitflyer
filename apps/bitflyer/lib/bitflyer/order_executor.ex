@@ -2,7 +2,8 @@ defmodule Bitflyer.OrderExecutor do
   @moduledoc """
   order-executor の公開境界。
 
-  `Risk.authorize/2` を通った意図だけを、取引モード別の出口へ送る。
+  `Risk.AuthorizedOrder`（`Risk.authorize/2` 成功時のみ）だけを受け、取引モード別の出口へ送る。
+  raw command map では呼べない（型で境界を強制する）。
   冪等キーは `internal_order_id`（Order の unique）。
   停止時は `InFlight` で進行中 submit/cancel を追跡し、`prep_stop` が完了を待つ。
 
@@ -17,6 +18,7 @@ defmodule Bitflyer.OrderExecutor do
 
   alias Bitflyer.OrderExecutor.{DryRun, InFlight, Live, Paper}
   alias Bitflyer.Risk
+  alias Bitflyer.Risk.AuthorizedOrder
   alias Bitflyer.TradeMode
   alias Bitflyer.Trading.Order
 
@@ -25,39 +27,61 @@ defmodule Bitflyer.OrderExecutor do
           | {:ok, Order.t(), :idempotent}
           | {:error, atom(), map()}
 
+  @doc """
+  live submit 前の未反映約定同期。`System.submit_order/2` が認可前に呼ぶ。
+  """
+  @spec sync_live_fills_before_authorize(atom(), keyword()) :: :ok | {:error, atom(), map()}
+  def sync_live_fills_before_authorize(trade_mode, opts \\ []) do
+    maybe_sync_live_fills(trade_mode, opts)
+  end
+
   @cancellable_statuses [:pending, :partially_filled]
 
   @doc """
-  注文を実行する。先に risk 認可し、既存 `internal_order_id` があれば再送しない。
+  認可済み注文を実行する。既存 `internal_order_id` があれば再送しない。
 
-  live では認可前に未反映約定を同期し、Risk の建玉検査が遅れないようにする。
+  `AuthorizedOrder.consume/1` で Risk 発行トークンをワンショット検証する（偽造・再利用不可）。
+  InFlight 閉鎖後は consume 前に `:shutting_down`（トークンを無駄打ちしない）。
+  live では実行前に未反映約定を再度同期する（認可時点からのずれを縮める）。
+  認可検査自体は呼び出し側（通常は `System.submit_order/2`）で済んでいる前提。
 
   ## Options
-  - Risk.authorize/2 と同じオプション（`:positions`, `:limits`, `:now`, `:server` 等）
+  - Risk.authorize/2 と同じオプションのうち出口・同期用（`:positions` は認可時に使用済み）
   - `:trade_mode` — 出口上書き（既定は `TradeMode.current/0`）
+  - `:authorized_order_server` — 認可トークン GenServer（Cache の `:server` とは別）
   - `:persist_exchange_order_id` — live のみ。受注 ID 永続化の差し替え（テスト用）
   - `:exchange` — live fill 同期先（テスト用）
-
-  risk 認可は常に必須。公開 API からスキップできない。
   """
-  @spec submit(map(), keyword()) :: result()
-  def submit(command, opts \\ []) when is_map(command) do
-    meta = %{
-      kind: :submit,
-      internal_order_id:
-        Map.get(command, :internal_order_id) || Map.get(command, "internal_order_id")
-    }
+  @spec submit(AuthorizedOrder.t(), keyword()) :: result()
+  def submit(%AuthorizedOrder{} = authorized, opts \\ []) do
+    with :ok <- reject_if_order_gate_closed(),
+         {:ok, command} <- AuthorizedOrder.consume(authorized, opts) do
+      meta = %{
+        kind: :submit,
+        internal_order_id:
+          Map.get(command, :internal_order_id) || Map.get(command, "internal_order_id")
+      }
 
-    case InFlight.track(meta) do
-      {:ok, ref} ->
-        try do
-          do_submit(command, opts)
-        after
-          InFlight.untrack(ref)
-        end
+      case InFlight.track(meta) do
+        {:ok, ref} ->
+          try do
+            do_submit(command, opts)
+          after
+            InFlight.untrack(ref)
+          end
 
-      {:error, :closed} ->
-        {:error, :shutting_down, %{reason: :inflight_closed}}
+        {:error, :closed} ->
+          # reject_if_order_gate_closed と track の間の競合用
+          {:error, :shutting_down, %{reason: :inflight_closed}}
+      end
+    end
+  end
+
+  defp reject_if_order_gate_closed do
+    if InFlight.closed?() do
+      {:error, :shutting_down, %{reason: :inflight_closed}}
+    else
+      :ok
     end
   end
 
@@ -66,7 +90,6 @@ defmodule Bitflyer.OrderExecutor do
 
     with :ok <- validate_command(command),
          :ok <- maybe_sync_live_fills(trade_mode, opts),
-         :ok <- Risk.authorize(command, Keyword.put(opts, :trade_mode, trade_mode)),
          {:new, command} <- idempotent_lookup(command),
          {:ok, hold} <- reserve_balance(trade_mode, command, opts),
          {:ok, order} <- create_pending_releasing(command, trade_mode, hold),

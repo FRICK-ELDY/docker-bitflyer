@@ -55,6 +55,15 @@ defmodule Bitflyer.OrderExecutor.InFlight do
   end
 
   @doc """
+  `drain/1` 後など、新規 track を拒否しているか。
+  """
+  @spec closed?(keyword()) :: boolean()
+  def closed?(opts \\ []) do
+    server = Keyword.get(opts, :server, @name)
+    GenServer.call(server, :closed?)
+  end
+
+  @doc """
   受付を閉じ、進行中が空になるまで待つ。
 
   既に空なら即 `:ok`。timeout 時は `{:error, :timeout, leftovers}`。
@@ -128,6 +137,10 @@ defmodule Bitflyer.OrderExecutor.InFlight do
 
   def handle_call(:count, _from, state) do
     {:reply, map_size(state.inflight), state}
+  end
+
+  def handle_call(:closed?, _from, state) do
+    {:reply, state.closed?, state}
   end
 
   def handle_call({:drain, timeout_ms}, from, state) do
