@@ -42,7 +42,7 @@ defmodule DockerBitflyer.MixProject do
   defp aliases do
     [
       # Umbrella ルートには :app が無いため、Repo 解決に domains を明示する
-      setup: ["deps.get", "ash.setup --domains Bitflyer.System,Bitflyer.Trading"],
+      setup: ["deps.get", "ash.setup --domains Bitflyer.Trading"],
       # 副作用なしの品質ゲート（ローカル / CI 共通）。両アプリを検査する
       precommit: [
         "deps.unlock --check-unused",

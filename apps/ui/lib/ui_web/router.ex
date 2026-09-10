@@ -55,13 +55,4 @@ defmodule UiWeb.Router do
         allow_destructive_actions: false
     end
   end
-
-  # 開発専用: Swoosh mailbox preview（本番イメージには載せない）
-  if Application.compile_env(:ui, :dev_routes) do
-    scope "/dev" do
-      pipe_through :browser
-
-      forward "/mailbox", Plug.Swoosh.MailboxPreview
-    end
-  end
 end

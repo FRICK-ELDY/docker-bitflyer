@@ -7,12 +7,6 @@ config :ui, UiWeb.Endpoint,
   secret_key_base: "+g8U+FaUo3FWx8Z4dNMsl5AdKpXMcTTdZMAWjdgboDXqBRN3fCuGNxnuMmAW7C8Q",
   server: false
 
-# In test we don't send emails
-config :ui, Ui.Mailer, adapter: Swoosh.Adapters.Test
-
-# Disable swoosh api client as it is only required for production adapters
-config :swoosh, :api_client, false
-
 # Print only warnings and errors during test
 config :logger, level: :warning
 

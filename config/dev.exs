@@ -43,9 +43,8 @@ config :ui, UiWeb.Endpoint,
 # configured to run both http and https servers on
 # different ports.
 
-# Enable LiveDashboard（BasicAuth 配下 /ops/dashboard）and mailbox
+# Enable LiveDashboard（BasicAuth 配下 /ops/dashboard）
 config :ui, dashboard_routes: true
-config :ui, dev_routes: true
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
@@ -64,6 +63,3 @@ config :phoenix_live_view,
   debug_attributes: true,
   # Enable helpful, but potentially expensive runtime checks
   enable_expensive_runtime_checks: true
-
-# Disable swoosh api client as it is only required for production adapters.
-config :swoosh, :api_client, false
