@@ -11,7 +11,7 @@
 
 前回計画の P0 #1–#4、P1 全般、P2 全般、P3 #15–#19（UI 認証、API キー枠、本番 release、Exchange.Rest、deps audit）はコード上で解決済み。再掲しない。
 
-**未消化として持ち越すもの:** 旧 P0 #5 のうち残高検査（#2）。日次損失（本計画 #1）は Fill + DailyLoss ETS で解決済み。
+**未消化として持ち越すもの:** 旧 P0 #5 のうち両建て建玉・Decode strict 等。日次損失（#1）・残高検査（#2）は ETS で解決済み。
 
 ---
 
@@ -20,7 +20,7 @@
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
 | 1 | ~~日次損失の実効化~~ **済** | Fill 正本 + invalidate→reload fail-closed。突合/resume で再同期。縦貫通回帰あり。含み損はスコープ外（実現のみ） | live/paper で Fill→DailyLoss→halt が緑。README risk 行を partial に正直化 |
-| 2 | 残高検査の実効化 | OrderRate 同型の ETS キャッシュ。live 突合 / paper fill で更新。必要通貨欠落は fail-closed | 未注入・欠落で認可拒否のテストが緑 |
+| 2 | ~~残高検査の実効化~~ **済** | ETS + invalidate/reload（paper、残 hold 再適用）+ `reserve(hold_id)` / 部分約定 `consume_*` / `release_hold` 残額返却 + 突合一致時 exchange `put(clear_holds)`。baseline 更新は P1 #6 | pending+別 fill・部分約定 cancel・market 取消 LTP 差分などが緑 |
 | 3 | 両建て建玉突合 | 外部 `{product_code,side}` をネット建玉へ正規化（または内部 side 別）。順序反転 fixture | buy+sell 並存でも同じ Ready/halt 判定 |
 | 4 | live 既定の安全化 | prod/live で Strategy 既定 `enabled: false`。live 専用上限を明示必須。FixedOnce の自動成行を live で止める | live+confirm だけでは意図が出ない |
 | 5 | Decode strict 化 | 不正・欠損数値を 0 に丸めず snapshot 失敗 → halt | malformed/null fixture で halt するテストが緑 |
@@ -31,7 +31,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 6 | baseline 初回 import | 承認付き `mix` / RPC。snapshot hash・操作者を記録。その後通常突合成功時のみ Ready | 空 DB から人手 SQL なしで baseline 作成可 |
+| 6 | baseline 初回 import | 承認付き `mix` / RPC。snapshot hash・操作者を記録。その後通常突合成功時のみ Ready。live は baseline 非更新のまま exchange available が動くと次突合 mismatch halt（P0 #2 の前提） | 空 DB から人手 SQL なしで baseline 作成可 |
 | 7 | submission_unknown 回収 | 時刻窓+side+size の候補照合。一意時のみ ID 埋込。曖昧なら承認 command | unknown から resume できる手順が prod.md にある |
 | 8 | 連続障害・auth サーキット | 401/403 即 halt。その他は窓内 N 回で halt | 鍵違いで盲目 rejected 連発しない |
 | 9 | WS サイレントストール watchdog | 最終 tick 経過で socket 切断→再接続 | 無言接続が人手なしで回復する |

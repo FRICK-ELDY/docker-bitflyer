@@ -241,6 +241,11 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
            end) do
         {:ok, {updated, notifications}} ->
           _ = Ash.Notifier.notify(notifications)
+          _ = consume_live_hold(order, delta)
+
+          if updated.status == :filled do
+            _ = Bitflyer.Risk.BalanceCache.discard_hold(:live, updated.internal_order_id)
+          end
 
           Bitflyer.Telemetry.execute(
             :order_filled,
@@ -264,6 +269,17 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
           {:error, :persist_failed, %{error: error}}
       end
     end)
+  end
+
+  defp consume_live_hold(%Order{} = order, %Decimal{} = delta) do
+    remaining_before = Decimal.sub(order.size, order.filled_size || Decimal.new("0"))
+
+    Bitflyer.Risk.BalanceCache.consume_hold_proportional(
+      :live,
+      order.internal_order_id,
+      delta,
+      remaining_before
+    )
   end
 
   defp status_after_fill(order_size, filled_size, remote_status) do
@@ -294,12 +310,34 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
     case update_order(order, %{status: status, filled_size: filled_size}) do
       {:ok, updated, notifications} ->
         _ = Ash.Notifier.notify(notifications)
+        _ = settle_hold_on_terminal(updated)
         {:ok, updated}
 
       {:error, _, _} = error ->
         error
     end
   end
+
+  defp settle_hold_on_terminal(%Order{status: :filled} = order) do
+    Bitflyer.Risk.BalanceCache.discard_hold(:live, order.internal_order_id)
+  end
+
+  defp settle_hold_on_terminal(%Order{status: status} = order)
+       when status in [:cancelled, :expired, :rejected] do
+    filled = order.filled_size || Decimal.new(0)
+
+    _ =
+      Bitflyer.Risk.BalanceCache.align_hold_to_filled(
+        :live,
+        order.internal_order_id,
+        filled,
+        order.size
+      )
+
+    Bitflyer.Risk.BalanceCache.release_hold(:live, order.internal_order_id)
+  end
+
+  defp settle_hold_on_terminal(%Order{}), do: :ok
 
   defp update_order(%Order{} = order, attrs) do
     case order

@@ -47,8 +47,9 @@ defmodule Bitflyer.OrderExecutor do
          :ok <- maybe_sync_live_fills(trade_mode, opts),
          :ok <- Risk.authorize(command, Keyword.put(opts, :trade_mode, trade_mode)),
          {:new, command} <- idempotent_lookup(command),
-         {:ok, order} <- create_pending(command, trade_mode),
-         {:ok, order} <- dispatch(order, command, trade_mode, opts) do
+         {:ok, hold} <- reserve_balance(trade_mode, command, opts),
+         {:ok, order} <- create_pending_releasing(command, trade_mode, hold),
+         {:ok, order} <- dispatch_releasing(order, command, trade_mode, opts, hold) do
       emit_submitted(order)
       {:ok, order}
     else
@@ -89,10 +90,24 @@ defmodule Bitflyer.OrderExecutor do
         {:error, :not_cancellable, %{status: order.status}}
 
       trade_mode == :live ->
-        Live.Cancel.execute(order, opts)
+        case Live.Cancel.execute(order, opts) do
+          {:ok, updated} = ok ->
+            _ = maybe_settle_live_hold(updated)
+            ok
+
+          other ->
+            other
+        end
 
       trade_mode in [:dry_run, :paper] ->
-        cancel_local(order)
+        case cancel_local(order) do
+          {:ok, updated} = ok ->
+            _ = settle_cancelled_hold(updated)
+            ok
+
+          other ->
+            other
+        end
 
       true ->
         {:error, :invalid_trade_mode, %{trade_mode: trade_mode}}
@@ -214,9 +229,106 @@ defmodule Bitflyer.OrderExecutor do
     end
   end
 
+  defp create_pending_releasing(command, trade_mode, hold) do
+    case create_pending(command, trade_mode) do
+      {:ok, order} ->
+        {:ok, order}
+
+      {:idempotent, order} ->
+        _ = release_hold(trade_mode, hold)
+        {:idempotent, order}
+
+      {:error, _, _} = error ->
+        _ = release_hold(trade_mode, hold)
+        error
+    end
+  end
+
   defp dispatch(order, command, :dry_run, opts), do: DryRun.execute(order, command, opts)
   defp dispatch(order, command, :paper, opts), do: Paper.execute(order, command, opts)
   defp dispatch(order, command, :live, opts), do: Live.execute(order, command, opts)
+
+  defp dispatch_releasing(order, command, trade_mode, opts, hold) do
+    case dispatch(order, command, trade_mode, opts) do
+      {:ok, _updated} = ok ->
+        # paper 即時 fill は BalanceCacheSync が Snapshot で上書き。
+        # live 成功は予約を残し、突合 put / 取消 release まで拘束する。
+        ok
+
+      {:error, :exchange_halted, _} = error ->
+        _ = release_hold(trade_mode, hold)
+        error
+
+      {:error, :exchange_error, _} = error ->
+        _ = release_hold(trade_mode, hold)
+        error
+
+      {:error, _, _} = error ->
+        # submission_unknown / persist_failed 等: 取引所側に拘束の可能性 → 予約は残す
+        error
+    end
+  end
+
+  defp reserve_balance(trade_mode, command, opts) do
+    case Risk.balance_hold(command, Keyword.put(opts, :trade_mode, trade_mode)) do
+      {:ok, :skip} ->
+        {:ok, :skip}
+
+      {:ok, %{currency: currency, amount: amount}} ->
+        hold_id = Map.fetch!(command, :internal_order_id)
+
+        case Bitflyer.Risk.BalanceCache.reserve(trade_mode, currency, amount, hold_id: hold_id) do
+          :ok ->
+            {:ok, %{hold_id: hold_id}}
+
+          {:error, :unsynced} ->
+            {:error, :unsynced, %{reason: :balance_unsynced}}
+
+          {:error, :hold_exists} ->
+            {:error, :unsynced, %{reason: :balance_hold_exists}}
+
+          {:error, :insufficient_balance, meta} ->
+            {:error, :limit_exceeded, Map.put(meta, :limit, :insufficient_balance)}
+        end
+
+      {:error, _, _} = error ->
+        error
+    end
+  end
+
+  defp release_hold(_trade_mode, :skip), do: :ok
+
+  defp release_hold(trade_mode, %{hold_id: hold_id}) when is_binary(hold_id) do
+    Bitflyer.Risk.BalanceCache.release_hold(trade_mode, hold_id)
+  end
+
+  # live: 未終端の cancel 受付では hold を残す（遅延約定の consume 余地を残す）
+  defp maybe_settle_live_hold(%Order{status: status} = order)
+       when status in [:cancelled, :expired, :rejected] do
+    settle_cancelled_hold(order)
+  end
+
+  defp maybe_settle_live_hold(%Order{status: :filled} = order) do
+    Bitflyer.Risk.BalanceCache.discard_hold(order.trade_mode, order.internal_order_id)
+  end
+
+  defp maybe_settle_live_hold(%Order{}), do: :ok
+
+  defp settle_cancelled_hold(%Order{trade_mode: :dry_run}), do: :ok
+
+  defp settle_cancelled_hold(%Order{} = order) do
+    filled = order.filled_size || Decimal.new(0)
+
+    _ =
+      Bitflyer.Risk.BalanceCache.align_hold_to_filled(
+        order.trade_mode,
+        order.internal_order_id,
+        filled,
+        order.size
+      )
+
+    Bitflyer.Risk.BalanceCache.release_hold(order.trade_mode, order.internal_order_id)
+  end
 
   defp fetch_order(internal_order_id) do
     Order

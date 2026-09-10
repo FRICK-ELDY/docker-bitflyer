@@ -6,6 +6,7 @@ defmodule Bitflyer.OrderExecutorTest do
   import Bitflyer.TestSupport.MarketDataCacheHelper
   import Bitflyer.TestSupport.OrderRateHelper
   import Bitflyer.TestSupport.DailyLossHelper
+  import Bitflyer.TestSupport.BalanceCacheHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
   alias Bitflyer.MarketData.Cache
@@ -85,6 +86,7 @@ defmodule Bitflyer.OrderExecutorTest do
     reset_market_data_cache()
     reset_order_rate()
     reset_daily_loss()
+    reset_balance_cache()
     clear_default_risk_state()
 
     previous_mode = Application.get_env(:bitflyer, :trade_mode, :dry_run)
@@ -109,6 +111,7 @@ defmodule Bitflyer.OrderExecutorTest do
       reset_market_data_cache()
       reset_order_rate()
       reset_daily_loss()
+      reset_balance_cache()
       clear_default_risk_state()
       Application.put_env(:bitflyer, :trade_mode, previous_mode)
       Application.put_env(:bitflyer, :exchange_client, previous_client)
@@ -148,6 +151,8 @@ defmodule Bitflyer.OrderExecutorTest do
     Application.put_env(:bitflyer, :trade_mode, :paper)
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
+    seed_paper_balance!("JPY", "1000000")
+    seed_paper_balance!("BTC", "0")
 
     assert {:ok, %Order{status: :filled, trade_mode: :paper, filled_size: filled, price: price}} =
              OrderExecutor.submit(valid_command("paper-1"),
@@ -170,12 +175,15 @@ defmodule Bitflyer.OrderExecutorTest do
     assert {:ok, balances} =
              BalanceSnapshot
              |> Ash.Query.filter(trade_mode == :paper)
+             |> Ash.Query.sort(captured_at: :desc)
              |> Ash.read()
 
-    assert length(balances) == 2
-    by_currency = Map.new(balances, &{&1.currency, &1.amount})
+    by_currency =
+      balances
+      |> Enum.reduce(%{}, fn row, acc -> Map.put_new(acc, row.currency, row.amount) end)
+
     assert Decimal.equal?(by_currency["BTC"], Decimal.new("0.01"))
-    assert Decimal.equal?(by_currency["JPY"], Decimal.new("-50000"))
+    assert Decimal.equal?(by_currency["JPY"], Decimal.new("950000"))
   end
 
   test "paper limit fills when LTP crosses and grows balance rows" do
@@ -209,6 +217,8 @@ defmodule Bitflyer.OrderExecutorTest do
     Application.put_env(:bitflyer, :trade_mode, :paper)
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
+    seed_paper_balance!("JPY", "1000000")
+    seed_paper_balance!("BTC", "0")
 
     assert {:ok, before} =
              BalanceSnapshot
@@ -345,6 +355,7 @@ defmodule Bitflyer.OrderExecutorTest do
     Application.put_env(:bitflyer, :live_confirmed, false)
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
+    seed_balance_cache!(:live)
 
     assert {:error, :exchange_halted, %{reason: :live_confirm_missing}} =
              OrderExecutor.submit(valid_command("live-halt-1"),
@@ -365,6 +376,7 @@ defmodule Bitflyer.OrderExecutorTest do
     Application.put_env(:bitflyer, :live_confirmed, true)
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
+    seed_balance_cache!(:live)
 
     assert {:ok, %Order{status: :pending, exchange_order_id: "ex-live-ok-1"}} =
              OrderExecutor.submit(valid_command("live-ok-1"),
@@ -381,6 +393,7 @@ defmodule Bitflyer.OrderExecutorTest do
     Application.put_env(:bitflyer, :live_confirmed, true)
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
+    seed_balance_cache!(:live)
 
     SpyExchange.set_next_result({:error, :timeout})
 
@@ -426,6 +439,7 @@ defmodule Bitflyer.OrderExecutorTest do
     Application.put_env(:bitflyer, :live_confirmed, true)
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
+    seed_balance_cache!(:live)
 
     SpyExchange.set_next_result({:error, :disconnected})
 
@@ -448,6 +462,7 @@ defmodule Bitflyer.OrderExecutorTest do
     Application.put_env(:bitflyer, :live_confirmed, true)
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
+    seed_balance_cache!(:live)
 
     SpyExchange.set_next_result({:error, :rejected_by_exchange})
 
@@ -482,6 +497,7 @@ defmodule Bitflyer.OrderExecutorTest do
     Application.put_env(:bitflyer, :live_confirmed, true)
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
+    seed_balance_cache!(:live)
 
     persist_fail = fn _order, _exchange_order_id ->
       {:error, :forced_persist_failure}
@@ -591,6 +607,7 @@ defmodule Bitflyer.OrderExecutorTest do
     Application.put_env(:bitflyer, :live_confirmed, true)
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
+    seed_balance_cache!(:live)
 
     assert {:ok, order} =
              OrderExecutor.submit(valid_command("cancel-live-1"),
@@ -637,6 +654,8 @@ defmodule Bitflyer.OrderExecutorTest do
                trade_mode: :paper
              })
              |> Ash.create()
+
+    assert :ok = Bitflyer.Risk.BalanceCache.refresh(:paper)
   end
 
   defp clear_default_risk_state do

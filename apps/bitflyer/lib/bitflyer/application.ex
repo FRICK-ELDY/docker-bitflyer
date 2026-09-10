@@ -19,6 +19,7 @@ defmodule Bitflyer.Application do
         Bitflyer.MarketData.Cache,
         Bitflyer.Risk.OrderRate,
         Bitflyer.Risk.DailyLoss,
+        Bitflyer.Risk.BalanceCache,
         Supervisor.child_spec(
           {Task.Supervisor, name: Bitflyer.MarketData.TaskSupervisor},
           shutdown: @child_shutdown_ms

@@ -46,11 +46,11 @@ defmodule Bitflyer.Startup.Resume do
       |> Keyword.put(:trade_mode, trade_mode)
 
     case Reconcile.run(reconcile_opts) do
-      {:ok, _internal} ->
+      {:ok, internal} ->
         # force 禁止: in-flight invalidate を synced に戻さない
         case Bitflyer.Risk.DailyLoss.reload(trade_mode: trade_mode) do
           :ok ->
-            finish_resume(halt_reason, trade_mode, opts)
+            sync_balances_then_finish(halt_reason, trade_mode, internal, opts)
 
           {:ok, :deferred} ->
             Bitflyer.Telemetry.log(:warning, "resume blocked: daily loss barrier held", %{
@@ -75,6 +75,65 @@ defmodule Bitflyer.Startup.Resume do
         })
 
         {:error, reason, details}
+    end
+  end
+
+  defp sync_balances_then_finish(halt_reason, :dry_run, _internal, opts) do
+    _ = Bitflyer.Risk.BalanceCache.refresh(:dry_run)
+    finish_resume(halt_reason, :dry_run, opts)
+  end
+
+  defp sync_balances_then_finish(halt_reason, :live, %{exchange_balances: balances}, opts)
+       when is_map(balances) do
+    case Bitflyer.Risk.BalanceCache.put(:live, balances, clear_holds: true) do
+      :ok ->
+        finish_resume(halt_reason, :live, opts)
+
+      {:ok, :deferred} ->
+        Bitflyer.Telemetry.log(:warning, "resume blocked: balance cache barrier held", %{
+          trade_mode: :live
+        })
+
+        {:error, :balance_barrier, %{reason: :deferred}}
+
+      {:error, reason} ->
+        Bitflyer.Telemetry.log(:error, "resume balance cache put failed", %{
+          reason: inspect(reason),
+          trade_mode: :live
+        })
+
+        {:error, :balance_unsynced, %{reason: reason}}
+    end
+  end
+
+  defp sync_balances_then_finish(_halt_reason, :live, _internal, _opts) do
+    Bitflyer.Telemetry.log(:error, "resume missing exchange balances after live reconcile", %{
+      trade_mode: :live
+    })
+
+    _ = Bitflyer.Risk.BalanceCache.mark_unsynced(:live)
+    {:error, :balance_unsynced, %{reason: :exchange_balances_missing}}
+  end
+
+  defp sync_balances_then_finish(halt_reason, trade_mode, _internal, opts) do
+    case Bitflyer.Risk.BalanceCache.refresh(trade_mode) do
+      :ok ->
+        finish_resume(halt_reason, trade_mode, opts)
+
+      {:ok, :deferred} ->
+        Bitflyer.Telemetry.log(:warning, "resume blocked: balance cache barrier held", %{
+          trade_mode: trade_mode
+        })
+
+        {:error, :balance_barrier, %{reason: :deferred}}
+
+      {:error, reason} ->
+        Bitflyer.Telemetry.log(:error, "resume balance cache refresh failed", %{
+          reason: inspect(reason),
+          trade_mode: trade_mode
+        })
+
+        {:error, :balance_unsynced, %{reason: reason}}
     end
   end
 

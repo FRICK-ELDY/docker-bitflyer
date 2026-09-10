@@ -60,8 +60,12 @@ defmodule Bitflyer.Startup.Reconcile do
 
     with {:ok, internal} <- restore(trade_mode),
          :ok <- maybe_check_persisted_risk(internal, opts),
-         :ok <- reconcile_mode(internal, exchange, required) do
-      {:ok, internal}
+         result <- reconcile_mode(internal, exchange, required) do
+      case result do
+        :ok -> {:ok, internal}
+        {:ok, enriched} when is_map(enriched) -> {:ok, enriched}
+        {:error, _, _} = error -> error
+      end
     end
   end
 
@@ -150,8 +154,9 @@ defmodule Bitflyer.Startup.Reconcile do
     # 突合前に約定を建玉へ反映（残高は getbalance 突合の正本。fill では書き換えない）
     with :ok <- sync_live_fills(exchange),
          {:ok, internal} <- restore(:live),
-         {:ok, snapshot} <- fetch_live_snapshot(exchange) do
-      compare_with_exchange(internal, snapshot, required)
+         {:ok, snapshot} <- fetch_live_snapshot(exchange),
+         :ok <- compare_with_exchange(internal, snapshot, required) do
+      {:ok, Map.put(internal, :exchange_balances, exchange_balance_map(snapshot))}
     end
   end
 
@@ -280,6 +285,16 @@ defmodule Bitflyer.Startup.Reconcile do
   end
 
   defp balance_currency(balance), do: Map.fetch!(balance, :currency)
+
+  defp exchange_balance_map(%{balances: balances}) when is_list(balances) do
+    Map.new(balances, fn balance ->
+      currency = balance_currency(balance)
+      available = Map.get(balance, :available) || Map.get(balance, :amount)
+      {currency, available}
+    end)
+  end
+
+  defp exchange_balance_map(_), do: %{}
 
   defp balance_match?(left, right) do
     left_amount = Map.get(left, :amount)
