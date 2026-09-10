@@ -59,12 +59,12 @@ defmodule Bitflyer.Strategy.Revision do
           {:ok, revision} ->
             {:ok, revision}
 
-          {:error, _error} ->
-            # 並行 create で一意制約に負けた場合は勝ち行を返す
+          {:error, error} ->
+            # 並行 create で一意制約に負けた場合のみ勝ち行を返す。
+            # それ以外（validation / DB 等）は元の error を返す。
             case find_by_hash(trade_mode, hash) do
               {:ok, %StrategyParameterRevision{} = revision} -> {:ok, revision}
-              {:ok, nil} -> {:error, :revision_create_race}
-              {:error, error} -> {:error, error}
+              _ -> {:error, error}
             end
         end
 
@@ -78,7 +78,7 @@ defmodule Bitflyer.Strategy.Revision do
   """
   @spec command_hash(map()) :: String.t()
   def command_hash(command) when is_map(command) do
-    payload = %{
+    %{
       "internal_order_id" =>
         Map.get(command, :internal_order_id) || Map.get(command, "internal_order_id"),
       "product_code" => Map.get(command, :product_code) || Map.get(command, "product_code"),
@@ -88,11 +88,7 @@ defmodule Bitflyer.Strategy.Revision do
         atom_or_string(Map.get(command, :order_type) || Map.get(command, "order_type") || :market),
       "price" => decimal_or_string(Map.get(command, :price) || Map.get(command, "price"))
     }
-
-    payload
-    |> Jason.encode!()
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode16(case: :lower)
+    |> stable_hash()
   end
 
   @doc false
@@ -104,9 +100,7 @@ defmodule Bitflyer.Strategy.Revision do
       "params" => params_map,
       "throttle_ms" => throttle_ms
     }
-    |> Jason.encode!()
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode16(case: :lower)
+    |> stable_hash()
   end
 
   defp create_revision(attrs) do
@@ -134,9 +128,11 @@ defmodule Bitflyer.Strategy.Revision do
     |> Map.new()
   end
 
+  # true/false/nil は atom なので is_atom より先に判定する
   defp json_value(%Decimal{} = d), do: Decimal.to_string(d, :normal)
+  defp json_value(v) when is_nil(v) or is_boolean(v), do: v
   defp json_value(v) when is_atom(v), do: Atom.to_string(v)
-  defp json_value(v) when is_binary(v) or is_number(v) or is_boolean(v) or is_nil(v), do: v
+  defp json_value(v) when is_binary(v) or is_number(v), do: v
 
   defp json_value(v) when is_list(v), do: Enum.map(v, &json_value/1)
 
@@ -161,4 +157,26 @@ defmodule Bitflyer.Strategy.Revision do
   defp decimal_or_string(%Decimal{} = d), do: Decimal.to_string(d, :normal)
   defp decimal_or_string(v) when is_binary(v) or is_number(v), do: to_string(v)
   defp decimal_or_string(v), do: inspect(v)
+
+  defp stable_hash(term) do
+    term
+    |> to_ordered()
+    |> Jason.encode!()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp to_ordered(%Jason.OrderedObject{} = ordered), do: ordered
+
+  defp to_ordered(map) when is_map(map) do
+    values =
+      map
+      |> Enum.map(fn {k, v} -> {to_string(k), to_ordered(v)} end)
+      |> Enum.sort_by(&elem(&1, 0))
+
+    %Jason.OrderedObject{values: values}
+  end
+
+  defp to_ordered(list) when is_list(list), do: Enum.map(list, &to_ordered/1)
+  defp to_ordered(other), do: other
 end
