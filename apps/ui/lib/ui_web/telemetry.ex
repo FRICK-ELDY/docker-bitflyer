@@ -8,15 +8,42 @@ defmodule UiWeb.Telemetry do
 
   @impl true
   def init(_arg) do
-    children = [
-      # Telemetry poller will execute the given period measurements
-      # every 10_000ms. Learn more here: https://telemetry-metrics.hexdocs.pm
-      {:telemetry_poller, measurements: periodic_measurements(), period: 10_000}
-      # Add reporters as children of your supervision tree.
-      # {Telemetry.Metrics.ConsoleReporter, metrics: metrics()}
-    ]
+    children =
+      [
+        # Telemetry poller will execute the given period measurements
+        # every 10_000ms. Learn more here: https://telemetry-metrics.hexdocs.pm
+        {:telemetry_poller, measurements: periodic_measurements(), period: 10_000}
+      ] ++ console_reporter_children()
 
     Supervisor.init(children, strategy: :one_for_one)
+  end
+
+  # ConsoleReporter はイベント毎に stdout へ出す。tick / Phoenix / VM はノイズになるため除外。
+  @console_metric_prefixes [
+    [:bitflyer, :market_data, :disconnected],
+    [:bitflyer, :risk, :rejected],
+    [:bitflyer, :order, :submitted],
+    [:bitflyer, :order, :filled],
+    [:bitflyer, :reconcile, :mismatch],
+    [:bitflyer, :circuit, :opened],
+    [:bitflyer, :readiness, :changed],
+    [:bitflyer, :health, :unhealthy]
+  ]
+
+  @doc false
+  def console_reporter_children do
+    if Application.get_env(:ui, :metrics_console_reporter, false) do
+      [{Telemetry.Metrics.ConsoleReporter, metrics: console_metrics()}]
+    else
+      []
+    end
+  end
+
+  @doc false
+  def console_metrics do
+    Enum.filter(metrics(), fn metric ->
+      Enum.any?(@console_metric_prefixes, &List.starts_with?(metric.name, &1))
+    end)
   end
 
   def metrics do

@@ -31,9 +31,10 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | cache（ETS） | implemented | 単一ノード前提。Redis なし |
 | TradeMode | implemented | `dry_run` / `paper` / `live` + `BITFLYER_LIVE_CONFIRM` |
 | Readiness / 突合 / resume / baseline / recover | implemented | boot・定期突合。`mix bitflyer.resume`。live 初回 baseline。`mix bitflyer.recover`。`prep_stop` はゲート閉鎖＋ drain |
-| observe — telemetry / 構造化ログ | implemented | allowlist（`:kind` / `:currency` / `:limit` 含む） |
+| observe — telemetry / 構造化ログ | implemented | allowlist（`:kind` / `:currency` / `:limit` 含む）。prod は ConsoleReporter 既定オン（低頻度ドメインのみ） |
 | observe — Discord 通知 | implemented | Incoming Webhook。未設定でも起動。発注は止めない |
 | observe — health | implemented | `/health/live`・`/health/ready`・`/health` |
+| observe — LiveDashboard | implemented | BasicAuth 配下 `/ops/dashboard`（prod/dev）。Ecto/RequestLogger オフ。mailbox は dev のみ |
 | UI StatusLive | implemented | 発注可否・Feed・鮮度・モード色分け |
 | CI（`mix precommit` / GitHub Actions） | implemented | PR と `main` |
 | deps audit（`mix deps.audit`） | implemented | ゲート外の可視化。CI artifact。Hex のみ（GitHub 依存は対象外） |
@@ -129,7 +130,8 @@ Hex の既知 advisory が対象。`heroicons` / `daisyui` など GitHub タグ�
 | `BITFLYER_API_KEY` / `BITFLYER_API_SECRET` | Private API。`TRADE_MODE=live` 時のみ必須。出金権限は付けない |
 | `BITFLYER_MAX_*` / `BITFLYER_STRATEGY_ENABLED` | live 専用。上限 5 項目は必須。戦略は既定オフ（FixedOnce 不可） |
 | `DISCORD_WEBHOOK_URL` | 任意。Discord Incoming Webhook。未設定でも起動する |
-| `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` | Status UI。prod 必須。dev は両方揃ったときだけ有効 |
+| `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` | Status UI・`/ops/dashboard`。prod 必須。dev は両方揃ったときだけ有効 |
+| `UI_METRICS_CONSOLE` | ConsoleReporter。未設定時は prod のみオン（tick/Phoenix/VM 除外）。`false` でオフ |
 | `PHX_HTTP_IP` | prod のみ。既定 `127.0.0.1`（公開面最小化） |
 
 ## bitFlyer API で取得できる情報

@@ -38,19 +38,29 @@ defmodule UiWeb.Router do
     end
   end
 
-  # Enable LiveDashboard and Swoosh mailbox preview in development
-  if Application.compile_env(:ui, :dev_routes) do
-    # If you want to use the LiveDashboard in production, you should put
-    # it behind authentication and allow only admins to access it.
-    # If your application does not have an admins-only section yet,
-    # you can use Plug.BasicAuth to set up some basic authentication
-    # as long as you are also using SSL (which you should anyway).
+  # 本番・開発共通: BasicAuth 配下の LiveDashboard（率・推移の確認用）。
+  # Processes / ETS / Applications はライブラリ既定で残る（ページ除外 API なし）。
+  # OS env・Ecto・RequestLogger・破壊操作は明示オフ。loopback / ACL 前提。
+  if Application.compile_env(:ui, :dashboard_routes, false) do
     import Phoenix.LiveDashboard.Router
 
+    scope "/ops" do
+      pipe_through :browser
+
+      live_dashboard "/dashboard",
+        metrics: UiWeb.Telemetry,
+        on_mount: [{UiWeb.Hooks.BasicAuth, :default}],
+        ecto_repos: [],
+        request_logger: false,
+        allow_destructive_actions: false
+    end
+  end
+
+  # 開発専用: Swoosh mailbox preview（本番イメージには載せない）
+  if Application.compile_env(:ui, :dev_routes) do
     scope "/dev" do
       pipe_through :browser
 
-      live_dashboard "/dashboard", metrics: UiWeb.Telemetry
       forward "/mailbox", Plug.Swoosh.MailboxPreview
     end
   end

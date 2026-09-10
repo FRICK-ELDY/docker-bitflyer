@@ -16,6 +16,9 @@ config :swoosh, :api_client, false
 # Print only warnings and errors during test
 config :logger, level: :warning
 
+# LiveDashboard をテストでもマウントし、BasicAuth 保護を固定する
+config :ui, dashboard_routes: true
+
 # UI BasicAuth はテスト既定オフ（個別テストで Application.put_env する）
 config :ui, :basic_auth, enabled: false, username: "", password: ""
 

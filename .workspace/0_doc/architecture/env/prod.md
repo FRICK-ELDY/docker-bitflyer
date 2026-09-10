@@ -21,7 +21,7 @@
 | データストア | 名前付きボリュームまたはホストの永続ディスク。定期バックアップ |
 | 秘密情報 | ホストのシークレットまたは環境変数。リポジトリ・イメージ・ログに出さない |
 | 公開ポート | 管理 UI や DB を不用意に公開しない |
-| UI 認証 | `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` 必須（`:browser` のみ。`/health*` は認証なし） |
+| UI 認証 | `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` 必須（`:browser` のみ。`/health*` は認証なし）。`/ops/dashboard` も同じ保護 |
 | HTTP bind | 既定 `PHX_HTTP_IP=127.0.0.1`。VLAN 越しに出すときだけ明示変更 |
 | API キー | `BITFLYER_API_KEY` / `BITFLYER_API_SECRET`。`TRADE_MODE=live` 時必須（欠落は起動停止） |
 | Risk 上限 | `BITFLYER_MAX_ORDER_SIZE` / `POSITION_SIZE` / `DAILY_LOSS` / `ORDERS_PER_MINUTE` / `PRICE_DEVIATION_PCT` を明示（開発既定は live で拒否） |
@@ -79,6 +79,12 @@
 - 内部状態と取引所状態の不一致
 - 日次損益とリミット接近
 - ディスク / メモリ / 時刻同期
+
+率・推移の見方:
+
+- **ログ**: prod 既定で `Telemetry.Metrics.ConsoleReporter` が低頻度ドメイン（disconnect / rejected / order / reconcile / circuit / readiness / health）をイベント毎に stdout へ出す。tick・Phoenix・VM は除外。長期保管で埋もれる場合は `UI_METRICS_CONSOLE=false`
+- **画面**: `https://…/ops/dashboard`（Status と同じ `UI_BASIC_AUTH_*`）。loopback / ACL 配下で公開する。Ecto・RequestLogger・OS env 表示・破壊操作はオフ。Processes / ETS / Applications はライブラリ既定で残るため、Status 単独より OTP 内省の到達面が広い
+- Prometheus エクスポートは未導入（必要になったら後続）
 
 アラートは「起きたこと」と「今トレードしてよいか」が分かる文言にする。
 
