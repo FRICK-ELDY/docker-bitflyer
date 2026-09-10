@@ -109,7 +109,7 @@ jobs:
           retention-days: 30
 
       - name: Create and migrate test database
-        run: mix ash.setup --domains Bitflyer.System,Bitflyer.Trading
+        run: mix ash.setup --domains Bitflyer.Trading
 
       - name: Quality gate
         run: mix precommit

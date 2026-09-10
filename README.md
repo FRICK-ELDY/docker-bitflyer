@@ -34,7 +34,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | observe — telemetry / 構造化ログ | implemented | allowlist（`:kind` / `:currency` / `:limit` 含む）。prod は ConsoleReporter 既定オン（低頻度ドメインのみ） |
 | observe — Discord 通知 | implemented | Incoming Webhook。未設定でも起動。発注は止めない |
 | observe — health | implemented | `/health/live`・`/health/ready`・`/health` |
-| observe — LiveDashboard | implemented | BasicAuth 配下 `/ops/dashboard`（prod/dev）。Ecto/RequestLogger オフ。mailbox は dev のみ |
+| observe — LiveDashboard | implemented | BasicAuth 配下 `/ops/dashboard`（prod/dev）。Ecto/RequestLogger オフ |
 | UI StatusLive | implemented | 発注可否・Feed・鮮度・モード色分け。BasicAuth 付き kill / resume / reconcile |
 | CI（`mix precommit` / GitHub Actions） | implemented | PR と `main`。`Dockerfile.prod` ビルド検証（push なし）も実行 |
 | deps audit（`mix deps.audit`） | implemented | ゲート外の可視化。CI artifact。Hex のみ（GitHub 依存は対象外） |
@@ -98,7 +98,7 @@ docker compose run --rm app mix precommit
 `ash.setup` は常駐起動（`phx.server`）時だけ走り、対象は開発用 DB（`docker_bitflyer_dev`）。テストは別 DB（既定 `docker_bitflyer_test`）を使うため、初回やマイグレーション追加のあとは先に次を実行する。
 
 ```bash
-docker compose run --rm -e MIX_ENV=test app mix ash.setup --domains Bitflyer.System,Bitflyer.Trading
+docker compose run --rm -e MIX_ENV=test app mix ash.setup --domains Bitflyer.Trading
 ```
 
 （上書きしたいときは `TEST_DATABASE_URL` を設定する。CI はジョブ内で setup してから `precommit` する。）

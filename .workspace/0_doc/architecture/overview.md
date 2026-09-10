@@ -158,7 +158,7 @@ strategy から API を直接叩かない。market-data の遅延や欠損があ
 - 取引ドメインの telemetry / 構造化ログ語彙の正本は `Bitflyer.Telemetry`
 - イベント例: market_data tick/disconnect、risk rejected、order submitted/filled、reconcile mismatch、circuit opened、readiness changed、health unhealthy
 - メタデータは allowlist のみ。秘密らしきキーは落とす
-- LiveDashboard（`/ops/dashboard`）の metrics に bitflyer カウンタを載せる。Status と同じ BasicAuth。prod でも有効（mailbox preview は `/dev`・dev のみ）。Ecto / RequestLogger / OS env / 破壊操作はオフ。Processes・ETS・Applications は残る
+- LiveDashboard（`/ops/dashboard`）の metrics に bitflyer カウンタを載せる。Status と同じ BasicAuth。prod でも有効。Ecto / RequestLogger / OS env / 破壊操作はオフ。Processes・ETS・Applications は残る
 - 本番では `Telemetry.Metrics.ConsoleReporter` を既定起動（`UI_METRICS_CONSOLE` で制御）。イベント毎に stdout へ出すが tick / Phoenix / VM は除外
 - Discord 通知は observe のアダプタ（`Bitflyer.Observe.Discord`）。`DISCORD_WEBHOOK_URL`（Incoming Webhook）が有るときだけ、halt / reconcile_mismatch / disconnect を送る。未設定・送信失敗でも発注経路は止めない。Webhook URL はログ・メッセージ本文に出さない
 

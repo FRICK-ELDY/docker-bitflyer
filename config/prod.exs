@@ -7,7 +7,7 @@ import Config
 # before starting your production server.
 config :ui, UiWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
 
-# LiveDashboard を BasicAuth 配下（/ops/dashboard）で有効化。mailbox は載せない。
+# LiveDashboard を BasicAuth 配下（/ops/dashboard）で有効化。
 config :ui, dashboard_routes: true
 
 # Force using SSL in production. This also sets the "strict-security-transport" header,
@@ -21,12 +21,6 @@ config :ui, UiWeb.Endpoint,
       hosts: ["localhost", "127.0.0.1"]
     ]
   ]
-
-# Configure Swoosh API Client
-config :swoosh, api_client: Swoosh.ApiClient.Req
-
-# Disable Swoosh Local Memory Storage
-config :swoosh, local: false
 
 # Do not print debug messages in production
 config :logger, level: :info

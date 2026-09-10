@@ -1,13 +1,10 @@
 defmodule Bitflyer.System do
   @moduledoc """
-  開発・稼働確認用の Domain。取引エンティティは置かない。
-  """
-  use Ash.Domain,
-    otp_app: :bitflyer
+  bitflyer アプリの公開ファサード。
 
-  resources do
-    resource Bitflyer.System.Heartbeat
-  end
+  UI / health / Mix / Release はここ経由で稼働確認・運用操作・発注に触る。
+  取引エンティティの永続化は `Bitflyer.Trading`（Ash Domain）側。
+  """
 
   @doc """
   Repo 経由で PostgreSQL に到達できるか確認する。

@@ -3,7 +3,7 @@ import Config
 
 config :bitflyer,
   ecto_repos: [Bitflyer.Repo],
-  ash_domains: [Bitflyer.System, Bitflyer.Trading],
+  ash_domains: [Bitflyer.Trading],
   exchange_client: Bitflyer.Exchange.Unavailable
 
 # Private API 資格情報（runtime で上書き。live 時のみ必須）
@@ -98,15 +98,6 @@ config :ui, UiWeb.Endpoint,
 config :phoenix_live_view,
   # the attribute set on all root tags. Used for Phoenix.LiveView.ColocatedCSS.
   root_tag_attribute: "phx-r"
-
-# Configure the mailer
-#
-# By default it uses the "Local" adapter which stores the emails
-# locally. You can see the emails in your browser, at "/dev/mailbox".
-#
-# For production it's recommended to configure a different adapter
-# at the `config/runtime.exs`.
-config :ui, Ui.Mailer, adapter: Swoosh.Adapters.Local
 
 # Configure esbuild (the version is required)
 config :esbuild,
