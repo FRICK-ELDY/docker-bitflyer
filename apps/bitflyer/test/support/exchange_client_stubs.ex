@@ -24,6 +24,14 @@ defmodule Bitflyer.TestSupport.ExchangeClientStubs do
 
       @impl true
       def fetch_executions(_request), do: {:ok, []}
+
+      @impl true
+      def list_child_orders(_request), do: {:ok, []}
+
+      defoverridable cancel_order: 1,
+                     fetch_order: 1,
+                     fetch_executions: 1,
+                     list_child_orders: 1
     end
   end
 end

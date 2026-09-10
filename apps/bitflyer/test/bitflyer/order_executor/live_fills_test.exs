@@ -36,6 +36,9 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
         execs -> {:ok, execs}
       end
     end
+
+    @impl true
+    def list_child_orders(_), do: {:ok, []}
   end
 
   defmodule BrokenExecExchange do
@@ -55,6 +58,9 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
 
     @impl true
     def fetch_executions(_), do: {:error, :timeout}
+
+    @impl true
+    def list_child_orders(_), do: {:ok, []}
   end
 
   setup do

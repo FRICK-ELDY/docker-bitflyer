@@ -133,5 +133,8 @@ defmodule Bitflyer.Trading.Order do
 
   identities do
     identity :unique_internal_order_id, [:internal_order_id]
+
+    # nil は複数可（未割当）。live/paper で同一 acceptance id の二重紐付けを防ぐ。
+    identity :unique_exchange_order_id, [:trade_mode, :exchange_order_id], nils_distinct?: true
   end
 end

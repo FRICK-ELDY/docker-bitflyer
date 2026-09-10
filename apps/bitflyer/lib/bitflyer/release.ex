@@ -1,6 +1,6 @@
 defmodule Bitflyer.Release do
   @moduledoc """
-  mix 無しの本番 release 向けタスク（migrate / resume / baseline import）。
+  mix 無しの本番 release 向けタスク（migrate / resume / baseline / recover）。
 
   Docker 例:
 
@@ -8,6 +8,7 @@ defmodule Bitflyer.Release do
       bin/docker_bitflyer rpc "Bitflyer.Release.resume()"
       bin/docker_bitflyer rpc "Bitflyer.Release.import_baseline(dry_run: true, operator: \\"alice\\")"
       bin/docker_bitflyer rpc "Bitflyer.Release.import_baseline(confirm: true, operator: \\"alice\\", expected_hash: \\"<hash>\\")"
+      bin/docker_bitflyer rpc "Bitflyer.Release.recover_submission(dry_run: true, operator: \\"alice\\", internal_order_id: \\"ord-1\\")"
   """
 
   @app :bitflyer
@@ -84,6 +85,35 @@ defmodule Bitflyer.Release do
 
       {:error, reason} ->
         raise "baseline import failed: #{inspect(reason)}"
+    end
+  end
+
+  @doc """
+  submission_unknown 回収（`mix bitflyer.recover` 相当）。Ready にはしない。
+
+  - `dry_run: true` / `confirm: true`
+  - `operator:` / `internal_order_id:` 必須
+  - confirm 時 `expected_hash:`（または `hash:`）必須
+  - 曖昧時 `exchange_order_id:`、不在時 `absent: true`
+  """
+  def recover_submission(opts \\ []) do
+    normalized =
+      opts
+      |> Keyword.put(:dry_run?, Keyword.get(opts, :dry_run, Keyword.get(opts, :dry_run?, false)))
+      |> Keyword.put(:confirm?, Keyword.get(opts, :confirm, Keyword.get(opts, :confirm?, false)))
+      |> Keyword.put(:absent?, Keyword.get(opts, :absent, Keyword.get(opts, :absent?, false)))
+      |> Keyword.put_new(:expected_hash, Keyword.get(opts, :hash))
+      |> Keyword.drop([:dry_run, :confirm, :absent, :hash])
+
+    case Bitflyer.System.recover_submission(normalized) do
+      {:ok, result} ->
+        result
+
+      {:error, reason, details} when is_map(details) ->
+        raise "submission recovery failed: #{inspect(reason)} #{inspect(details)}"
+
+      {:error, reason} ->
+        raise "submission recovery failed: #{inspect(reason)}"
     end
   end
 

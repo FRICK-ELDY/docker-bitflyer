@@ -86,4 +86,38 @@ defmodule Bitflyer.Exchange.Rest.DecodeTest do
 
     assert {:ok, %{average_price: nil}} = Decode.order_info(Map.put(base, "average_price", 0.0))
   end
+
+  test "child_order fails closed on missing or invalid child_order_date" do
+    base = %{
+      "child_order_acceptance_id" => "JRF-1",
+      "product_code" => "FX_BTC_JPY",
+      "side" => "BUY",
+      "size" => "0.01",
+      "executed_size" => "0",
+      "child_order_state" => "ACTIVE",
+      "price" => "5000000",
+      "child_order_type" => "LIMIT"
+    }
+
+    assert {:error, :invalid_datetime} = Decode.child_order(base)
+    assert {:error, :invalid_datetime} = Decode.child_order(Map.put(base, "child_order_date", ""))
+
+    assert {:error, :invalid_datetime} =
+             Decode.child_order(Map.put(base, "child_order_date", "not-a-date"))
+
+    assert {:ok, %{ordered_at: %DateTime{} = dt}} =
+             Decode.child_order(Map.put(base, "child_order_date", "2015-07-07T08:45:53"))
+
+    assert DateTime.compare(dt, ~U[2015-07-06 23:45:53Z]) == :eq
+
+    assert {:ok, %{ordered_at: %DateTime{} = offset_dt}} =
+             Decode.child_order(Map.put(base, "child_order_date", "2015-07-07T08:45:53+09:00"))
+
+    assert DateTime.compare(offset_dt, ~U[2015-07-06 23:45:53Z]) == :eq
+
+    assert {:ok, %{ordered_at: %DateTime{} = z_dt}} =
+             Decode.child_order(Map.put(base, "child_order_date", "2015-07-06T23:45:53Z"))
+
+    assert DateTime.compare(z_dt, ~U[2015-07-06 23:45:53Z]) == :eq
+  end
 end

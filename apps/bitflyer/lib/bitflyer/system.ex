@@ -110,6 +110,13 @@ defmodule Bitflyer.System do
   end
 
   @doc """
+  submission_unknown / ID 未埋込 pending の承認付き回収（Ready にはしない）。
+  """
+  def recover_submission(opts \\ []) do
+    Bitflyer.OrderExecutor.SubmissionRecovery.recover(opts)
+  end
+
+  @doc """
   市場データキーが鮮度内か（miss / stale は false）。
   """
   def market_data_fresh?(key, max_age_ms \\ Bitflyer.MarketData.Cache.default_max_age_ms()) do

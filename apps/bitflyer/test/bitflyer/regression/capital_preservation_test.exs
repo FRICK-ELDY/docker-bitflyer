@@ -88,6 +88,9 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
     @impl true
     def fetch_executions(_), do: {:ok, []}
+
+    @impl true
+    def list_child_orders(_), do: {:ok, []}
   end
 
   defmodule CancelKeepOpenExchange do
@@ -118,6 +121,9 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
     @impl true
     def fetch_executions(_), do: {:ok, []}
+
+    @impl true
+    def list_child_orders(_), do: {:ok, []}
   end
 
   defmodule PartialFillExchange do
@@ -142,6 +148,9 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
     @impl true
     def fetch_executions(_), do: {:ok, []}
+
+    @impl true
+    def list_child_orders(_), do: {:ok, []}
   end
 
   defmodule LossFillExchange do
@@ -166,6 +175,9 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
     @impl true
     def fetch_executions(_), do: {:ok, []}
+
+    @impl true
+    def list_child_orders(_), do: {:ok, []}
   end
 
   defmodule MismatchExchange do

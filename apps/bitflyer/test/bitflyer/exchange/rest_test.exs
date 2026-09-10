@@ -158,6 +158,28 @@ defmodule Bitflyer.Exchange.RestTest do
              })
   end
 
+  test "list_child_orders decodes ordered_at price and type from fixture" do
+    Process.put(:rest_http_handler, fn method, url, headers, body ->
+      assert method == :get
+      assert body == ""
+      assert_signed_headers(headers)
+      assert String.contains?(url, "/v1/me/getchildorders")
+      assert String.contains?(url, "count=500")
+      refute String.contains?(url, "child_order_state=")
+      {:ok, response(200, fixture("getchildorders_completed.json"))}
+    end)
+
+    assert {:ok, [row]} =
+             Rest.list_child_orders(%{product_code: "FX_BTC_JPY"})
+
+    assert row.exchange_order_id == "JRF20150707-084552-031927"
+    assert row.order_type == :limit
+    assert Decimal.eq?(row.price, Decimal.new("30000"))
+    assert %DateTime{} = row.ordered_at
+    # fixture child_order_date 2015-07-07T08:45:53 JST → 2015-07-06T23:45:53Z
+    assert DateTime.compare(row.ordered_at, ~U[2015-07-06 23:45:53Z]) == :eq
+  end
+
   test "fetch_order and fetch_executions decode fixtures" do
     Process.put(:rest_http_handler, fn method, url, headers, body ->
       assert method == :get
