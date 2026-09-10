@@ -5,6 +5,7 @@ defmodule Bitflyer.OrderExecutorTest do
 
   import Bitflyer.TestSupport.MarketDataCacheHelper
   import Bitflyer.TestSupport.OrderRateHelper
+  import Bitflyer.TestSupport.FailureRateHelper
   import Bitflyer.TestSupport.DailyLossHelper
   import Bitflyer.TestSupport.BalanceCacheHelper
   import Bitflyer.TestSupport.ReadinessHelper
@@ -52,7 +53,10 @@ defmodule Bitflyer.OrderExecutorTest do
         pid -> send(pid, {:cancel_order, request})
       end
 
-      :ok
+      case Agent.get(__MODULE__.CancelNextResult, & &1) do
+        {:error, reason} -> {:error, reason}
+        _ -> :ok
+      end
     end
 
     @impl true
@@ -82,12 +86,17 @@ defmodule Bitflyer.OrderExecutorTest do
     def set_next_result(result) do
       Agent.update(__MODULE__.NextResult, fn _ -> result end)
     end
+
+    def set_next_cancel_result(result) do
+      Agent.update(__MODULE__.CancelNextResult, fn _ -> result end)
+    end
   end
 
   setup do
     reset_readiness()
     reset_market_data_cache()
     reset_order_rate()
+    reset_failure_rate()
     reset_daily_loss()
     reset_balance_cache()
     clear_default_risk_state()
@@ -106,6 +115,11 @@ defmodule Bitflyer.OrderExecutorTest do
       start: {Agent, :start_link, [fn -> :success end, [name: SpyExchange.NextResult]]}
     })
 
+    start_supervised!(%{
+      id: SpyExchange.CancelNextResult,
+      start: {Agent, :start_link, [fn -> :ok end, [name: SpyExchange.CancelNextResult]]}
+    })
+
     Process.register(self(), SpyExchange)
     Application.put_env(:bitflyer, :exchange_client, SpyExchange)
 
@@ -113,6 +127,7 @@ defmodule Bitflyer.OrderExecutorTest do
       reset_readiness()
       reset_market_data_cache()
       reset_order_rate()
+      reset_failure_rate()
       reset_daily_loss()
       reset_balance_cache()
       clear_default_risk_state()
@@ -460,7 +475,7 @@ defmodule Bitflyer.OrderExecutorTest do
     assert Readiness.get() == {:halted, :submission_unknown}
   end
 
-  test "live definite exchange rejection stays rejected without halt" do
+  test "live single definite exchange rejection stays rejected without halt" do
     Application.put_env(:bitflyer, :trade_mode, :live)
     Application.put_env(:bitflyer, :live_confirmed, true)
     assert Readiness.mark_ready() == :ok
@@ -493,6 +508,94 @@ defmodule Bitflyer.OrderExecutorTest do
              )
 
     assert SpyExchange.place_count() == 2
+  end
+
+  test "live auth_failed rejects order and opens circuit immediately" do
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_balance_cache!(:live)
+
+    SpyExchange.set_next_result({:error, :auth_failed})
+
+    assert {:error, :exchange_error, %{reason: :auth_failed}} =
+             OrderExecutor.submit(valid_command("live-auth-1"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert {:ok, %Order{status: :rejected}} =
+             Order
+             |> Ash.Query.filter(internal_order_id == "live-auth-1")
+             |> Ash.read_one()
+
+    assert Readiness.get() == {:halted, :auth_failed}
+
+    SpyExchange.set_next_result(:success)
+
+    assert {:error, :circuit_open, _} =
+             OrderExecutor.submit(valid_command("live-auth-2"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert SpyExchange.place_count() == 1
+  end
+
+  test "live consecutive exchange rejections open circuit at window max" do
+    previous_risk = Application.get_env(:bitflyer, Bitflyer.Risk, [])
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.Risk,
+      Keyword.merge(previous_risk,
+        max_exchange_errors_per_window: 3,
+        exchange_error_window_ms: 60_000
+      )
+    )
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, Bitflyer.Risk, previous_risk)
+    end)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_balance_cache!(:live)
+
+    for i <- 1..2 do
+      SpyExchange.set_next_result({:error, :rejected_by_exchange})
+
+      assert {:error, :exchange_error, %{reason: :rejected_by_exchange}} =
+               OrderExecutor.submit(valid_command("live-consec-#{i}"),
+                 positions: [],
+                 trade_mode: :live
+               )
+
+      assert Readiness.get() == :ready
+    end
+
+    SpyExchange.set_next_result({:error, :rejected_by_exchange})
+
+    assert {:error, :exchange_error, %{reason: :rejected_by_exchange}} =
+             OrderExecutor.submit(valid_command("live-consec-3"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert Readiness.get() == {:halted, :consecutive_exchange_errors}
+
+    SpyExchange.set_next_result(:success)
+
+    assert {:error, :circuit_open, _} =
+             OrderExecutor.submit(valid_command("live-consec-4"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert SpyExchange.place_count() == 3
   end
 
   test "live persist failure after place_order halts and blocks further submits" do
@@ -623,6 +726,111 @@ defmodule Bitflyer.OrderExecutorTest do
     assert {:ok, updated} = OrderExecutor.cancel(order)
     assert updated.status == :pending
     assert_received {:cancel_order, %{exchange_order_id: "ex-cancel-live-1"}}
+  end
+
+  test "live cancel auth_failed opens circuit immediately" do
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_balance_cache!(:live)
+
+    assert {:ok, order} =
+             OrderExecutor.submit(valid_command("cancel-auth-1"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    SpyExchange.set_next_cancel_result({:error, :auth_failed})
+
+    assert {:error, :exchange_error, %{reason: :auth_failed}} = OrderExecutor.cancel(order)
+    assert Readiness.get() == {:halted, :auth_failed}
+
+    assert {:error, :circuit_open, _} =
+             OrderExecutor.submit(valid_command("cancel-auth-2"),
+               positions: [],
+               trade_mode: :live
+             )
+  end
+
+  test "live cancel consecutive rejections open circuit at window max" do
+    previous_risk = Application.get_env(:bitflyer, Bitflyer.Risk, [])
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.Risk,
+      Keyword.merge(previous_risk,
+        max_exchange_errors_per_window: 3,
+        exchange_error_window_ms: 60_000
+      )
+    )
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, Bitflyer.Risk, previous_risk)
+    end)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_balance_cache!(:live)
+
+    for i <- 1..3 do
+      assert {:ok, order} =
+               OrderExecutor.submit(valid_command("cancel-consec-#{i}"),
+                 positions: [],
+                 trade_mode: :live
+               )
+
+      SpyExchange.set_next_cancel_result({:error, :rejected_by_exchange})
+
+      assert {:error, :exchange_error, %{reason: :rejected_by_exchange}} =
+               OrderExecutor.cancel(order)
+
+      if i < 3 do
+        assert Readiness.get() == :ready
+      end
+    end
+
+    assert Readiness.get() == {:halted, :consecutive_exchange_errors}
+  end
+
+  test "live cancel order_not_found does not open consecutive circuit" do
+    previous_risk = Application.get_env(:bitflyer, Bitflyer.Risk, [])
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.Risk,
+      Keyword.merge(previous_risk,
+        max_exchange_errors_per_window: 2,
+        exchange_error_window_ms: 60_000
+      )
+    )
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, Bitflyer.Risk, previous_risk)
+    end)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_balance_cache!(:live)
+
+    for i <- 1..3 do
+      assert {:ok, order} =
+               OrderExecutor.submit(valid_command("cancel-notfound-#{i}"),
+                 positions: [],
+                 trade_mode: :live
+               )
+
+      SpyExchange.set_next_cancel_result({:error, :order_not_found})
+
+      assert {:error, :exchange_error, %{reason: :order_not_found}} =
+               OrderExecutor.cancel(order)
+
+      assert Readiness.get() == :ready
+    end
   end
 
   defp valid_command(internal_order_id, overrides \\ %{}) do

@@ -18,6 +18,7 @@ defmodule Bitflyer.Application do
         Bitflyer.Readiness,
         Bitflyer.MarketData.Cache,
         Bitflyer.Risk.OrderRate,
+        Bitflyer.Risk.FailureRate,
         Bitflyer.Risk.DailyLoss,
         Bitflyer.Risk.BalanceCache,
         Supervisor.child_spec(

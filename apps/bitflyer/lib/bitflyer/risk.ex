@@ -9,7 +9,8 @@ defmodule Bitflyer.Risk do
   検査: 同期 → 鮮度 → 注文サイズ → 建玉 → 価格逸脱 → 発注頻度 → 日次損失 → 残高。
 
   発注ホットパスでは RiskState・発注頻度・日次損失・残高のために DB 往復しない。
-  頻度は `Risk.OrderRate`、日次損失は `Risk.DailyLoss`、残高は `Risk.BalanceCache`（ETS）。
+  頻度は `Risk.OrderRate`、取引所エラー連続は `Risk.FailureRate`、
+  日次損失は `Risk.DailyLoss`、残高は `Risk.BalanceCache`（ETS）。
   """
 
   require Ash.Query

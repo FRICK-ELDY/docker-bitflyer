@@ -33,7 +33,7 @@
 |:---:|:---|:---|:---|
 | 6 | ~~baseline 初回 import~~ **済** | 承認付き `mix bitflyer.baseline` / `Release.import_baseline`。`BaselineImport` に snapshot hash・操作者。confirm しても Ready にせず、通常突合成功時のみ Ready。live は baseline 非更新のまま | 空 DB から人手 SQL なしで baseline 作成可 |
 | 7 | ~~submission_unknown 回収~~ **済** | 時刻窓+side+size の `list_child_orders` 照合。一意時は hash 承認で ID 埋込、曖昧は `--exchange-order-id`、不在は `--absent`。`mix bitflyer.recover` / `Release.recover_submission`。Ready にせず resume 手順を prod.md に記載 | unknown から resume できる手順が prod.md にある |
-| 8 | 連続障害・auth サーキット | 401/403 即 halt。その他は窓内 N 回で halt | 鍵違いで盲目 rejected 連発しない |
+| 8 | ~~連続障害・auth サーキット~~ **済** | 401/403 → `:auth_failed` 即 halt。その他確定拒否は `FailureRate` 窓内 N 回で `:consecutive_exchange_errors` | 鍵違いで盲目 rejected 連発しない |
 | 9 | WS サイレントストール watchdog | 最終 tick 経過で socket 切断→再接続 | 無言接続が人手なしで回復する |
 | 10 | in-flight drain | SIGTERM 後、進行中 submit/HTTP 完了を待つ | 競合テストで不明状態が増えない |
 

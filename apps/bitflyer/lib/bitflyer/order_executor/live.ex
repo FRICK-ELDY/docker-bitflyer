@@ -9,7 +9,9 @@ defmodule Bitflyer.OrderExecutor.Live do
     :rejected_by_exchange,
     :insufficient_funds,
     :invalid_order,
-    :invalid_request
+    :invalid_request,
+    :rate_limited,
+    :auth_failed
   ]
 
   @doc """
@@ -130,6 +132,7 @@ defmodule Bitflyer.OrderExecutor.Live do
   defp handle_place_error(%Order{} = order, reason) do
     if definite_rejection?(reason) do
       _ = update_status(order, :rejected, reason)
+      _ = maybe_open_failure_circuit(reason, order)
       {:error, :exchange_error, %{reason: reason}}
     else
       # timeout / 切断等: 受注不明。rejected にせず halt して再送を止める
@@ -144,6 +147,21 @@ defmodule Bitflyer.OrderExecutor.Live do
         })
 
       {:error, :submission_unknown, %{reason: reason}}
+    end
+  end
+
+  defp maybe_open_failure_circuit(reason, %Order{} = order) do
+    case Bitflyer.Risk.FailureRate.evaluate(reason, trade_mode: order.trade_mode) do
+      :ok ->
+        :ok
+
+      {:halt, halt_reason} ->
+        open_circuit_or_log!(halt_reason, %{
+          internal_order_id: order.internal_order_id,
+          product_code: order.product_code,
+          side: order.side,
+          place_error: reason
+        })
     end
   end
 

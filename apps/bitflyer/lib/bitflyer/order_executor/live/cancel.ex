@@ -10,6 +10,8 @@ defmodule Bitflyer.OrderExecutor.Live.Cancel do
     :insufficient_funds,
     :invalid_order,
     :invalid_request,
+    :rate_limited,
+    :auth_failed,
     :order_not_found
   ]
 
@@ -40,6 +42,7 @@ defmodule Bitflyer.OrderExecutor.Live.Cancel do
 
       {:error, reason} ->
         if reason in @definite_rejection_reasons do
+          _ = maybe_open_failure_circuit(reason, order)
           {:error, :exchange_error, %{reason: reason}}
         else
           Bitflyer.Telemetry.log(
@@ -56,6 +59,36 @@ defmodule Bitflyer.OrderExecutor.Live.Cancel do
 
           _ = Bitflyer.Risk.open_circuit(:submission_unknown)
           {:error, :submission_unknown, %{reason: reason}}
+        end
+    end
+  end
+
+  defp maybe_open_failure_circuit(reason, %Order{} = order) do
+    case Bitflyer.Risk.FailureRate.evaluate(reason, trade_mode: order.trade_mode) do
+      :ok ->
+        :ok
+
+      {:halt, halt_reason} ->
+        case Bitflyer.Risk.open_circuit(halt_reason) do
+          :ok ->
+            :ok
+
+          {:error, open_error} ->
+            Bitflyer.Telemetry.log(
+              :critical,
+              "Failed to persist risk circuit after #{halt_reason}: #{inspect(open_error)}",
+              %{
+                internal_order_id: order.internal_order_id,
+                exchange_order_id: order.exchange_order_id,
+                product_code: order.product_code,
+                reason: halt_reason,
+                cancel_error: reason,
+                open_error: open_error,
+                trade_mode: order.trade_mode
+              }
+            )
+
+            {:error, open_error}
         end
     end
   end

@@ -120,4 +120,18 @@ defmodule Bitflyer.Exchange.Rest.DecodeTest do
 
     assert DateTime.compare(z_dt, ~U[2015-07-06 23:45:53Z]) == :eq
   end
+
+  test "map_error treats 401/403 as auth_failed and 429 as rate_limited" do
+    assert Decode.map_error(401, %{"status_code" => 401, "error_message" => "Unauthorized"}) ==
+             :auth_failed
+
+    assert Decode.map_error(403, %{"error_message" => "Forbidden"}) == :auth_failed
+
+    assert Decode.map_error(429, %{"error_message" => "Too Many Requests"}) == :rate_limited
+
+    assert Decode.map_error(400, %{"error_message" => "Order rejected"}) == :rejected_by_exchange
+
+    assert Decode.map_error(400, %{"error_message" => "Insufficient funds"}) ==
+             :insufficient_funds
+  end
 end

@@ -16,9 +16,11 @@ defmodule Bitflyer.Exchange.Client do
 
   呼び出し側（`OrderExecutor.Live`）が結果を分類する。
 
-  - **確定拒否**（注文が取引所に無いと分かる）→ Order `rejected`、halt しない  
+  - **確定拒否**（注文が取引所に無いと分かる）→ Order `rejected`  
     例: `:exchange_unavailable`（未送信）、`:rejected_by_exchange`、`:insufficient_funds`、
-    `:invalid_order`、`:invalid_request`
+    `:invalid_order`、`:invalid_request`、`:rate_limited`  
+    ※ `:auth_failed`（401/403）も確定拒否だが **即サーキット**（鍵違いの連発防止）  
+    ※ その他の確定拒否は窓内 N 回で `:consecutive_exchange_errors` サーキット
   - **提出不明**（受注したか分からない）→ Order `submission_unknown` + Readiness/Risk halt、再送しない  
     例: `:timeout`、`:disconnected`、`:closed`、および上記以外の予期しない理由
   """
