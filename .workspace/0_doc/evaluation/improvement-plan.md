@@ -43,7 +43,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 11 | 本番 metrics 消費者 | ConsoleReporter または Prometheus / BasicAuth 配下 Dashboard | 率・推移が本番で見える |
+| 11 | ~~本番 metrics 消費者~~ **済** | prod 既定で `ConsoleReporter`（低頻度ドメインのみ）。BasicAuth 配下 `/ops/dashboard`（Ecto/RequestLogger オフ）。Prometheus は後続 | 率・推移が本番で見える |
 | 12 | source timestamp / clock skew / permissions | Normalize 保持、skew ゲート、`getpermissions` で出金禁止を起動検査 | live 起動時に権限・時刻で halt できる |
 | 13 | OrderRate の再起動復元 | 直近 1 分の Order を ETS に温める | クラッシュ直後に頻度上限を回避できない |
 | 14 | CD↔CI 結合 | 対象 SHA の precommit 成功を CD 前提に。任意で `Dockerfile.prod` ビルド検証 | 赤のまま配布しない |

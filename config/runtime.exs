@@ -209,7 +209,7 @@ ui_basic_enabled? =
       else
         raise """
         UI_BASIC_AUTH_USERNAME and UI_BASIC_AUTH_PASSWORD are required in prod.
-        /health* stays unauthenticated; Status UI requires BasicAuth.
+        /health* stays unauthenticated; Status UI and /ops/dashboard require BasicAuth.
         """
       end
 
@@ -225,6 +225,20 @@ config :ui, :basic_auth,
   enabled: ui_basic_enabled?,
   username: ui_basic_user,
   password: ui_basic_pass
+
+# 本番 metrics 消費者（ログ）。未設定時は prod のみ ConsoleReporter を起動。
+# イベント毎に stdout へ出すが、tick / Phoenix / VM は除外（低頻度ドメインのみ）。
+# UI_METRICS_CONSOLE=false で明示オフ、true/1/yes でオン。率・推移の本線は /ops/dashboard。
+metrics_console? =
+  case System.get_env("UI_METRICS_CONSOLE") do
+    nil ->
+      config_env() == :prod
+
+    val ->
+      String.downcase(String.trim(val)) in ["1", "true", "yes"]
+  end
+
+config :ui, :metrics_console_reporter, metrics_console?
 
 # ## Using releases
 #
