@@ -179,16 +179,13 @@ paper_slippage = System.get_env("PAPER_SLIPPAGE_BPS")
 paper_fee = System.get_env("PAPER_FEE_BPS")
 
 if is_binary(paper_slippage) or is_binary(paper_fee) do
-  paper_cfg = Application.get_env(:bitflyer, Bitflyer.OrderExecutor.Paper, [])
+  updates =
+    [slippage_bps: paper_slippage, fee_bps: paper_fee]
+    |> Enum.filter(fn {_key, val} -> is_binary(val) end)
 
   paper_cfg =
-    paper_cfg
-    |> then(fn cfg ->
-      if is_binary(paper_slippage), do: Keyword.put(cfg, :slippage_bps, paper_slippage), else: cfg
-    end)
-    |> then(fn cfg ->
-      if is_binary(paper_fee), do: Keyword.put(cfg, :fee_bps, paper_fee), else: cfg
-    end)
+    Application.get_env(:bitflyer, Bitflyer.OrderExecutor.Paper, [])
+    |> Keyword.merge(updates)
 
   config :bitflyer, Bitflyer.OrderExecutor.Paper, paper_cfg
 end
