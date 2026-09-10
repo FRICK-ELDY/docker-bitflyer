@@ -168,12 +168,28 @@ live で必須通貨（既定: JPY / BTC）の `BalanceSnapshot` が無いと起
 
 対象は `submission_unknown` と persist_failed 由来の **ID 未埋込 `pending`**。誤 `--absent` で `cancelled` になっても ID 無しなら再 recover で紐付けできる（hold は継続）。
 
-### 再開（`mix bitflyer.resume`）
+### kill switch（即 halt）
 
-remote console だけに頼らず、再突合成功時のみ halt を外す。
+発注を直ちに止める。**正本は同一 BEAM** の StatusLive **Kill switch**（BasicAuth 後）または release rpc。
+
+```bash
+# 推奨（同一 BEAM）
+docker compose -f compose.prod.yaml exec app \
+  /app/bin/docker_bitflyer rpc "Bitflyer.Release.halt_trading()"
+```
+
+`mix bitflyer.halt` は **RiskState 永続化の補助**。`compose exec` の Mix は別 BEAM のため常駐の Readiness ETS は更新しない。ただし authorize は永続 RiskState を見るので新規発注は拒否される。ETS 表示を揃えるには StatusLive / rpc / `restart app`。
+
+```bash
+docker compose exec app mix bitflyer.halt
+```
+
+### 再開（`mix bitflyer.resume` / StatusLive）
+
+remote console だけに頼らず、再突合成功時のみ halt を外す。**同一 BEAM なら StatusLive の Resume / Reconcile now が推奨**（ETS 乖離が無い）。
 
 1. 不整合の原因を直す（残高・建玉・設定・取引所側）
-2. 稼働コンテナで実行する:
+2. StatusLive で Resume を押すか、稼働コンテナで:
 
    ```bash
    docker compose exec app mix bitflyer.resume

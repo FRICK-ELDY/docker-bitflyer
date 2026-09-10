@@ -106,6 +106,82 @@ defmodule Bitflyer.Startup.ResumeTest do
     assert Readiness.ready?()
   end
 
+  test "System.halt_trading does not overwrite existing halt reason" do
+    assert :ok = Bitflyer.Risk.Circuit.open(:reconcile_mismatch)
+    assert :ok = Bitflyer.System.halt_trading(operator: "test")
+    assert Readiness.get() == {:halted, :reconcile_mismatch}
+  end
+
+  test "System.halt_trading does not overwrite persisted RiskState reason" do
+    assert Readiness.mark_ready() == :ok
+
+    halted_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, _} =
+             RiskState
+             |> Ash.Changeset.for_create(:create, %{
+               name: "default",
+               halted: true,
+               reason: "submission_unknown",
+               halted_at: halted_at
+             })
+             |> Ash.create()
+
+    assert :ok = Bitflyer.System.halt_trading(operator: "mix.bitflyer.halt")
+    assert Readiness.get() == {:halted, :submission_unknown}
+
+    assert {:ok, %RiskState{halted: true, reason: "submission_unknown"}} =
+             RiskState
+             |> Ash.Query.filter(name == "default")
+             |> Ash.read_one()
+  end
+
+  test "System.halt_trading syncs persist_failed and daily_loss_exceeded without collapsing" do
+    for reason <- ["persist_failed", "daily_loss_exceeded"] do
+      reset_readiness()
+      clear_default_risk_state()
+
+      halted_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      assert {:ok, _} =
+               RiskState
+               |> Ash.Changeset.for_create(:create, %{
+                 name: "default",
+                 halted: true,
+                 reason: reason,
+                 halted_at: halted_at
+               })
+               |> Ash.create(
+                 upsert?: true,
+                 upsert_identity: :unique_name,
+                 upsert_fields: [:halted, :reason, :halted_at, :updated_at]
+               )
+
+      assert :ok = Bitflyer.System.halt_trading(operator: "mix.bitflyer.halt")
+      assert Readiness.get() == {:halted, String.to_existing_atom(reason)}
+    end
+  end
+
+  test "System.halt_trading opens circuit when not halted" do
+    assert Readiness.mark_ready() == :ok
+    assert :ok = Bitflyer.System.halt_trading(operator: "test")
+    assert Readiness.get() == {:halted, :manual_halt}
+  end
+
+  test "Release.halt_trading returns ok without CaseClauseError" do
+    assert :ok = Bitflyer.Release.halt_trading(operator: "test-release")
+    assert match?({:halted, _}, Readiness.get())
+  end
+
+  test "Release.halt_trading_result accepts persist_failed from System" do
+    assert :ok = Bitflyer.Release.halt_trading_result({:ok, :persist_failed})
+    assert :ok = Bitflyer.Release.halt_trading_result(:ok)
+
+    assert_raise RuntimeError, ~r/halt_trading failed/, fn ->
+      Bitflyer.Release.halt_trading_result({:error, :boom})
+    end
+  end
+
   defp clear_default_risk_state do
     case RiskState
          |> Ash.Query.filter(name == "default")

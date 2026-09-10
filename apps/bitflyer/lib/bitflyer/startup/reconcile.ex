@@ -25,7 +25,7 @@ defmodule Bitflyer.Startup.Reconcile do
   alias Bitflyer.MarketData
   alias Bitflyer.MarketData.Normalize
   alias Bitflyer.Risk
-  alias Bitflyer.Risk.Limits
+  alias Bitflyer.Risk.{HaltReason, Limits}
 
   @type reason ::
           :reconcile_mismatch
@@ -46,19 +46,6 @@ defmodule Bitflyer.Startup.Reconcile do
         }
 
   @type result :: {:ok, internal_state()} | {:error, reason(), map()}
-
-  @known_reasons MapSet.new([
-                   :reconcile_mismatch,
-                   :restore_failed,
-                   :exchange_unavailable,
-                   :invalid_exchange_payload,
-                   :risk_halted,
-                   :unsafe_api_permissions,
-                   :clock_skew,
-                   :auth_failed,
-                   :consecutive_exchange_errors,
-                   :submission_unknown
-                 ])
 
   @doc """
   復元 → 突合。成功時は内部スナップショット、失敗時は reason。
@@ -117,37 +104,17 @@ defmodule Bitflyer.Startup.Reconcile do
 
   @doc """
   永続化された停止理由文字列を Readiness 用 atom にする。
+  正本は `Bitflyer.Risk.HaltReason`。
   """
   @spec reason_from_string(String.t() | nil) :: reason()
-  def reason_from_string(nil), do: :risk_halted
-
-  def reason_from_string(reason) when is_binary(reason) do
-    case reason do
-      "reconcile_mismatch" -> :reconcile_mismatch
-      "restore_failed" -> :restore_failed
-      "exchange_unavailable" -> :exchange_unavailable
-      "invalid_exchange_payload" -> :invalid_exchange_payload
-      "risk_halted" -> :risk_halted
-      "auth_failed" -> :auth_failed
-      "consecutive_exchange_errors" -> :consecutive_exchange_errors
-      "submission_unknown" -> :submission_unknown
-      "unsafe_api_permissions" -> :unsafe_api_permissions
-      "clock_skew" -> :clock_skew
-      _ -> :risk_halted
-    end
-  end
+  defdelegate reason_from_string(reason), to: HaltReason, as: :from_string
 
   @doc """
   Readiness halt 理由を RiskState 用文字列にする。
+  正本は `Bitflyer.Risk.HaltReason`。
   """
   @spec reason_to_string(reason()) :: String.t()
-  def reason_to_string(reason) when is_atom(reason) do
-    if MapSet.member?(@known_reasons, reason) do
-      Atom.to_string(reason)
-    else
-      "reconcile_mismatch"
-    end
-  end
+  defdelegate reason_to_string(reason), to: HaltReason, as: :to_string
 
   defp required_balance_currencies do
     Application.get_env(:bitflyer, __MODULE__, [])

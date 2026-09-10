@@ -39,6 +39,7 @@ defmodule UiWeb.Plugs.BasicAuthTest do
     assert conn.status == 200
     assert html_response(conn, 200) =~ "docker_bitflyer"
     assert get_session(conn, :ui_basic_ok) == true
+    assert get_session(conn, :ui_basic_username) == @username
   end
 
   test "GET /health/live stays open without BasicAuth", %{conn: conn} do

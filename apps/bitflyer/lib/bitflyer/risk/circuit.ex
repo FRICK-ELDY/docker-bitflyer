@@ -29,6 +29,25 @@ defmodule Bitflyer.Risk.Circuit do
   end
 
   @doc """
+  永続 RiskState の halt 理由。未 halt は `:clear`、読取失敗は `:unsynced`（fail-closed）。
+  """
+  @spec persisted_halt_reason() :: {:halted, atom()} | :clear | :unsynced
+  def persisted_halt_reason do
+    case RiskState
+         |> Ash.Query.filter(name == ^@default_name)
+         |> Ash.read_one() do
+      {:ok, %RiskState{halted: true, reason: reason}} ->
+        {:halted, Bitflyer.Risk.HaltReason.from_string(reason)}
+
+      {:ok, _} ->
+        :clear
+
+      {:error, _} ->
+        :unsynced
+    end
+  end
+
+  @doc """
   サーキットを開く。発注経路を閉じ、状態を永続化する。
   """
   @spec open(atom(), keyword()) :: :ok | {:error, term()}

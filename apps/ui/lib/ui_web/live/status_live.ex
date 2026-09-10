@@ -1,6 +1,7 @@
 defmodule UiWeb.StatusLive do
   @moduledoc """
   稼働確認ページ。発注可否・取引モード・Ready・Feed・市場データ鮮度・DB を表示する。
+  認証済み操作: kill switch（即 halt）、halt 中の resume / reconcile_now。
   """
   use UiWeb, :live_view
 
@@ -10,13 +11,66 @@ defmodule UiWeb.StatusLive do
   def mount(_params, _session, socket) do
     if connected?(socket), do: schedule_refresh()
 
-    {:ok, assign_status(socket)}
+    {:ok,
+     socket
+     |> assign_new(:ops_operator, fn -> "anonymous" end)
+     |> assign(:ops_busy, false)
+     |> assign_status()}
   end
 
   @impl true
   def handle_info(:refresh, socket) do
     schedule_refresh()
     {:noreply, assign_status(socket)}
+  end
+
+  @impl true
+  def handle_event("kill_switch", _params, %{assigns: %{ops_busy: true}} = socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("kill_switch", _params, socket) do
+    socket = assign(socket, :ops_busy, true)
+
+    result = Bitflyer.System.halt_trading(operator: socket.assigns.ops_operator)
+
+    {:noreply,
+     socket
+     |> assign(:ops_busy, false)
+     |> flash_ops_result(:kill, result)
+     |> assign_status()}
+  end
+
+  def handle_event("resume", _params, %{assigns: %{ops_busy: true}} = socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("resume", _params, socket) do
+    socket = assign(socket, :ops_busy, true)
+
+    result = Bitflyer.System.resume(operator: socket.assigns.ops_operator)
+
+    {:noreply,
+     socket
+     |> assign(:ops_busy, false)
+     |> flash_ops_result(:resume, result)
+     |> assign_status()}
+  end
+
+  def handle_event("reconcile_now", _params, %{assigns: %{ops_busy: true}} = socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("reconcile_now", _params, socket) do
+    socket = assign(socket, :ops_busy, true)
+
+    result = Bitflyer.System.reconcile_now(operator: socket.assigns.ops_operator)
+
+    {:noreply,
+     socket
+     |> assign(:ops_busy, false)
+     |> flash_ops_result(:reconcile, result)
+     |> assign_status()}
   end
 
   @impl true
@@ -91,6 +145,64 @@ defmodule UiWeb.StatusLive do
           <p :if={@orders_reason} id="orders-gate-reason" class="mt-2 text-sm text-base-content/70">
             {gettext("Reason")}: <span class="font-mono">{@orders_reason}</span>
           </p>
+        </section>
+
+        <section
+          id="ops-controls"
+          class="rounded-lg border border-base-300 bg-base-200/30 px-4 py-4 sm:px-5"
+        >
+          <p class="text-sm font-medium text-base-content/70">{gettext("Operations")}</p>
+
+          <p class="mt-1 text-sm text-base-content/60">
+            {gettext("Authenticated controls. Kill stops orders immediately.")}
+          </p>
+
+          <div class="mt-4 flex flex-wrap gap-3">
+            <button
+              id="ops-kill-switch"
+              type="button"
+              phx-click="kill_switch"
+              phx-disable-with={gettext("Halting…")}
+              disabled={@ops_busy}
+              class={[
+                "btn btn-error btn-sm transition-opacity",
+                @ops_busy && "opacity-60"
+              ]}
+            >
+              {gettext("Kill switch")}
+            </button>
+
+            <button
+              :if={@halted?}
+              id="ops-resume"
+              type="button"
+              phx-click="resume"
+              data-confirm={gettext("Resume after re-reconcile? Only if reconcile succeeds.")}
+              phx-disable-with={gettext("Resuming…")}
+              disabled={@ops_busy}
+              class={[
+                "btn btn-warning btn-sm transition-opacity",
+                @ops_busy && "opacity-60"
+              ]}
+            >
+              {gettext("Resume")}
+            </button>
+
+            <button
+              :if={@halted?}
+              id="ops-reconcile-now"
+              type="button"
+              phx-click="reconcile_now"
+              phx-disable-with={gettext("Reconciling…")}
+              disabled={@ops_busy}
+              class={[
+                "btn btn-neutral btn-sm transition-opacity",
+                @ops_busy && "opacity-60"
+              ]}
+            >
+              {gettext("Reconcile now")}
+            </button>
+          </div>
         </section>
 
         <dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -249,6 +361,7 @@ defmodule UiWeb.StatusLive do
     |> assign(:trade_mode, status.trade_mode)
     |> assign(:readiness, status.readiness)
     |> assign(:readiness_label, status.readiness_label)
+    |> assign(:halted?, match?({:halted, _}, status.readiness))
     |> assign(:halt_reason, reason_label(status.halt_reason))
     |> assign(:orders_allowed?, status.orders_allowed?)
     |> assign(:orders_reason, reason_label(status.orders_reason))
@@ -260,6 +373,46 @@ defmodule UiWeb.StatusLive do
     |> assign(:market_entries, status.market_data.entries)
     |> assign(:db_ok?, db_ok?)
     |> assign(:db_error, db_error)
+  end
+
+  defp flash_ops_result(socket, :kill, :ok) do
+    put_flash(socket, :info, gettext("Kill switch applied. Orders are halted."))
+  end
+
+  defp flash_ops_result(socket, :kill, {:ok, :persist_failed}) do
+    put_flash(
+      socket,
+      :error,
+      gettext("Orders halted in memory, but RiskState persist failed. Restart may clear it.")
+    )
+  end
+
+  defp flash_ops_result(socket, :kill, {:error, error}) do
+    put_flash(socket, :error, gettext("Kill switch failed: %{error}", error: inspect(error)))
+  end
+
+  defp flash_ops_result(socket, :resume, :ok) do
+    put_flash(socket, :info, gettext("Resume succeeded. System is ready."))
+  end
+
+  defp flash_ops_result(socket, :resume, {:error, :not_halted}) do
+    put_flash(socket, :error, gettext("Resume failed: not halted."))
+  end
+
+  defp flash_ops_result(socket, :resume, {:error, reason, _details}) do
+    put_flash(socket, :error, gettext("Resume failed: %{reason}", reason: inspect(reason)))
+  end
+
+  defp flash_ops_result(socket, :resume, {:error, reason}) do
+    put_flash(socket, :error, gettext("Resume failed: %{reason}", reason: inspect(reason)))
+  end
+
+  defp flash_ops_result(socket, :reconcile, :ok) do
+    put_flash(socket, :info, gettext("Reconcile finished successfully."))
+  end
+
+  defp flash_ops_result(socket, :reconcile, {:error, reason}) do
+    put_flash(socket, :error, gettext("Reconcile failed: %{reason}", reason: inspect(reason)))
   end
 
   defp orders_gate_label(true), do: gettext("ALLOWED")

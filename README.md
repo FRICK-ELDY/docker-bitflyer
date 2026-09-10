@@ -35,7 +35,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | observe — Discord 通知 | implemented | Incoming Webhook。未設定でも起動。発注は止めない |
 | observe — health | implemented | `/health/live`・`/health/ready`・`/health` |
 | observe — LiveDashboard | implemented | BasicAuth 配下 `/ops/dashboard`（prod/dev）。Ecto/RequestLogger オフ。mailbox は dev のみ |
-| UI StatusLive | implemented | 発注可否・Feed・鮮度・モード色分け |
+| UI StatusLive | implemented | 発注可否・Feed・鮮度・モード色分け。BasicAuth 付き kill / resume / reconcile |
 | CI（`mix precommit` / GitHub Actions） | implemented | PR と `main`。`Dockerfile.prod` ビルド検証（push なし）も実行 |
 | deps audit（`mix deps.audit`） | implemented | ゲート外の可視化。CI artifact。Hex のみ（GitHub 依存は対象外） |
 | CD（GHCR push） | implemented | `v*` / `workflow_dispatch`。**最新 CI（workflow 全体）success の SHA のみ**。digest を Compose に固定 |
