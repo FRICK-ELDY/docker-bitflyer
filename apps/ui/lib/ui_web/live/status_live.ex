@@ -450,6 +450,10 @@ defmodule UiWeb.StatusLive do
     put_flash(socket, :info, gettext("Reconcile finished successfully."))
   end
 
+  defp flash_ops_result(socket, :reconcile, {:error, reason, _details}) do
+    put_flash(socket, :error, gettext("Reconcile failed: %{reason}", reason: inspect(reason)))
+  end
+
   defp flash_ops_result(socket, :reconcile, {:error, reason}) do
     put_flash(socket, :error, gettext("Reconcile failed: %{reason}", reason: inspect(reason)))
   end

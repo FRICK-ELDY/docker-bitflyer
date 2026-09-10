@@ -111,6 +111,15 @@ defmodule Bitflyer.System do
 
         ok
 
+      {:error, reason, _details} = error ->
+        Bitflyer.Telemetry.log(:warning, "reconcile_now failed", %{
+          operator: operator,
+          reason: reason,
+          trade_mode: Bitflyer.TradeMode.current()
+        })
+
+        error
+
       {:error, reason} = error ->
         Bitflyer.Telemetry.log(:warning, "reconcile_now failed", %{
           operator: operator,
@@ -182,6 +191,7 @@ defmodule Bitflyer.System do
 
   既に ETS または永続 RiskState で halted のときは reason を上書きしない
   （別 BEAM の Mix が `submission_unknown` 等を `manual_halt` に潰さない）。
+  ETS だけ halt で DB が clear のとき（永続化失敗の残り等）は既存 reason で再永続化する。
   ETS は止まったが RiskState 永続化だけ失敗した場合は `{:ok, :persist_failed}`。
 
   ## Options
@@ -195,27 +205,32 @@ defmodule Bitflyer.System do
 
     case Bitflyer.Readiness.get() do
       {:halted, existing} ->
-        Bitflyer.Telemetry.log(:info, "manual halt skipped: already halted", %{
-          operator: operator,
-          reason: existing,
-          trade_mode: trade_mode
-        })
-
-        :ok
+        heal_persisted_halt(existing, operator, trade_mode)
 
       _ ->
         case Bitflyer.Risk.Circuit.persisted_halt_reason() do
           {:halted, existing} ->
             # 別 BEAM で DB だけ halt 済み — ローカル ETS を揃え、DB reason は維持
-            _ = Bitflyer.Readiness.halt(existing)
+            case Bitflyer.Readiness.halt(existing) do
+              :ok ->
+                Bitflyer.Telemetry.log(:info, "manual halt synced from persisted RiskState", %{
+                  operator: operator,
+                  reason: existing,
+                  trade_mode: trade_mode
+                })
 
-            Bitflyer.Telemetry.log(:info, "manual halt synced from persisted RiskState", %{
-              operator: operator,
-              reason: existing,
-              trade_mode: trade_mode
-            })
+                :ok
 
-            :ok
+              other ->
+                Bitflyer.Telemetry.log(:error, "manual halt sync to ETS failed", %{
+                  operator: operator,
+                  reason: existing,
+                  error: other,
+                  trade_mode: trade_mode
+                })
+
+                {:error, other}
+            end
 
           other when other in [:clear, :unsynced] ->
             Bitflyer.Telemetry.log(:critical, "manual halt requested", %{
@@ -224,35 +239,80 @@ defmodule Bitflyer.System do
               trade_mode: trade_mode
             })
 
-            case Bitflyer.Risk.open_circuit(reason) do
-              :ok ->
-                Bitflyer.Telemetry.log(:critical, "manual halt applied", %{
-                  operator: operator,
-                  reason: reason,
-                  trade_mode: trade_mode
-                })
+            apply_open_circuit(reason, operator, trade_mode)
+        end
+    end
+  end
 
-                :ok
+  # ETS は halted だが DB が clear（または読取不能）なら既存 reason で再永続化。
+  # 両方 halted なら reason 上書きせずスキップ。
+  defp heal_persisted_halt(existing, operator, trade_mode) do
+    case Bitflyer.Risk.Circuit.persisted_halt_reason() do
+      {:halted, _} ->
+        Bitflyer.Telemetry.log(:info, "manual halt skipped: already halted", %{
+          operator: operator,
+          reason: existing,
+          trade_mode: trade_mode
+        })
 
-              {:error, error} ->
-                if match?({:halted, _}, Bitflyer.Readiness.get()) do
-                  Bitflyer.Telemetry.log(:error, "manual halt ets applied but persist failed", %{
-                    operator: operator,
-                    reason: reason,
-                    trade_mode: trade_mode
-                  })
+        :ok
 
-                  {:ok, :persist_failed}
-                else
-                  Bitflyer.Telemetry.log(:error, "manual halt failed", %{
-                    operator: operator,
-                    reason: reason,
-                    trade_mode: trade_mode
-                  })
+      :clear ->
+        Bitflyer.Telemetry.log(
+          :warning,
+          "manual halt: ETS halted but RiskState clear; persisting",
+          %{
+            operator: operator,
+            reason: existing,
+            trade_mode: trade_mode
+          }
+        )
 
-                  {:error, error}
-                end
-            end
+        apply_open_circuit(existing, operator, trade_mode)
+
+      :unsynced ->
+        Bitflyer.Telemetry.log(
+          :warning,
+          "manual halt: ETS halted but RiskState unsynced; retrying persist",
+          %{
+            operator: operator,
+            reason: existing,
+            trade_mode: trade_mode
+          }
+        )
+
+        apply_open_circuit(existing, operator, trade_mode)
+    end
+  end
+
+  defp apply_open_circuit(reason, operator, trade_mode) do
+    case Bitflyer.Risk.open_circuit(reason) do
+      :ok ->
+        Bitflyer.Telemetry.log(:critical, "manual halt applied", %{
+          operator: operator,
+          reason: reason,
+          trade_mode: trade_mode
+        })
+
+        :ok
+
+      {:error, error} ->
+        if match?({:halted, _}, Bitflyer.Readiness.get()) do
+          Bitflyer.Telemetry.log(:error, "manual halt ets applied but persist failed", %{
+            operator: operator,
+            reason: reason,
+            trade_mode: trade_mode
+          })
+
+          {:ok, :persist_failed}
+        else
+          Bitflyer.Telemetry.log(:error, "manual halt failed", %{
+            operator: operator,
+            reason: reason,
+            trade_mode: trade_mode
+          })
+
+          {:error, error}
         end
     end
   end

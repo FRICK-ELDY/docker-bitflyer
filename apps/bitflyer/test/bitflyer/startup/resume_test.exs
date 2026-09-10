@@ -112,6 +112,20 @@ defmodule Bitflyer.Startup.ResumeTest do
     assert Readiness.get() == {:halted, :reconcile_mismatch}
   end
 
+  test "System.halt_trading persists when ETS halted but RiskState is clear" do
+    assert :ok = Readiness.halt(:persist_failed)
+    clear_default_risk_state()
+    assert Bitflyer.Risk.Circuit.persisted_halt_reason() == :clear
+
+    assert :ok = Bitflyer.System.halt_trading(operator: "heal-persist")
+    assert Readiness.get() == {:halted, :persist_failed}
+
+    assert {:ok, %RiskState{halted: true, reason: "persist_failed"}} =
+             RiskState
+             |> Ash.Query.filter(name == "default")
+             |> Ash.read_one()
+  end
+
   test "System.halt_trading does not overwrite persisted RiskState reason" do
     assert Readiness.mark_ready() == :ok
 

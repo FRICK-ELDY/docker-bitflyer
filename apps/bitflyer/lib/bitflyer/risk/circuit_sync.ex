@@ -91,7 +91,13 @@ defmodule Bitflyer.Risk.CircuitSync do
         :ok
 
       :unsynced ->
-        :ok
+        Bitflyer.Telemetry.log(
+          :error,
+          "circuit sync: failed to read persisted RiskState (unsynced)",
+          %{trade_mode: Bitflyer.TradeMode.current()}
+        )
+
+        {:error, :unsynced}
     end
   end
 end
