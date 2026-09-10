@@ -306,12 +306,14 @@ defmodule Bitflyer.Trading.ResourcesTest do
     end
   end
 
-  test "Trading domain registers all four resources" do
+  test "Trading domain registers core resources" do
     resources = Ash.Domain.Info.resources(Trading)
 
     assert Bitflyer.Trading.Order in resources
     assert Bitflyer.Trading.Position in resources
+    assert Bitflyer.Trading.Fill in resources
     assert Bitflyer.Trading.BalanceSnapshot in resources
+    assert Bitflyer.Trading.BaselineImport in resources
     assert Bitflyer.Trading.RiskState in resources
   end
 end

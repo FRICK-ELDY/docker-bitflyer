@@ -103,6 +103,13 @@ defmodule Bitflyer.System do
   end
 
   @doc """
+  live 初回 BalanceSnapshot baseline の承認付き import（Ready にはしない）。
+  """
+  def import_baseline(opts \\ []) do
+    Bitflyer.Startup.Baseline.import(opts)
+  end
+
+  @doc """
   市場データキーが鮮度内か（miss / stale は false）。
   """
   def market_data_fresh?(key, max_age_ms \\ Bitflyer.MarketData.Cache.default_max_age_ms()) do

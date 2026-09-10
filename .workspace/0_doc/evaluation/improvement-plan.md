@@ -31,7 +31,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 6 | baseline 初回 import | 承認付き `mix` / RPC。snapshot hash・操作者を記録。その後通常突合成功時のみ Ready。live は baseline 非更新のまま exchange available が動くと次突合 mismatch halt（P0 #2 の前提） | 空 DB から人手 SQL なしで baseline 作成可 |
+| 6 | ~~baseline 初回 import~~ **済** | 承認付き `mix bitflyer.baseline` / `Release.import_baseline`。`BaselineImport` に snapshot hash・操作者。confirm しても Ready にせず、通常突合成功時のみ Ready。live は baseline 非更新のまま | 空 DB から人手 SQL なしで baseline 作成可 |
 | 7 | submission_unknown 回収 | 時刻窓+side+size の候補照合。一意時のみ ID 埋込。曖昧なら承認 command | unknown から resume できる手順が prod.md にある |
 | 8 | 連続障害・auth サーキット | 401/403 即 halt。その他は窓内 N 回で halt | 鍵違いで盲目 rejected 連発しない |
 | 9 | WS サイレントストール watchdog | 最終 tick 経過で socket 切断→再接続 | 無言接続が人手なしで回復する |

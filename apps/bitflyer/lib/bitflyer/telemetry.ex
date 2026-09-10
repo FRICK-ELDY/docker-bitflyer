@@ -51,7 +51,9 @@ defmodule Bitflyer.Telemetry do
                         :count,
                         :kind,
                         :currency,
-                        :limit
+                        :limit,
+                        :operator,
+                        :snapshot_hash
                       ])
 
   @doc """
