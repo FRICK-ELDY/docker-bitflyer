@@ -131,7 +131,7 @@ defmodule Bitflyer.System do
   end
 
   @doc """
-  発注意図の risk 認可（fail-closed）。
+  発注意図の risk 認可（fail-closed）。成功時は `Risk.AuthorizedOrder`。
   """
   def authorize_order(command, opts \\ []) do
     Bitflyer.Risk.authorize(command, opts)
@@ -140,9 +140,26 @@ defmodule Bitflyer.System do
   @doc """
   risk 認可のあと order-executor へ渡す（モード別出口・冪等）。
 
-  risk は常に必須。`OrderExecutor.submit/2` 経由でもスキップできない。
+  raw map はここで必ず `Risk.authorize/2` を通る。Executor は `AuthorizedOrder` のみ受け付ける。
+  `prep_stop` 後（InFlight closed）は認可前に `:shutting_down` を返す。
+  live では認可前に未反映約定を同期する（建玉検査が遅れないようにする）。
   """
-  def submit_order(command, opts \\ []) do
-    Bitflyer.OrderExecutor.submit(command, opts)
+  def submit_order(command, opts \\ []) when is_map(command) do
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+    opts = Keyword.put(opts, :trade_mode, trade_mode)
+
+    with :ok <- reject_if_order_gate_closed(),
+         :ok <- Bitflyer.OrderExecutor.sync_live_fills_before_authorize(trade_mode, opts),
+         {:ok, authorized} <- Bitflyer.Risk.authorize(command, opts) do
+      Bitflyer.OrderExecutor.submit(authorized, opts)
+    end
+  end
+
+  defp reject_if_order_gate_closed do
+    if Bitflyer.OrderExecutor.InFlight.closed?() do
+      {:error, :shutting_down, %{reason: :inflight_closed}}
+    else
+      :ok
+    end
   end
 end

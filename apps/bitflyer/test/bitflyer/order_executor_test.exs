@@ -12,6 +12,7 @@ defmodule Bitflyer.OrderExecutorTest do
 
   alias Bitflyer.OrderExecutor
   alias Bitflyer.Readiness
+  alias Bitflyer.System
   alias Bitflyer.Trading.{BalanceSnapshot, Fill, Order, Position, RiskState}
 
   @market_key {:ticker, "FX_BTC_JPY"}
@@ -149,7 +150,7 @@ defmodule Bitflyer.OrderExecutorTest do
     put_fresh_market()
 
     assert {:ok, %Order{status: :pending, trade_mode: :dry_run} = order} =
-             OrderExecutor.submit(valid_command("dry-1"),
+             System.submit_order(valid_command("dry-1"),
                positions: [],
                trade_mode: :dry_run
              )
@@ -173,7 +174,7 @@ defmodule Bitflyer.OrderExecutorTest do
     seed_paper_balance!("BTC", "0")
 
     assert {:ok, %Order{status: :filled, trade_mode: :paper, filled_size: filled, price: price}} =
-             OrderExecutor.submit(valid_command("paper-1"),
+             System.submit_order(valid_command("paper-1"),
                positions: [],
                trade_mode: :paper
              )
@@ -221,7 +222,7 @@ defmodule Bitflyer.OrderExecutorTest do
     seed_paper_balance!("BTC", "0")
 
     assert {:ok, %Order{status: :filled, price: price}} =
-             OrderExecutor.submit(valid_command("paper-fee-1"),
+             System.submit_order(valid_command("paper-fee-1"),
                positions: [],
                trade_mode: :paper
              )
@@ -260,7 +261,7 @@ defmodule Bitflyer.OrderExecutorTest do
     seed_paper_balance!("BTC", "0")
 
     assert {:error, :limit_exceeded, %{limit: :insufficient_balance}} =
-             OrderExecutor.submit(valid_command("paper-reserve-1"),
+             System.submit_order(valid_command("paper-reserve-1"),
                positions: [],
                trade_mode: :paper
              )
@@ -282,7 +283,7 @@ defmodule Bitflyer.OrderExecutorTest do
     seed_paper_balance!("JPY", "1000000")
 
     assert {:ok, %Order{status: :filled, price: price}} =
-             OrderExecutor.submit(
+             System.submit_order(
                valid_command("paper-limit-fee", %{
                  order_type: :limit,
                  price: Decimal.new("5100000"),
@@ -313,13 +314,13 @@ defmodule Bitflyer.OrderExecutorTest do
     seed_paper_balance!("BTC", "0")
 
     assert {:ok, %Order{status: :filled}} =
-             OrderExecutor.submit(valid_command("paper-rt-buy", %{side: :buy}),
+             System.submit_order(valid_command("paper-rt-buy", %{side: :buy}),
                positions: [],
                trade_mode: :paper
              )
 
     assert {:ok, %Order{status: :filled}} =
-             OrderExecutor.submit(valid_command("paper-rt-sell", %{side: :sell}),
+             System.submit_order(valid_command("paper-rt-sell", %{side: :sell}),
                positions: [],
                trade_mode: :paper
              )
@@ -346,7 +347,7 @@ defmodule Bitflyer.OrderExecutorTest do
     seed_paper_balance!("JPY", "1000000")
 
     assert {:ok, %Order{status: :filled}} =
-             OrderExecutor.submit(
+             System.submit_order(
                valid_command("paper-limit-cross", %{
                  order_type: :limit,
                  price: Decimal.new("5100000"),
@@ -379,7 +380,7 @@ defmodule Bitflyer.OrderExecutorTest do
              |> Ash.read()
 
     assert {:ok, %Order{status: :pending}} =
-             OrderExecutor.submit(
+             System.submit_order(
                valid_command("paper-limit-open", %{
                  order_type: :limit,
                  price: Decimal.new("4900000"),
@@ -413,7 +414,7 @@ defmodule Bitflyer.OrderExecutorTest do
       1..2
       |> Enum.map(fn i ->
         Task.async(fn ->
-          OrderExecutor.submit(valid_command("paper-concurrent-#{i}"),
+          System.submit_order(valid_command("paper-concurrent-#{i}"),
             positions: [],
             trade_mode: :paper
           )
@@ -452,14 +453,14 @@ defmodule Bitflyer.OrderExecutorTest do
     results =
       [
         Task.async(fn ->
-          OrderExecutor.submit(
+          System.submit_order(
             valid_command("paper-deadlock-buy", %{side: :buy}),
             positions: [],
             trade_mode: :paper
           )
         end),
         Task.async(fn ->
-          OrderExecutor.submit(
+          System.submit_order(
             valid_command("paper-deadlock-sell", %{side: :sell}),
             positions: [],
             trade_mode: :paper
@@ -495,10 +496,10 @@ defmodule Bitflyer.OrderExecutorTest do
     put_fresh_market()
 
     assert {:ok, %Order{}} =
-             OrderExecutor.submit(valid_command("idem-1"), positions: [], trade_mode: :dry_run)
+             System.submit_order(valid_command("idem-1"), positions: [], trade_mode: :dry_run)
 
     assert {:ok, %Order{internal_order_id: "idem-1"}, :idempotent} =
-             OrderExecutor.submit(valid_command("idem-1"), positions: [], trade_mode: :dry_run)
+             System.submit_order(valid_command("idem-1"), positions: [], trade_mode: :dry_run)
 
     assert SpyExchange.place_count() == 0
   end
@@ -511,7 +512,7 @@ defmodule Bitflyer.OrderExecutorTest do
     seed_balance_cache!(:live)
 
     assert {:error, :exchange_halted, %{reason: :live_confirm_missing}} =
-             OrderExecutor.submit(valid_command("live-halt-1"),
+             System.submit_order(valid_command("live-halt-1"),
                positions: [],
                trade_mode: :live
              )
@@ -532,7 +533,7 @@ defmodule Bitflyer.OrderExecutorTest do
     seed_balance_cache!(:live)
 
     assert {:ok, %Order{status: :pending, exchange_order_id: "ex-live-ok-1"}} =
-             OrderExecutor.submit(valid_command("live-ok-1"),
+             System.submit_order(valid_command("live-ok-1"),
                positions: [],
                trade_mode: :live
              )
@@ -551,7 +552,7 @@ defmodule Bitflyer.OrderExecutorTest do
     SpyExchange.set_next_result({:error, :timeout})
 
     assert {:error, :submission_unknown, %{reason: :timeout}} =
-             OrderExecutor.submit(valid_command("live-timeout-1"),
+             System.submit_order(valid_command("live-timeout-1"),
                positions: [],
                trade_mode: :live
              )
@@ -574,7 +575,7 @@ defmodule Bitflyer.OrderExecutorTest do
     SpyExchange.set_next_result(:success)
 
     assert {:error, :circuit_open, _} =
-             OrderExecutor.submit(valid_command("live-timeout-2"),
+             System.submit_order(valid_command("live-timeout-2"),
                positions: [],
                trade_mode: :live
              )
@@ -597,7 +598,7 @@ defmodule Bitflyer.OrderExecutorTest do
     SpyExchange.set_next_result({:error, :disconnected})
 
     assert {:error, :submission_unknown, %{reason: :disconnected}} =
-             OrderExecutor.submit(valid_command("live-disc-1"),
+             System.submit_order(valid_command("live-disc-1"),
                positions: [],
                trade_mode: :live
              )
@@ -620,7 +621,7 @@ defmodule Bitflyer.OrderExecutorTest do
     SpyExchange.set_next_result({:error, :rejected_by_exchange})
 
     assert {:error, :exchange_error, %{reason: :rejected_by_exchange}} =
-             OrderExecutor.submit(valid_command("live-rej-1"),
+             System.submit_order(valid_command("live-rej-1"),
                positions: [],
                trade_mode: :live
              )
@@ -637,7 +638,7 @@ defmodule Bitflyer.OrderExecutorTest do
     SpyExchange.set_next_result(:success)
 
     assert {:ok, %Order{status: :pending}} =
-             OrderExecutor.submit(valid_command("live-rej-2"),
+             System.submit_order(valid_command("live-rej-2"),
                positions: [],
                trade_mode: :live
              )
@@ -655,7 +656,7 @@ defmodule Bitflyer.OrderExecutorTest do
     SpyExchange.set_next_result({:error, :auth_failed})
 
     assert {:error, :exchange_error, %{reason: :auth_failed}} =
-             OrderExecutor.submit(valid_command("live-auth-1"),
+             System.submit_order(valid_command("live-auth-1"),
                positions: [],
                trade_mode: :live
              )
@@ -670,7 +671,7 @@ defmodule Bitflyer.OrderExecutorTest do
     SpyExchange.set_next_result(:success)
 
     assert {:error, :circuit_open, _} =
-             OrderExecutor.submit(valid_command("live-auth-2"),
+             System.submit_order(valid_command("live-auth-2"),
                positions: [],
                trade_mode: :live
              )
@@ -704,7 +705,7 @@ defmodule Bitflyer.OrderExecutorTest do
       SpyExchange.set_next_result({:error, :rejected_by_exchange})
 
       assert {:error, :exchange_error, %{reason: :rejected_by_exchange}} =
-               OrderExecutor.submit(valid_command("live-consec-#{i}"),
+               System.submit_order(valid_command("live-consec-#{i}"),
                  positions: [],
                  trade_mode: :live
                )
@@ -715,7 +716,7 @@ defmodule Bitflyer.OrderExecutorTest do
     SpyExchange.set_next_result({:error, :rejected_by_exchange})
 
     assert {:error, :exchange_error, %{reason: :rejected_by_exchange}} =
-             OrderExecutor.submit(valid_command("live-consec-3"),
+             System.submit_order(valid_command("live-consec-3"),
                positions: [],
                trade_mode: :live
              )
@@ -725,7 +726,7 @@ defmodule Bitflyer.OrderExecutorTest do
     SpyExchange.set_next_result(:success)
 
     assert {:error, :circuit_open, _} =
-             OrderExecutor.submit(valid_command("live-consec-4"),
+             System.submit_order(valid_command("live-consec-4"),
                positions: [],
                trade_mode: :live
              )
@@ -749,7 +750,7 @@ defmodule Bitflyer.OrderExecutorTest do
               internal_order_id: "live-persist-1",
               exchange_order_id: "ex-live-persist-1"
             }} =
-             OrderExecutor.submit(valid_command("live-persist-1"),
+             System.submit_order(valid_command("live-persist-1"),
                positions: [],
                trade_mode: :live,
                persist_exchange_order_id: persist_fail
@@ -771,13 +772,13 @@ defmodule Bitflyer.OrderExecutorTest do
 
     # 同一 ID・別 ID ともゲート閉鎖で拒否（再 REST しない）
     assert {:error, :circuit_open, _} =
-             OrderExecutor.submit(valid_command("live-persist-1"),
+             System.submit_order(valid_command("live-persist-1"),
                positions: [],
                trade_mode: :live
              )
 
     assert {:error, :circuit_open, _} =
-             OrderExecutor.submit(valid_command("live-persist-2"),
+             System.submit_order(valid_command("live-persist-2"),
                positions: [],
                trade_mode: :live
              )
@@ -795,7 +796,7 @@ defmodule Bitflyer.OrderExecutorTest do
     assert Readiness.get() == :not_ready
 
     assert {:error, :unsynced, _} =
-             OrderExecutor.submit(valid_command("risk-1"), positions: [], trade_mode: :dry_run)
+             System.submit_order(valid_command("risk-1"), positions: [], trade_mode: :dry_run)
 
     assert {:ok, nil} =
              Order
@@ -805,21 +806,41 @@ defmodule Bitflyer.OrderExecutorTest do
     assert SpyExchange.place_count() == 0
   end
 
-  test "public submit cannot skip risk via authorize?: false" do
+  test "raw command map is rejected by OrderExecutor.submit" do
     Application.put_env(:bitflyer, :trade_mode, :dry_run)
     assert Readiness.get() == :not_ready
 
-    # 旧オプションを渡しても risk は常に実行される（迂回不可）
-    assert {:error, :unsynced, _} =
-             OrderExecutor.submit(valid_command("risk-bypass-1"),
-               positions: [],
-               trade_mode: :dry_run,
-               authorize?: false
-             )
+    assert_raise FunctionClauseError, fn ->
+      OrderExecutor.submit(valid_command("risk-bypass-1"),
+        positions: [],
+        trade_mode: :dry_run
+      )
+    end
 
     assert {:ok, nil} =
              Order
              |> Ash.Query.filter(internal_order_id == "risk-bypass-1")
+             |> Ash.read_one()
+
+    assert SpyExchange.place_count() == 0
+  end
+
+  test "forged AuthorizedOrder cannot bypass risk authorize" do
+    Application.put_env(:bitflyer, :trade_mode, :dry_run)
+    assert Readiness.get() == :not_ready
+
+    forged = %Bitflyer.Risk.AuthorizedOrder{
+      token: make_ref(),
+      command: valid_command("risk-forge-1"),
+      authorized_at_ms: Elixir.System.monotonic_time(:millisecond)
+    }
+
+    assert {:error, :unauthorized, %{reason: :authorization_missing}} =
+             OrderExecutor.submit(forged, positions: [], trade_mode: :dry_run)
+
+    assert {:ok, nil} =
+             Order
+             |> Ash.Query.filter(internal_order_id == "risk-forge-1")
              |> Ash.read_one()
 
     assert SpyExchange.place_count() == 0
@@ -831,7 +852,7 @@ defmodule Bitflyer.OrderExecutorTest do
     put_fresh_market()
 
     assert {:ok, order} =
-             OrderExecutor.submit(valid_command("cancel-dry-1"),
+             System.submit_order(valid_command("cancel-dry-1"),
                positions: [],
                trade_mode: :dry_run
              )
@@ -851,7 +872,7 @@ defmodule Bitflyer.OrderExecutorTest do
     seed_balance_cache!(:live)
 
     assert {:ok, order} =
-             OrderExecutor.submit(valid_command("cancel-live-1"),
+             System.submit_order(valid_command("cancel-live-1"),
                positions: [],
                trade_mode: :live
              )
@@ -871,7 +892,7 @@ defmodule Bitflyer.OrderExecutorTest do
     seed_balance_cache!(:live)
 
     assert {:ok, order} =
-             OrderExecutor.submit(valid_command("cancel-auth-1"),
+             System.submit_order(valid_command("cancel-auth-1"),
                positions: [],
                trade_mode: :live
              )
@@ -882,7 +903,7 @@ defmodule Bitflyer.OrderExecutorTest do
     assert Readiness.get() == {:halted, :auth_failed}
 
     assert {:error, :circuit_open, _} =
-             OrderExecutor.submit(valid_command("cancel-auth-2"),
+             System.submit_order(valid_command("cancel-auth-2"),
                positions: [],
                trade_mode: :live
              )
@@ -912,7 +933,7 @@ defmodule Bitflyer.OrderExecutorTest do
 
     for i <- 1..3 do
       assert {:ok, order} =
-               OrderExecutor.submit(valid_command("cancel-consec-#{i}"),
+               System.submit_order(valid_command("cancel-consec-#{i}"),
                  positions: [],
                  trade_mode: :live
                )
@@ -954,7 +975,7 @@ defmodule Bitflyer.OrderExecutorTest do
 
     for i <- 1..3 do
       assert {:ok, order} =
-               OrderExecutor.submit(valid_command("cancel-notfound-#{i}"),
+               System.submit_order(valid_command("cancel-notfound-#{i}"),
                  positions: [],
                  trade_mode: :live
                )

@@ -10,7 +10,8 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   - live submission 不明（timeout）→ halt・再送禁止
   - live exchange_order_id 永続化失敗 → halt・再送禁止
   - live 空 BalanceSnapshot → baseline missing で halt
-  - 公開 submit は authorize?: false でも risk を迂回できない
+  - raw map / 偽造 AuthorizedOrder は OrderExecutor に通せない
+  - System.submit_order は常に Risk を通す
   - risk limits（価格逸脱・頻度・日次損失・残高）拒否で永続化・REST しない
   - paper/live の Fill→DailyLoss→halt 縦貫通（注入なし）
   """
@@ -29,7 +30,9 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   alias Bitflyer.OrderExecutor
   alias Bitflyer.Readiness
   alias Bitflyer.Risk
+  alias Bitflyer.Risk.AuthorizedOrder
   alias Bitflyer.Startup.{Reconcile, Reconciler}
+  alias Bitflyer.System
   alias Bitflyer.Trading.{Order, Position, RiskState}
 
   @product "FX_BTC_JPY"
@@ -282,10 +285,10 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       seed_paper_balances!()
 
       assert {:ok, %Order{status: :filled}} =
-               OrderExecutor.submit(command("dup-1"), trade_mode: :paper)
+               System.submit_order(command("dup-1"), trade_mode: :paper)
 
       assert {:ok, %Order{internal_order_id: "dup-1"}, :idempotent} =
-               OrderExecutor.submit(command("dup-1"), trade_mode: :paper)
+               System.submit_order(command("dup-1"), trade_mode: :paper)
 
       assert SpyExchange.place_count() == 0
 
@@ -322,7 +325,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       seed_paper_balances!()
 
       assert {:ok, %Order{status: :filled, trade_mode: :paper}} =
-               OrderExecutor.submit(command("iso-paper-1"), trade_mode: :paper)
+               System.submit_order(command("iso-paper-1"), trade_mode: :paper)
 
       assert SpyExchange.place_count() == 0
 
@@ -365,14 +368,14 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       }
 
       # live 建玉を見ると超えるが、paper は空なので通る
-      assert :ok =
+      assert {:ok, %AuthorizedOrder{}} =
                Risk.authorize(command("iso-risk-1"),
                  trade_mode: :paper,
                  limits: limits
                )
 
       assert {:ok, %Order{}} =
-               OrderExecutor.submit(command("iso-risk-1"),
+               System.submit_order(command("iso-risk-1"),
                  trade_mode: :paper,
                  limits: limits
                )
@@ -391,7 +394,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       put_fresh_market()
 
       assert {:error, :circuit_open, %{readiness: :reconcile_mismatch}} =
-               OrderExecutor.submit(command("halt-1"), trade_mode: :live)
+               System.submit_order(command("halt-1"), trade_mode: :live)
 
       assert SpyExchange.place_count() == 0
 
@@ -415,7 +418,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       put_fresh_market()
 
       assert {:error, :circuit_open, _} =
-               OrderExecutor.submit(command("baseline-1"), trade_mode: :live)
+               System.submit_order(command("baseline-1"), trade_mode: :live)
 
       assert SpyExchange.place_count() == 0
     end
@@ -440,7 +443,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       put_fresh_market()
 
       assert {:error, :circuit_open, _} =
-               OrderExecutor.submit(command("halt-persist-1"), trade_mode: :dry_run)
+               System.submit_order(command("halt-persist-1"), trade_mode: :dry_run)
 
       assert {:ok, nil} =
                Order
@@ -458,7 +461,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert Cache.put(@market_key, %{ltp: Decimal.new("1")}, received_at: now - 60_000) == :ok
 
       assert {:error, :stale, _} =
-               OrderExecutor.submit(command("stale-1"), trade_mode: :dry_run, now: now)
+               System.submit_order(command("stale-1"), trade_mode: :dry_run, now: now)
 
       assert SpyExchange.place_count() == 0
 
@@ -480,7 +483,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       }
 
       assert {:error, :limit_exceeded, %{limit: :max_order_size}} =
-               OrderExecutor.submit(command("limit-1"),
+               System.submit_order(command("limit-1"),
                  trade_mode: :dry_run,
                  limits: limits,
                  positions: []
@@ -502,7 +505,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert :ok = Risk.open_circuit(:limit_exceeded)
 
       assert {:error, :circuit_open, _} =
-               OrderExecutor.submit(command("circuit-1"),
+               System.submit_order(command("circuit-1"),
                  trade_mode: :dry_run,
                  positions: []
                )
@@ -511,16 +514,13 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert Readiness.get() == {:halted, :limit_exceeded}
     end
 
-    test "authorize?: false cannot bypass risk on public submit" do
+    test "raw command map cannot call OrderExecutor.submit" do
       Application.put_env(:bitflyer, :trade_mode, :dry_run)
       assert Readiness.get() == :not_ready
 
-      assert {:error, :unsynced, _} =
-               OrderExecutor.submit(command("bypass-1"),
-                 trade_mode: :dry_run,
-                 positions: [],
-                 authorize?: false
-               )
+      assert_raise FunctionClauseError, fn ->
+        OrderExecutor.submit(command("bypass-1"), trade_mode: :dry_run, positions: [])
+      end
 
       assert SpyExchange.place_count() == 0
 
@@ -530,13 +530,52 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
                |> Ash.read_one()
     end
 
+    test "forged AuthorizedOrder cannot bypass risk" do
+      Application.put_env(:bitflyer, :trade_mode, :dry_run)
+      assert Readiness.get() == :not_ready
+
+      forged = %AuthorizedOrder{
+        token: make_ref(),
+        command: command("bypass-forge-1"),
+        authorized_at_ms: Elixir.System.monotonic_time(:millisecond)
+      }
+
+      assert {:error, :unauthorized, %{reason: :authorization_missing}} =
+               OrderExecutor.submit(forged, trade_mode: :dry_run, positions: [])
+
+      assert SpyExchange.place_count() == 0
+
+      assert {:ok, nil} =
+               Order
+               |> Ash.Query.filter(internal_order_id == "bypass-forge-1")
+               |> Ash.read_one()
+    end
+
+    test "System.submit_order always runs risk authorize" do
+      Application.put_env(:bitflyer, :trade_mode, :dry_run)
+      assert Readiness.get() == :not_ready
+
+      assert {:error, :unsynced, _} =
+               System.submit_order(command("bypass-sys-1"),
+                 trade_mode: :dry_run,
+                 positions: []
+               )
+
+      assert SpyExchange.place_count() == 0
+
+      assert {:ok, nil} =
+               Order
+               |> Ash.Query.filter(internal_order_id == "bypass-sys-1")
+               |> Ash.read_one()
+    end
+
     test "price deviation rejects submit without persistence" do
       Application.put_env(:bitflyer, :trade_mode, :dry_run)
       assert Readiness.mark_ready() == :ok
       put_fresh_market()
 
       assert {:error, :limit_exceeded, %{limit: :max_price_deviation_pct}} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("dev-1", %{
                    order_type: :limit,
                    price: Decimal.new("5200000")
@@ -560,7 +599,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       put_fresh_market()
 
       assert {:error, :limit_exceeded, %{limit: :max_orders_per_minute}} =
-               OrderExecutor.submit(command("rate-1"),
+               System.submit_order(command("rate-1"),
                  trade_mode: :dry_run,
                  positions: [],
                  recent_order_count: 5,
@@ -581,7 +620,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       put_fresh_market()
 
       assert {:error, :limit_exceeded, %{limit: :max_daily_loss}} =
-               OrderExecutor.submit(command("loss-1"),
+               System.submit_order(command("loss-1"),
                  trade_mode: :dry_run,
                  positions: [],
                  daily_loss: Decimal.new("200000"),
@@ -597,7 +636,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
                |> Ash.read_one()
 
       assert {:error, :circuit_open, _} =
-               OrderExecutor.submit(command("loss-2"), trade_mode: :dry_run, positions: [])
+               System.submit_order(command("loss-2"), trade_mode: :dry_run, positions: [])
 
       assert SpyExchange.place_count() == 0
     end
@@ -610,7 +649,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
       # 建玉 0.1 @ 5M。決済 0.1 @ 3.999M → 実現損 100_100 > 100_000
       assert {:ok, %Order{status: :filled}} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("paper-loss-open", %{size: Decimal.new("0.1")}),
                  trade_mode: :paper,
                  limits: %{
@@ -622,7 +661,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       put_fresh_market(Decimal.new("3999000"))
 
       assert {:ok, %Order{status: :filled}} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("paper-loss-close", %{side: :sell, size: Decimal.new("0.1")}),
                  trade_mode: :paper,
                  limits: %{
@@ -637,7 +676,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       put_fresh_market(Decimal.new("5000000"))
 
       assert {:error, :limit_exceeded, %{limit: :max_daily_loss}} =
-               OrderExecutor.submit(command("paper-loss-next"),
+               System.submit_order(command("paper-loss-next"),
                  trade_mode: :paper,
                  limits: %{max_daily_loss: Decimal.new("100000")}
                )
@@ -714,7 +753,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert Decimal.gt?(loss, Decimal.new("100000"))
 
       assert {:error, :limit_exceeded, %{limit: :max_daily_loss}} =
-               OrderExecutor.submit(command("live-loss-next"),
+               System.submit_order(command("live-loss-next"),
                  trade_mode: :live,
                  positions: [],
                  exchange: LossFillExchange,
@@ -732,7 +771,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       seed_balance_cache!(:paper, %{"JPY" => Decimal.new("1"), "BTC" => Decimal.new("0")})
 
       assert {:error, :limit_exceeded, %{limit: :insufficient_balance}} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("bal-1", %{
                    order_type: :limit,
                    price: Decimal.new("5000000")
@@ -756,7 +795,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert :ok = Bitflyer.Risk.BalanceCache.mark_unsynced(:paper)
 
       assert {:error, :unsynced, %{reason: :balance_unsynced}} =
-               OrderExecutor.submit(command("bal-unsynced-1"),
+               System.submit_order(command("bal-unsynced-1"),
                  trade_mode: :paper,
                  positions: []
                )
@@ -780,7 +819,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       })
 
       assert {:ok, %Order{status: :filled}} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("paper-bal-1", %{
                    order_type: :limit,
                    price: Decimal.new("5000000"),
@@ -794,7 +833,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert Decimal.equal?(balances["JPY"], Decimal.new("10000"))
 
       assert {:error, :limit_exceeded, %{limit: :insufficient_balance}} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("paper-bal-2", %{
                    order_type: :limit,
                    price: Decimal.new("5000000"),
@@ -819,7 +858,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
       # LTP 未交差の指値 → pending + hold 49_000
       assert {:ok, %Order{status: :pending} = pending} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("paper-pend-a", %{
                    order_type: :limit,
                    price: Decimal.new("4900000"),
@@ -834,7 +873,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
       # 別注文が fill → Snapshot reload。pending hold は再適用される
       assert {:ok, %Order{status: :filled}} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("paper-fill-b", %{
                    order_type: :limit,
                    price: Decimal.new("5000000"),
@@ -866,7 +905,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       })
 
       assert {:ok, %Order{status: :pending}} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("live-reserve-1", %{
                    order_type: :limit,
                    price: Decimal.new("5000000"),
@@ -882,7 +921,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert Decimal.equal?(balances["JPY"], Decimal.new("10000"))
 
       assert {:error, :limit_exceeded, %{limit: :insufficient_balance}} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("live-reserve-2", %{
                    order_type: :limit,
                    price: Decimal.new("5000000"),
@@ -907,7 +946,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       })
 
       assert {:ok, order} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("live-mkt-cancel-1", %{
                    order_type: :market,
                    size: Decimal.new("0.01")
@@ -940,7 +979,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       })
 
       assert {:ok, order} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("live-partial-1", %{
                    order_type: :limit,
                    price: Decimal.new("5000000"),
@@ -985,7 +1024,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       })
 
       assert {:ok, order} =
-               OrderExecutor.submit(
+               System.submit_order(
                  command("live-open-cancel-1", %{
                    order_type: :limit,
                    price: Decimal.new("5000000"),
@@ -1069,7 +1108,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       seed_balance_cache!(:live)
 
       assert {:error, :submission_unknown, %{reason: :timeout}} =
-               OrderExecutor.submit(command("unknown-1"),
+               System.submit_order(command("unknown-1"),
                  trade_mode: :live,
                  positions: []
                )
@@ -1084,7 +1123,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert Readiness.get() == {:halted, :submission_unknown}
 
       assert {:error, :circuit_open, _} =
-               OrderExecutor.submit(command("unknown-2"),
+               System.submit_order(command("unknown-2"),
                  trade_mode: :live,
                  positions: []
                )
@@ -1109,7 +1148,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       persist_fail = fn _order, _id -> {:error, :forced_persist_failure} end
 
       assert {:error, :persist_failed, %{exchange_order_id: "ex-persist-halt-1"}} =
-               OrderExecutor.submit(command("persist-halt-1"),
+               System.submit_order(command("persist-halt-1"),
                  trade_mode: :live,
                  positions: [],
                  persist_exchange_order_id: persist_fail
@@ -1119,7 +1158,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert Readiness.get() == {:halted, :persist_failed}
 
       assert {:error, :circuit_open, _} =
-               OrderExecutor.submit(command("persist-halt-2"),
+               System.submit_order(command("persist-halt-2"),
                  trade_mode: :live,
                  positions: []
                )

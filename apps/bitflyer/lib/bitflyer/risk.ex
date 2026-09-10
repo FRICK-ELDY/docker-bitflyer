@@ -16,7 +16,7 @@ defmodule Bitflyer.Risk do
   require Ash.Query
 
   alias Bitflyer.MarketData.Cache
-  alias Bitflyer.Risk.{BalanceCache, Circuit, DailyLoss, Limits, OrderRate}
+  alias Bitflyer.Risk.{AuthorizedOrder, BalanceCache, Circuit, DailyLoss, Limits, OrderRate}
   alias Bitflyer.Trading.{Position, Product}
 
   @type rejection_code ::
@@ -28,16 +28,17 @@ defmodule Bitflyer.Risk do
           | :limit_exceeded
           | :invalid_fill_pricing
 
-  @type result :: :ok | {:error, rejection_code(), map()}
+  @type result :: {:ok, AuthorizedOrder.t()} | {:error, rejection_code(), map()}
 
   @doc """
-  発注意図を認可する。失敗時は `{:error, code, meta}`。
+  発注意図を認可する。成功時は `AuthorizedOrder`、失敗時は `{:error, code, meta}`。
 
   ## Options
   - `:readiness` — 既定 `Bitflyer.Readiness`
   - `:limits` — 上限上書き（`Limits.normalize/1` される）
   - `:positions` — 建玉リスト（未指定時は DB から当該銘柄を読む）
   - `:now` / `:server` — Cache.fresh?/3・LTP 取得へ転送
+  - `:authorized_order_server` — `AuthorizedOrder` GenServer（Cache の `:server` とは別）
   - `:now_utc` — 時計ずれ検査用の壁時計（既定 `DateTime.utc_now/0`）
   - `:check_persisted_circuit` — 既定 false。true のとき Ready でも RiskState を見る
   - `:recent_order_count` — 直近 1 分の発注件数（テスト注入。未指定時は OrderRate ETS）
@@ -68,12 +69,18 @@ defmodule Bitflyer.Risk do
 
     case result do
       :ok ->
-        :ok
+        {:ok, mint_authorized_order(command, opts)}
 
       {:error, code, meta} = error ->
         emit_rejected(command, code, meta)
         error
     end
+  end
+
+  defp mint_authorized_order(command, opts) do
+    server = Keyword.get(opts, :authorized_order_server, AuthorizedOrder)
+    mint_opts = Keyword.take(opts, [:now_ms])
+    GenServer.call(server, {:mint, command, mint_opts})
   end
 
   @doc """
