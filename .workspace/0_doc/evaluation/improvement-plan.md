@@ -1,17 +1,17 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-10  
-根拠: [evaluation-2026-09-10.md](./evaluation-2026-09-10.md) / [specific-weaknesses-2026-09-10.md](./specific-weaknesses-2026-09-10.md)
+最終更新: 2026-09-10_2  
+根拠: [evaluation-2026-09-10_2.md](./evaluation-2026-09-10_2.md) / [specific-weaknesses-2026-09-10_2.md](./specific-weaknesses-2026-09-10_2.md)
 
 方針: **利益機能より資金保全・復帰・観測を先に直す。** live 実発注は下記 P0 の完了まで禁止。戦略の高度化は縦貫通の安全化の後。
 
 ---
 
-## 消化済み（2026-09-09 計画の大半）
+## 消化済み（2026-09-10 計画 → コード確認）
 
-前回計画の P0 #1–#4、P1 全般、P2 全般、P3 #15–#19（UI 認証、API キー枠、本番 release、Exchange.Rest、deps audit）はコード上で解決済み。再掲しない。
+前回計画の P0 #1–#5、P1 #6–#10、P2 #11–#15、P3 #16–#19 は**部品として**コード再読で確認した（DailyLoss/BalanceCache 接続、両建て net、LiveSafety、Decode 数値 strict、baseline/recover、FailureRate/stall/InFlight、metrics/permissions/OrderRate warm/CD、FillPricing/AuthorizedOrder/kill、残骸削除）。再掲しない。
 
-**未消化として持ち越すもの:** なし（旧 P0 #5 の Decode strict まで解決済み）。
+**ただし「済」＝ live 解禁ではない。** 今回の評価で、部分約定価格・FX 証拠金・Decode 構造 skip が新たに P0 へ上がった。
 
 ---
 
@@ -19,23 +19,23 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 1 | ~~日次損失の実効化~~ **済** | Fill 正本 + invalidate→reload fail-closed。突合/resume で再同期。縦貫通回帰あり。含み損はスコープ外（実現のみ） | live/paper で Fill→DailyLoss→halt が緑。README risk 行を partial に正直化 |
-| 2 | ~~残高検査の実効化~~ **済** | ETS + invalidate/reload（paper、残 hold 再適用）+ `reserve(hold_id)` / 部分約定 `consume_*` / `release_hold` 残額返却 + 突合一致時 exchange `put(clear_holds)`。baseline 更新は P1 #6 | pending+別 fill・部分約定 cancel・market 取消 LTP 差分などが緑 |
-| 3 | ~~両建て建玉突合~~ **済** | 外部 `{product_code,side}` を突合前に net（buy−sell）正規化。順序反転 fixture で Ready/halt が一致 | buy+sell 並存でも片側上書きせず、ネット一致時 Ready・片脚一致のみは mismatch |
-| 4 | ~~live 既定の安全化~~ **済** | live で Strategy 既定 enabled: false（BITFLYER_STRATEGY_ENABLED=true のみ有効）。FixedOnce 有効化は起動拒否＋evaluate 空。Risk 5 上限は環境変数必須 | live+confirm だけでは意図も開発上限も載らない |
-| 5 | ~~Decode strict 化~~ **済** | 不正・欠損・NaN/Inf を 0 に丸めず :invalid_number で snapshot 失敗 → reconcile halt。構造欠落行は skip | NaN/null fixture と Reconciler halt が緑 |
+| 1 | 部分約定の増分価格 | Order に `filled_notional`（または同等）を持ち、`incremental = remote_avg×remote_filled − local_notional` で差分価格を算出。または `getexecutions` を execution ID 単位で Fill 化し `(trade_mode, exchange_execution_id)` unique。2回以上の部分約定・途中決済の縦貫通テスト | 連続部分約定でも Position VWAP / realized_pnl / DailyLoss が取引所と一致 |
+| 2 | FX 証拠金 or spot 限定 | **A:** `getcollateral`（必要なら accounts）を正本にし、必要証拠金・維持率ゲート。売りでスポット BTC を要求しない。**B:** live 対象を `BTC_JPY` 等 spot に限定し README/config を一致 | FX live なら collateral 経路が緑。spot 限定なら既定プロダクトが spot |
+| 3 | Decode 構造 fail-closed | private snapshot の未知 side・識別子欠落を `:skip` せず snapshot 全体失敗 → reconcile halt。skip は明示 allowlist のみ | 未知 side fixture で Ready にならず halt |
+| 4 | OrderRate 原子的予約 | authorize 時に reserve、成功 commit / 失敗 release。並行 `submit_order` で上限超過できないテスト | 並行 N 認可でも per-minute を超えない |
+| 5 | live fill 同期の整理 | 認可前 sync と `do_submit` 内 sync を一方に統一。post-place sync 失敗は not_ready/halt または「同期待ち」を成功と分離。最小間隔/クライアント側レート制限 | 1発注あたりの private REST が過剰にならず、同期失敗で盲目継続しない |
 
 ---
 
-## P1 — 停止からの出口と自己修復
+## P1 — 停止からの出口と自己修復の締め
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 6 | ~~baseline 初回 import~~ **済** | 承認付き `mix bitflyer.baseline` / `Release.import_baseline`。`BaselineImport` に snapshot hash・操作者。confirm しても Ready にせず、通常突合成功時のみ Ready。live は baseline 非更新のまま | 空 DB から人手 SQL なしで baseline 作成可 |
-| 7 | ~~submission_unknown 回収~~ **済** | 時刻窓+side+size の `list_child_orders` 照合。一意時は hash 承認で ID 埋込、曖昧は `--exchange-order-id`、不在は `--absent`。`mix bitflyer.recover` / `Release.recover_submission`。Ready にせず resume 手順を prod.md に記載 | unknown から resume できる手順が prod.md にある |
-| 8 | ~~連続障害・auth サーキット~~ **済** | 401/403 → `:auth_failed` 即 halt。その他確定拒否は `FailureRate` 窓内 N 回で `:consecutive_exchange_errors` | 鍵違いで盲目 rejected 連発しない |
-| 9 | ~~WS サイレントストール watchdog~~ **済** | Feed が最終フレームから `stall_timeout_ms`（未設定時は鮮度窓×3）無通信なら `:stale_watchdog` で socket 切断→既存再接続 | 無言接続が人手なしで回復する |
-| 10 | ~~in-flight drain~~ **済** | `InFlight` で submit/cancel を追跡。`prep_stop` はゲート閉鎖→drain（既定 10s）。timeout 時は pending を `submission_unknown` + halt。ID 埋込時は pending に整合 | 競合テストで不明状態が増えない |
+| 6 | BalanceCache.load_latest | `DISTINCT ON` または通貨ごと `limit(1)`。全件読を廃止 | 突合周期で全表スキャンしない |
+| 7 | FailureRate 再起動復元 | rejected Order 窓から warm、または RiskState 補助。失敗時は fail-closed 方針を明示 | クラッシュループで連続障害カウントが消えない |
+| 8 | Fill 証跡 | `exchange_execution_id` 書込 + unique、`filled_at` は取引所時刻優先、可能なら Order FK | 同一 execution の二重 Fill を DB が拒否 |
+| 9 | Status / ready 統一 | Feed 接続を OperationalStatus の orders gate に含め、Health と同一 classifier | 切断直後に ALLOWED と ready が矛盾しない |
+| 10 | 未約定期限 / halt cancel-all | open age・TIF・理由別全取消ポリシーを文書化のうえ実装 | halt 後に放置 open が残らない運用が可能 |
 
 ---
 
@@ -43,11 +43,11 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 11 | ~~本番 metrics 消費者~~ **済** | prod 既定で `ConsoleReporter`（低頻度ドメインのみ）。BasicAuth 配下 `/ops/dashboard`（Ecto/RequestLogger オフ）。Prometheus は後続 | 率・推移が本番で見える |
-| 12 | ~~source timestamp / clock skew / permissions~~ **済** | Normalize が `source_timestamp` を保持。Risk に skew ゲート。live 起動で `getpermissions` 出金禁止＋ticker 時刻検査 | live 起動時に権限・時刻で halt できる |
-| 13 | ~~OrderRate の再起動復元~~ **済** | 起動時 / `warm_from_db` で直近 1 分の Order を ETS に温める（壁時計→monotonic）。`:duplicate_bag` で同一 ms も計上 | クラッシュ直後に頻度上限を回避できない |
-| 14 | ~~CD↔CI 結合~~ **済** | CD が対象 SHA の**最新** `ci.yml`（workflow 全体）success を必須化。CI に `Dockerfile.prod` ビルド検証（push なし） | 赤のまま配布しない |
-| 15 | ~~戦略パラメータ履歴~~ **済** | `StrategyParameterRevision` + Order に revision_id / module / command_hash。Runner 起動時に ensure（同 hash 再利用） | どの設定が注文を生んだか追える |
+| 11 | 含み損 / equity ゲート | realized+unrealized（または collateral 評価）の第2閾値。stale 時方針を明示 | 建玉持ち越しでもドローダウンで止まる |
+| 12 | 外部監視 | 別ホストからの `/health/ready`、ホスト exporter、通知 heartbeat。prod.md に具体構成 | 同一ホスト死を外部が検知できる |
+| 13 | Status 情報密度 | 建玉・未約定・当日損益・halt 解消手順を StatusLive に | 運用画面だけで exposure が分かる |
+| 14 | 実 API contract / Game Day | read-only 契約ジョブ、匿名レスポンス corpus、最小ロット段階解禁の記録 | fixture 以外の意味論検証がある |
+| 15 | deps.audit ゲート分離 | advisory 検出時のみ fail。Actions SHA pin / Dependabot | 既知脆弱性で配布が止まらない状態を解消 |
 
 ---
 
@@ -55,20 +55,18 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 16 | ~~paper 手数料・スリッページ~~ **済** | `FillPricing`: 成行 LTP±(slip+fee)、指値は fee のみ。buy 拘束も同価格。不正 bps は fail-closed | paper 損益が過大楽観にならない |
-| 17 | ~~AuthorizedOrder 型~~ **済** | Risk 成功時のみ ETS ワンショット発行。`consume` 必須。公開 `new!` なし | 偽造・再利用・TTL 超過で拒否。境界テスト緑 |
-| 18 | ~~Kill switch / StatusLive resume~~ **済** | StatusLive + `mix bitflyer.halt` / `System.halt_trading`。halt 中に resume・reconcile。操作者は BasicAuth username | UI から即 halt・再突合・復帰できる |
-| 19 | ~~残骸棚卸し~~ **済** | Heartbeat 削除・System 通常化・Layouts 運用ヘッダ・PageController/Mailer/swoosh 削除 | ノイズが減る |
-
+| 16 | 板・流動性ゲート | ticker bid/ask → 後に board sequence | 異常 spread で成行を拒否 |
+| 17 | データ保持方針 | fills/snapshots の retention または「当面なし」の文書化 + compact タスク | 24/365 で表肥大の判断基準がある |
+| 18 | Prometheus / SLO | 時系列蓄積、カーディナリティ抑制 | 率・推移がホスト外で追える |
+| 19 | 軽微負債一括 | websockex 移行方針、生 Ecto balances コメント、Sandbox mode、ash.codegen check 等 | 繰り返し指摘が消える |
 
 ---
 
 ## 意図的に後回し（提案のみ）
 
-- 戦略アルゴリズムの高度化・パラメータ UI
+- 戦略アルゴリズムの高度化・パラメータ UI・revision canary
 - 板の本格購読・プロパティ / モデルベース試験の本格導入
-- paper Game Day、SBOM / 署名、SLO 数値の精緻化
-- 裁量向け UI、複数取引所、ML 基盤
+- SBOM / 署名、裁量向け UI、複数取引所、ML 基盤
 
 ---
 
@@ -76,8 +74,7 @@
 
 | 改善 | 既存文書 |
 |:---|:---|
-| P2 Discord（前回） | 実装済み（アダプタ） |
-| P3 release（前回） | [03-cd-prod-host.md](../../3_archive/03-cd-prod-host.md)（完了） |
 | paper 厚み | `.workspace/1_backlog/paper-trade-adapter.md` |
+| 本番 CD | [03-cd-prod-host.md](../../3_archive/03-cd-prod-host.md)（完了） |
 
 次回評価では、本計画の **P0** がコード上で解決済みかを対象ファイルの再読で確認する。P0 未完了のまま live 実発注を進めた場合は重大減点とする。
