@@ -113,6 +113,9 @@ defmodule Bitflyer.Startup.Reconcile do
       "exchange_unavailable" -> :exchange_unavailable
       "invalid_exchange_payload" -> :invalid_exchange_payload
       "risk_halted" -> :risk_halted
+      "auth_failed" -> :auth_failed
+      "consecutive_exchange_errors" -> :consecutive_exchange_errors
+      "submission_unknown" -> :submission_unknown
       _ -> :risk_halted
     end
   end

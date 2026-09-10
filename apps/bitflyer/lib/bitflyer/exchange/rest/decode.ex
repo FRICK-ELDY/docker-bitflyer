@@ -255,9 +255,10 @@ defmodule Bitflyer.Exchange.Rest.Decode do
     lowered = String.downcase(to_string(message))
 
     cond do
+      status in [401, 403] -> :auth_failed
+      status == 429 -> :rate_limited
       String.contains?(lowered, "insufficient") -> :insufficient_funds
       String.contains?(lowered, "invalid") -> :invalid_order
-      status == 401 or status == 403 -> :rejected_by_exchange
       true -> :rejected_by_exchange
     end
   end

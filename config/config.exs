@@ -51,7 +51,9 @@ config :bitflyer, Bitflyer.Risk,
   market_data_max_age_ms: 5_000,
   max_daily_loss: "100000",
   max_orders_per_minute: 20,
-  max_price_deviation_pct: "2"
+  max_price_deviation_pct: "2",
+  exchange_error_window_ms: 60_000,
+  max_exchange_errors_per_window: 5
 
 # Discord Incoming Webhook（未設定なら通知を送らず起動する）
 config :bitflyer, Bitflyer.Observe.Discord,
