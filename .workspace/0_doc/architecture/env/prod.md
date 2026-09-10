@@ -24,6 +24,8 @@
 | UI 認証 | `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` 必須（`:browser` のみ。`/health*` は認証なし） |
 | HTTP bind | 既定 `PHX_HTTP_IP=127.0.0.1`。VLAN 越しに出すときだけ明示変更 |
 | API キー | `BITFLYER_API_KEY` / `BITFLYER_API_SECRET`。`TRADE_MODE=live` 時必須（欠落は起動停止） |
+| Risk 上限 | `BITFLYER_MAX_ORDER_SIZE` / `POSITION_SIZE` / `DAILY_LOSS` / `ORDERS_PER_MINUTE` / `PRICE_DEVIATION_PCT` を明示（開発既定は live で拒否） |
+| Strategy | 既定無効。`BITFLYER_STRATEGY_ENABLED=true` が必要。`FixedOnce` は live で有効化不可 |
 
 ## bitFlyer API キー
 

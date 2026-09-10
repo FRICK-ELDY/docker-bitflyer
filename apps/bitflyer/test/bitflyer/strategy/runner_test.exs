@@ -279,4 +279,30 @@ defmodule Bitflyer.Strategy.RunnerTest do
 
     assert %{params: %{size: "0.02", side: :sell}} = :sys.get_state(Runner)
   end
+
+  test "FixedOnce emits no orders when trade_mode is live" do
+    previous_mode = Application.get_env(:bitflyer, :trade_mode)
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous_mode)
+      Application.put_env(:bitflyer, :live_confirmed, false)
+    end)
+
+    assert Readiness.mark_ready() == :ok
+    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert {:ok, before} = Ash.read(Order)
+
+    assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
+    _ = :sys.get_state(Runner)
+
+    assert {:ok, after_orders} = Ash.read(Order)
+    assert length(after_orders) == length(before)
+
+    assert {:ok, nil} =
+             Order
+             |> Ash.Query.filter(internal_order_id == ^@order_id)
+             |> Ash.read_one()
+  end
 end

@@ -50,6 +50,8 @@
 | `BITFLYER_LIVE_CONFIRM` | `live` 実発注の二重確認。UTC 当日の `YYYY-MM-DD`。未設定・不一致なら発注は halted |
 | `BITFLYER_API_KEY` | Private API key。`TRADE_MODE=live` 時必須。値は Git に入れない |
 | `BITFLYER_API_SECRET` | Private API secret。同上。出金権限付きキーは使わない |
+| `BITFLYER_MAX_ORDER_SIZE` 等 | `live` 時必須の Risk 上限（5 項目）。開発既定は使わない。詳細は `.env.example` |
+| `BITFLYER_STRATEGY_ENABLED` | `live` で戦略を動かすときだけ `true`。既定オフ。`FixedOnce` は不可 |
 
 ## 起動の前提
 

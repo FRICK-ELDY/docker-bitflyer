@@ -152,6 +152,23 @@ if trade_mode == :live and config_env() != :test and bitflyer_api_present? do
   config :bitflyer, exchange_client: Bitflyer.Exchange.Rest
 end
 
+# live（:test 除く）: Strategy 既定無効・FixedOnce 禁止・Risk 上限は環境変数必須。
+# confirm だけでは開発用 FixedOnce 成行や 1BTC 上限が載らないようにする。
+if trade_mode == :live and config_env() != :test do
+  strategy_cfg = Application.get_env(:bitflyer, Bitflyer.Strategy, [])
+  risk_cfg = Application.get_env(:bitflyer, Bitflyer.Risk, [])
+
+  {strategy_cfg, risk_cfg} =
+    Bitflyer.Config.LiveSafety.apply_live_overrides!(
+      strategy_cfg,
+      risk_cfg,
+      &System.get_env/1
+    )
+
+  config :bitflyer, Bitflyer.Strategy, strategy_cfg
+  config :bitflyer, Bitflyer.Risk, risk_cfg
+end
+
 config :bitflyer, Bitflyer.Exchange.Rest,
   base_url: "https://api.bitflyer.com",
   http_client: Bitflyer.Exchange.Rest.HTTP,
