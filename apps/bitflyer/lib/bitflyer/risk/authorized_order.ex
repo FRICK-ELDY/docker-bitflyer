@@ -5,6 +5,8 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
   公開コンストラクタは無い。`OrderExecutor.submit/2` は `consume/1` で
   ワンショット検証し、偽造・再利用・TTL 超過を拒否する。
   未消費の期限切れトークンは周期スイープで ETS から除去する（発注ホットパスでは掃除しない）。
+  ETS は `:protected`（書き込みはオーナーのみ）。クライアント直 `take` のための `:public` 化はしない
+  （任意プロセスの insert で Risk を迂回できるため）。
 
   GenServer 差し替えは `:authorized_order_server`（MarketData Cache の `:server` と衝突させない）。
   """
@@ -66,6 +68,9 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
 
   @impl true
   def init(%{table: table_name}) do
+    # :protected 必須。:public にすると任意プロセスが :ets.insert でき、
+    # Risk.authorize を通さず有効トークンを偽造できる（P3 #17 の境界破壊）。
+    # consume の GenServer 直列化は意図的。本システムの発注頻度ではボトルネックにならない。
     table =
       :ets.new(table_name, [
         :set,
