@@ -23,7 +23,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 
 | コンポーネント | 状態 | メモ |
 | --- | --- | --- |
-| market-data（Feed / Cache / 再接続 / gap-fill） | implemented | ETS 鮮度。stale は risk / `/health/ready` で拒否・検知 |
+| market-data（Feed / Cache / 再接続 / gap-fill） | implemented | ETS 鮮度。stale は risk / `/health/ready` で拒否・検知。無通信は鮮度窓×3（`stall_timeout_ms` 上書き可）で切断→再接続 |
 | strategy（Behaviour / Runner / FixedOnce） | implemented | dry_run/paper の骨。live は既定オフ・FixedOnce 禁止・Risk 上限は env 必須 |
 | risk-manager（limits / circuit / 鮮度） | partial | サイズ・建玉・頻度・価格逸脱は実効。日次損失は Fill/DailyLoss。残高は BalanceCache。401/403 即 halt・窓内連続拒否は FailureRate。含み損は未計上 |
 | order-executor（dry_run / paper / live 出口） | implemented | 冪等キーあり。live 出口はゲート通過時のみ REST |
