@@ -2,14 +2,16 @@ defmodule Bitflyer.OrderExecutor.Paper do
   @moduledoc false
 
   alias Bitflyer.MarketData.Cache
+  alias Bitflyer.OrderExecutor.Paper.FillPricing
   alias Bitflyer.OrderExecutor.{Balances, Positions}
   alias Bitflyer.Trading.Order
 
   @doc """
   取引所 REST を呼ばず、キャッシュ価格で擬似約定し建玉・残高を更新する。
 
-  - market: LTP で即時全量約定
-  - limit: LTP が指値に交差したときだけ約定（未交差は pending のまま）
+  - market: LTP を基準に不利方向へ slippage / fee（bps）を加味して即時全量約定
+  - limit: LTP が指値に交差したときだけ、指値に **fee のみ** を加味して約定（未交差は pending）
+    （スリッページは掛けない。指値より悪い約定価格を避ける）
 
   注文・建玉・残高の更新は同一トランザクションで行い、片側だけ成功しないようにする。
   """
@@ -73,9 +75,10 @@ defmodule Bitflyer.OrderExecutor.Paper do
     end)
   end
 
-  defp decide_fill(%Order{order_type: :market} = _order, command, opts) do
-    with {:ok, ltp} <- fetch_ltp(command, opts) do
-      {:ok, {:fill, ltp}}
+  defp decide_fill(%Order{order_type: :market, side: side} = _order, command, opts) do
+    with {:ok, ltp} <- fetch_ltp(command, opts),
+         {:ok, fill_price} <- FillPricing.effective_price(side, ltp, pricing_opts(opts)) do
+      {:ok, {:fill, fill_price}}
     end
   end
 
@@ -86,7 +89,10 @@ defmodule Bitflyer.OrderExecutor.Paper do
        ) do
     with {:ok, ltp} <- fetch_ltp(command, opts) do
       if limit_crossed?(side, price, ltp) do
-        {:ok, {:fill, price}}
+        case FillPricing.limit_fill_price(side, price, pricing_opts(opts)) do
+          {:ok, fill_price} -> {:ok, {:fill, fill_price}}
+          {:error, _, _} = error -> error
+        end
       else
         {:ok, :leave_pending}
       end
@@ -95,6 +101,10 @@ defmodule Bitflyer.OrderExecutor.Paper do
 
   defp decide_fill(%Order{}, _command, _opts) do
     {:error, :invalid_command, %{field: :price}}
+  end
+
+  defp pricing_opts(opts) do
+    Keyword.take(opts, [:slippage_bps, :fee_bps])
   end
 
   defp limit_crossed?(:buy, limit_price, ltp) do
@@ -149,8 +159,8 @@ defmodule Bitflyer.OrderExecutor.Paper do
     attrs = %{
       status: :filled,
       filled_size: order.size,
-      # limit は指値を維持。market は約定価格を残す
-      price: order.price || fill_price,
+      # paper は Fill/建玉と同じ不利化後価格を Order にも残す
+      price: fill_price,
       exchange_order_id: order.exchange_order_id || "paper:#{order.internal_order_id}"
     }
 

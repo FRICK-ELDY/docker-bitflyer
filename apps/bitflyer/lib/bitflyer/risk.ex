@@ -26,6 +26,7 @@ defmodule Bitflyer.Risk do
           | :stale
           | :clock_skew
           | :limit_exceeded
+          | :invalid_fill_pricing
 
   @type result :: :ok | {:error, rejection_code(), map()}
 
@@ -429,24 +430,39 @@ defmodule Bitflyer.Risk do
 
   defp quote_notional(command, opts) do
     size = Map.fetch!(command, :size)
+    side = Map.fetch!(command, :side)
     order_type = Map.get(command, :order_type, :market)
     price = Map.get(command, :price)
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
 
-    cond do
-      order_type == :limit and match?(%Decimal{}, price) ->
-        {:ok, Decimal.mult(price, size)}
-
-      true ->
-        case fetch_ltp(command, opts) do
-          {:ok, ltp} ->
-            {:ok, Decimal.mult(ltp, size)}
-
-          :miss ->
-            {:error, :stale,
-             %{market_key: Map.fetch!(command, :market_key), reason: :ltp_missing}}
-        end
+    with {:ok, unit_price} <- base_unit_price(order_type, price, command, opts),
+         {:ok, priced} <- paper_unit_price(trade_mode, side, order_type, unit_price) do
+      {:ok, Decimal.mult(priced, size)}
     end
   end
+
+  defp base_unit_price(:limit, %Decimal{} = price, _command, _opts), do: {:ok, price}
+
+  defp base_unit_price(_order_type, _price, command, opts) do
+    case fetch_ltp(command, opts) do
+      {:ok, ltp} ->
+        {:ok, ltp}
+
+      :miss ->
+        {:error, :stale, %{market_key: Map.fetch!(command, :market_key), reason: :ltp_missing}}
+    end
+  end
+
+  # paper 買いの拘束額を不利化後価格に合わせ、reserve < 実効コストを防ぐ
+  defp paper_unit_price(:paper, :buy, :market, unit_price) do
+    Bitflyer.OrderExecutor.Paper.FillPricing.effective_price(:buy, unit_price)
+  end
+
+  defp paper_unit_price(:paper, :buy, :limit, unit_price) do
+    Bitflyer.OrderExecutor.Paper.FillPricing.limit_fill_price(:buy, unit_price)
+  end
+
+  defp paper_unit_price(_trade_mode, _side, _order_type, unit_price), do: {:ok, unit_price}
 
   defp fetch_ltp(command, opts) do
     key = Map.fetch!(command, :market_key)

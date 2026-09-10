@@ -174,6 +174,25 @@ config :bitflyer, Bitflyer.Exchange.Rest,
   http_client: Bitflyer.Exchange.Rest.HTTP,
   receive_timeout: 5_000
 
+# paper 不利化 bps（任意。未設定は config.exs 既定）
+paper_slippage = System.get_env("PAPER_SLIPPAGE_BPS")
+paper_fee = System.get_env("PAPER_FEE_BPS")
+
+if is_binary(paper_slippage) or is_binary(paper_fee) do
+  paper_cfg = Application.get_env(:bitflyer, Bitflyer.OrderExecutor.Paper, [])
+
+  paper_cfg =
+    paper_cfg
+    |> then(fn cfg ->
+      if is_binary(paper_slippage), do: Keyword.put(cfg, :slippage_bps, paper_slippage), else: cfg
+    end)
+    |> then(fn cfg ->
+      if is_binary(paper_fee), do: Keyword.put(cfg, :fee_bps, paper_fee), else: cfg
+    end)
+
+  config :bitflyer, Bitflyer.OrderExecutor.Paper, paper_cfg
+end
+
 discord_webhook =
   case System.get_env("DISCORD_WEBHOOK_URL") do
     url when is_binary(url) ->

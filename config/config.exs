@@ -62,6 +62,11 @@ config :bitflyer, Bitflyer.Risk,
 # 予算: drain ≤10s + 明示 shutdown 子（最大おおよそ 5×5s）≪ Compose stop_grace_period 45s
 config :bitflyer, Bitflyer.OrderExecutor, drain_timeout_ms: 10_000
 
+# paper 擬似約定: LTP/指値を基準に不利方向へ bps を加味（1 bps = 0.01%）
+config :bitflyer, Bitflyer.OrderExecutor.Paper,
+  slippage_bps: "5",
+  fee_bps: "15"
+
 # Discord Incoming Webhook（未設定なら通知を送らず起動する）
 config :bitflyer, Bitflyer.Observe.Discord,
   webhook_url: nil,
