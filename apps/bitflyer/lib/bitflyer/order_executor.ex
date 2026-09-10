@@ -4,6 +4,7 @@ defmodule Bitflyer.OrderExecutor do
 
   `Risk.authorize/2` を通った意図だけを、取引モード別の出口へ送る。
   冪等キーは `internal_order_id`（Order の unique）。
+  停止時は `InFlight` で進行中 submit/cancel を追跡し、`prep_stop` が完了を待つ。
 
   - `dry_run` — 送らず記録のみ（建玉は動かさない）
   - `paper` — 擬似約定 → datastore（取引所 REST は呼ばない）
@@ -14,7 +15,7 @@ defmodule Bitflyer.OrderExecutor do
 
   require Ash.Query
 
-  alias Bitflyer.OrderExecutor.{DryRun, Live, Paper}
+  alias Bitflyer.OrderExecutor.{DryRun, InFlight, Live, Paper}
   alias Bitflyer.Risk
   alias Bitflyer.TradeMode
   alias Bitflyer.Trading.Order
@@ -41,6 +42,26 @@ defmodule Bitflyer.OrderExecutor do
   """
   @spec submit(map(), keyword()) :: result()
   def submit(command, opts \\ []) when is_map(command) do
+    meta = %{
+      kind: :submit,
+      internal_order_id:
+        Map.get(command, :internal_order_id) || Map.get(command, "internal_order_id")
+    }
+
+    case InFlight.track(meta) do
+      {:ok, ref} ->
+        try do
+          do_submit(command, opts)
+        after
+          InFlight.untrack(ref)
+        end
+
+      {:error, :closed} ->
+        {:error, :shutting_down, %{reason: :inflight_closed}}
+    end
+  end
+
+  defp do_submit(command, opts) do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &TradeMode.current/0)
 
     with :ok <- validate_command(command),
@@ -82,6 +103,22 @@ defmodule Bitflyer.OrderExecutor do
   end
 
   def cancel(%Order{} = order, opts) do
+    meta = %{kind: :cancel, internal_order_id: order.internal_order_id}
+
+    case InFlight.track(meta) do
+      {:ok, ref} ->
+        try do
+          do_cancel(order, opts)
+        after
+          InFlight.untrack(ref)
+        end
+
+      {:error, :closed} ->
+        {:error, :shutting_down, %{reason: :inflight_closed}}
+    end
+  end
+
+  defp do_cancel(%Order{} = order, opts) do
     # opts の :trade_mode は無視。live 注文を dry_run 取消にして取引所に残骸を残さない。
     trade_mode = order.trade_mode
 

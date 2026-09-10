@@ -35,7 +35,7 @@
 | 7 | ~~submission_unknown 回収~~ **済** | 時刻窓+side+size の `list_child_orders` 照合。一意時は hash 承認で ID 埋込、曖昧は `--exchange-order-id`、不在は `--absent`。`mix bitflyer.recover` / `Release.recover_submission`。Ready にせず resume 手順を prod.md に記載 | unknown から resume できる手順が prod.md にある |
 | 8 | ~~連続障害・auth サーキット~~ **済** | 401/403 → `:auth_failed` 即 halt。その他確定拒否は `FailureRate` 窓内 N 回で `:consecutive_exchange_errors` | 鍵違いで盲目 rejected 連発しない |
 | 9 | ~~WS サイレントストール watchdog~~ **済** | Feed が最終フレームから `stall_timeout_ms`（未設定時は鮮度窓×3）無通信なら `:stale_watchdog` で socket 切断→既存再接続 | 無言接続が人手なしで回復する |
-| 10 | in-flight drain | SIGTERM 後、進行中 submit/HTTP 完了を待つ | 競合テストで不明状態が増えない |
+| 10 | ~~in-flight drain~~ **済** | `InFlight` で submit/cancel を追跡。`prep_stop` はゲート閉鎖→drain（既定 10s）。timeout 時は pending を `submission_unknown` + halt。ID 埋込時は pending に整合 | 競合テストで不明状態が増えない |
 
 ---
 

@@ -73,7 +73,7 @@ defmodule Bitflyer.OrderExecutor.SubmissionRecovery do
              Keyword.get(opts, :internal_order_id),
              :internal_order_id_required
            ),
-         {:ok, order} <- load_recoverable_order(internal_order_id),
+         {:ok, order} <- load_recoverable_order(internal_order_id, dry_run?: dry_run?),
          window_seconds <- Keyword.get(opts, :window_seconds, @default_window_seconds),
          exchange <- Keyword.get(opts, :exchange, Bitflyer.Exchange),
          count <- Keyword.get(opts, :count, @default_list_count),
@@ -182,7 +182,9 @@ defmodule Bitflyer.OrderExecutor.SubmissionRecovery do
 
   defp normalize_expected_hash(_), do: {:error, :expected_hash_required}
 
-  defp load_recoverable_order(internal_order_id) do
+  defp load_recoverable_order(internal_order_id, opts) when is_list(opts) do
+    dry_run? = Keyword.get(opts, :dry_run?, false) == true
+
     case Order
          |> Ash.Query.filter(internal_order_id == ^internal_order_id)
          |> Ash.read_one() do
@@ -191,6 +193,32 @@ defmodule Bitflyer.OrderExecutor.SubmissionRecovery do
 
       {:ok, %Order{trade_mode: mode}} when mode != :live ->
         {:error, :live_only, %{trade_mode: mode}}
+
+      {:ok, %Order{exchange_order_id: id, status: :submission_unknown} = order}
+      when is_binary(id) and id != "" ->
+        # drain 競合で ID だけ埋まった残骸。confirm 時のみ pending に直す（dry-run は書かない）
+        if dry_run? do
+          {:error, :already_resolved,
+           %{
+             internal_order_id: order.internal_order_id,
+             exchange_order_id: id,
+             healed_from: :submission_unknown,
+             heal_pending?: true
+           }}
+        else
+          case heal_unknown_with_exchange_id(order) do
+            {:ok, healed} ->
+              {:error, :already_resolved,
+               %{
+                 internal_order_id: healed.internal_order_id,
+                 exchange_order_id: healed.exchange_order_id,
+                 healed_from: :submission_unknown
+               }}
+
+            {:error, error} ->
+              {:error, :restore_failed, %{error: error}}
+          end
+        end
 
       {:ok, %Order{exchange_order_id: id} = order} when is_binary(id) and id != "" ->
         {:error, :already_resolved,
@@ -336,6 +364,12 @@ defmodule Bitflyer.OrderExecutor.SubmissionRecovery do
   end
 
   defp confirm_ambiguous(_, _, _), do: {:error, :ambiguous_requires_id}
+
+  defp heal_unknown_with_exchange_id(%Order{status: :submission_unknown} = order) do
+    order
+    |> Ash.Changeset.for_update(:update, %{status: :pending})
+    |> Ash.update()
+  end
 
   defp bind_id(preview, exchange_order_id, exchange) do
     order = preview.order

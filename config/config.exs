@@ -57,6 +57,10 @@ config :bitflyer, Bitflyer.Risk,
   exchange_error_window_ms: 60_000,
   max_exchange_errors_per_window: 5
 
+# SIGTERM 時の in-flight drain。
+# 予算: drain ≤10s + 明示 shutdown 子（最大おおよそ 5×5s）≪ Compose stop_grace_period 45s
+config :bitflyer, Bitflyer.OrderExecutor, drain_timeout_ms: 10_000
+
 # Discord Incoming Webhook（未設定なら通知を送らず起動する）
 config :bitflyer, Bitflyer.Observe.Discord,
   webhook_url: nil,
