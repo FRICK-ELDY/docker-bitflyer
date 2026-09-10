@@ -233,6 +233,60 @@ defmodule Bitflyer.Exchange.RestTest do
     assert {:error, :exchange_unavailable} = Rest.fetch_reconcile_snapshot()
   end
 
+  test "fetch_reconcile_snapshot fails on NaN balance instead of zeroing" do
+    Process.put(:rest_http_handler, fn method, url, headers, body ->
+      assert method == :get
+      assert body == ""
+      assert_signed_headers(headers)
+
+      cond do
+        String.contains?(url, "/v1/me/getbalance") ->
+          {:ok,
+           response(200, [
+             %{
+               "currency_code" => "JPY",
+               "amount" => "NaN",
+               "available" => "1000"
+             }
+           ])}
+
+        true ->
+          flunk("should fail before #{url}")
+      end
+    end)
+
+    assert {:error, :invalid_number} = Rest.fetch_reconcile_snapshot()
+  end
+
+  test "fetch_reconcile_snapshot fails on null position size" do
+    Process.put(:rest_http_handler, fn method, url, headers, body ->
+      assert method == :get
+      assert body == ""
+      assert_signed_headers(headers)
+
+      cond do
+        String.contains?(url, "/v1/me/getbalance") ->
+          {:ok, response(200, fixture("getbalance.json"))}
+
+        String.contains?(url, "/v1/me/getpositions") ->
+          {:ok,
+           response(200, [
+             %{
+               "product_code" => "FX_BTC_JPY",
+               "side" => "BUY",
+               "size" => nil,
+               "price" => "5000000"
+             }
+           ])}
+
+        true ->
+          flunk("should fail before #{url}")
+      end
+    end)
+
+    assert {:error, :invalid_number} = Rest.fetch_reconcile_snapshot()
+  end
+
   test "Exchange facade can inject Rest instead of Unavailable" do
     previous = Application.get_env(:bitflyer, :exchange_client)
     Application.put_env(:bitflyer, :exchange_client, Rest)
