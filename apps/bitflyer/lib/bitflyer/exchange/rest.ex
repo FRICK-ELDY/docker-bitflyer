@@ -77,10 +77,9 @@ defmodule Bitflyer.Exchange.Rest do
     ]
 
     with :ok <- require_credentials(),
-         {:ok, body} <- request(:get, "/v1/me/getchildorders", "", query) do
-      rows = List.wrap(body)
-
-      case Enum.find_value(rows, &Decode.order_info/1) do
+         {:ok, body} <- request(:get, "/v1/me/getchildorders", "", query),
+         {:ok, rows} <- decode_rows(List.wrap(body), &Decode.order_info/1) do
+      case Enum.find(rows, &(&1.exchange_order_id == exchange_order_id)) do
         nil -> {:error, :order_not_found}
         info -> {:ok, info}
       end
@@ -97,26 +96,17 @@ defmodule Bitflyer.Exchange.Rest do
       |> maybe_put_query("count", Map.get(request, :count))
 
     with :ok <- require_credentials(),
-         {:ok, body} <- request(:get, "/v1/me/getexecutions", "", query) do
-      executions =
-        body
-        |> List.wrap()
-        |> Enum.map(&Decode.execution(&1, product_code))
-        |> Enum.reject(&is_nil/1)
-
+         {:ok, body} <- request(:get, "/v1/me/getexecutions", "", query),
+         {:ok, executions} <-
+           decode_rows(List.wrap(body), &Decode.execution(&1, product_code)) do
       {:ok, executions}
     end
   end
 
   defp get_balances do
     with :ok <- require_credentials(),
-         {:ok, body} <- request(:get, "/v1/me/getbalance") do
-      balances =
-        body
-        |> List.wrap()
-        |> Enum.map(&Decode.balance/1)
-        |> Enum.reject(&is_nil/1)
-
+         {:ok, body} <- request(:get, "/v1/me/getbalance"),
+         {:ok, balances} <- decode_rows(List.wrap(body), &Decode.balance/1) do
       {:ok, balances}
     end
   end
@@ -133,15 +123,9 @@ defmodule Bitflyer.Exchange.Rest do
   defp get_positions_for(product_code) do
     with :ok <- require_credentials(),
          {:ok, body} <-
-           request(:get, "/v1/me/getpositions", "", [{"product_code", product_code}]) do
-      positions =
-        body
-        |> List.wrap()
-        |> Enum.map(&Decode.position/1)
-        |> Enum.reject(&is_nil/1)
-        |> aggregate_positions()
-
-      {:ok, positions}
+           request(:get, "/v1/me/getpositions", "", [{"product_code", product_code}]),
+         {:ok, positions} <- decode_rows(List.wrap(body), &Decode.position/1) do
+      {:ok, aggregate_positions(positions)}
     end
   end
 
@@ -185,16 +169,49 @@ defmodule Bitflyer.Exchange.Rest do
     ]
 
     with :ok <- require_credentials(),
-         {:ok, body} <- request(:get, "/v1/me/getchildorders", "", query) do
-      orders =
-        body
-        |> List.wrap()
-        |> Enum.map(&Decode.open_order/1)
-        |> Enum.reject(&is_nil/1)
-
+         {:ok, body} <- request(:get, "/v1/me/getchildorders", "", query),
+         {:ok, orders} <- decode_rows(List.wrap(body), &Decode.open_order/1) do
       {:ok, orders}
     end
   end
+
+  defp decode_rows(rows, fun) when is_list(rows) and is_function(fun, 1) do
+    Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->
+      case fun.(row) do
+        {:ok, decoded} ->
+          {:cont, {:ok, [decoded | acc]}}
+
+        :skip ->
+          {:cont, {:ok, acc}}
+
+        {:error, :invalid_number} = error ->
+          Bitflyer.Telemetry.log(
+            :warning,
+            "exchange decode rejected invalid number; failing snapshot",
+            decode_error_meta(row)
+          )
+
+          {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, list} -> {:ok, Enum.reverse(list)}
+      {:error, _} = error -> error
+    end
+  end
+
+  # 行全体の inspect は避ける（ノイズ）。識別に足りるキーだけ残す。
+  defp decode_error_meta(row) when is_map(row) do
+    %{
+      currency: Map.get(row, "currency_code") || Map.get(row, :currency_code),
+      product_code: Map.get(row, "product_code") || Map.get(row, :product_code),
+      side: Map.get(row, "side") || Map.get(row, :side),
+      exchange_order_id:
+        Map.get(row, "child_order_acceptance_id") || Map.get(row, :child_order_acceptance_id)
+    }
+  end
+
+  defp decode_error_meta(_), do: %{}
 
   defp build_send_body(request) do
     side =

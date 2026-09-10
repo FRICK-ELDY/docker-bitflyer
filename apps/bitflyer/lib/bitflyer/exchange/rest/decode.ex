@@ -1,25 +1,76 @@
 defmodule Bitflyer.Exchange.Rest.Decode do
-  @moduledoc false
+  @moduledoc """
+  Private REST 応答の正規化。
+
+  数値は strict（不正・欠損・NaN/Inf は `:invalid_number`）。
+  識別子欠落（currency / side 等）の行は `:skip`（従来どおり。不正 side の見落としは
+  別途 Decode/突合のスコープ外として残る）。
+  """
 
   alias Bitflyer.Exchange.Client
 
-  @doc false
-  @spec to_decimal(term()) :: Decimal.t()
-  def to_decimal(%Decimal{} = d), do: d
-  def to_decimal(n) when is_integer(n), do: Decimal.new(n)
+  @type decode_result(t) :: {:ok, t} | :skip | {:error, :invalid_number}
 
-  def to_decimal(n) when is_float(n) do
-    n |> :erlang.float_to_binary(decimals: 10) |> Decimal.new()
+  @doc """
+  数値を `Decimal` へ。不正・欠損・NaN/Inf は `:error`（0 に丸めない）。
+  """
+  @spec to_decimal(term()) :: {:ok, Decimal.t()} | :error
+  def to_decimal(%Decimal{} = d) do
+    if decimal_finite?(d), do: {:ok, d}, else: :error
   end
 
-  def to_decimal(s) when is_binary(s) do
-    case Decimal.parse(s) do
-      {decimal, ""} -> decimal
-      _ -> Decimal.new("0")
+  def to_decimal(n) when is_integer(n), do: {:ok, Decimal.new(n)}
+
+  def to_decimal(n) when is_float(n) do
+    cond do
+      # NaN
+      n != n ->
+        :error
+
+      true ->
+        try do
+          bin = :erlang.float_to_binary(n, decimals: 10)
+          lowered = String.downcase(bin)
+
+          if String.contains?(lowered, "inf") or String.contains?(lowered, "nan") do
+            :error
+          else
+            case Decimal.parse(bin) do
+              {decimal, _} ->
+                if decimal_finite?(decimal), do: {:ok, decimal}, else: :error
+
+              :error ->
+                :error
+            end
+          end
+        rescue
+          ArgumentError -> :error
+        end
     end
   end
 
-  def to_decimal(_), do: Decimal.new("0")
+  def to_decimal(s) when is_binary(s) do
+    trimmed = String.trim(s)
+
+    cond do
+      trimmed == "" ->
+        :error
+
+      non_finite_string?(trimmed) ->
+        :error
+
+      true ->
+        case Decimal.parse(trimmed) do
+          {decimal, ""} ->
+            if decimal_finite?(decimal), do: {:ok, decimal}, else: :error
+
+          _ ->
+            :error
+        end
+    end
+  end
+
+  def to_decimal(_), do: :error
 
   @doc false
   @spec side(term()) :: :buy | :sell | nil
@@ -39,41 +90,40 @@ defmodule Bitflyer.Exchange.Rest.Decode do
   def order_status(_), do: :unknown
 
   @doc false
-  @spec balance(map()) :: Client.balance() | nil
+  @spec balance(map()) :: decode_result(Client.balance())
   def balance(%{} = row) do
     currency = Map.get(row, "currency_code") || Map.get(row, :currency_code)
 
     if is_binary(currency) and currency != "" do
-      %{
-        currency: currency,
-        amount: to_decimal(Map.get(row, "amount") || Map.get(row, :amount)),
-        available: to_decimal(Map.get(row, "available") || Map.get(row, :available))
-      }
+      with {:ok, amount} <- require_decimal(Map.get(row, "amount") || Map.get(row, :amount)),
+           {:ok, available} <-
+             require_decimal(Map.get(row, "available") || Map.get(row, :available)) do
+        {:ok, %{currency: currency, amount: amount, available: available}}
+      end
     else
-      nil
+      :skip
     end
   end
 
   @doc false
-  @spec position(map()) :: Client.position() | nil
+  @spec position(map()) :: decode_result(Client.position())
   def position(%{} = row) do
     product_code = Map.get(row, "product_code") || Map.get(row, :product_code)
     side = side(Map.get(row, "side") || Map.get(row, :side))
 
     if is_binary(product_code) and side do
-      %{
-        product_code: product_code,
-        side: side,
-        size: to_decimal(Map.get(row, "size") || Map.get(row, :size)),
-        average_price: to_decimal(Map.get(row, "price") || Map.get(row, :price))
-      }
+      with {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)),
+           {:ok, average_price} <-
+             require_decimal(Map.get(row, "price") || Map.get(row, :price)) do
+        {:ok, %{product_code: product_code, side: side, size: size, average_price: average_price}}
+      end
     else
-      nil
+      :skip
     end
   end
 
   @doc false
-  @spec open_order(map()) :: Client.open_order() | nil
+  @spec open_order(map()) :: decode_result(Client.open_order())
   def open_order(%{} = row) do
     exchange_order_id =
       Map.get(row, "child_order_acceptance_id") || Map.get(row, :child_order_acceptance_id)
@@ -82,20 +132,25 @@ defmodule Bitflyer.Exchange.Rest.Decode do
     side = side(Map.get(row, "side") || Map.get(row, :side))
 
     if is_binary(exchange_order_id) and is_binary(product_code) and side do
-      %{
-        exchange_order_id: exchange_order_id,
-        product_code: product_code,
-        side: side,
-        size: to_decimal(Map.get(row, "size") || Map.get(row, :size)),
-        filled_size: to_decimal(Map.get(row, "executed_size") || Map.get(row, :executed_size))
-      }
+      with {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)),
+           {:ok, filled_size} <-
+             require_decimal(Map.get(row, "executed_size") || Map.get(row, :executed_size)) do
+        {:ok,
+         %{
+           exchange_order_id: exchange_order_id,
+           product_code: product_code,
+           side: side,
+           size: size,
+           filled_size: filled_size
+         }}
+      end
     else
-      nil
+      :skip
     end
   end
 
   @doc false
-  @spec order_info(map()) :: Client.order_info() | nil
+  @spec order_info(map()) :: decode_result(Client.order_info())
   def order_info(%{} = row) do
     exchange_order_id =
       Map.get(row, "child_order_acceptance_id") || Map.get(row, :child_order_acceptance_id)
@@ -106,23 +161,29 @@ defmodule Bitflyer.Exchange.Rest.Decode do
     if is_binary(exchange_order_id) and is_binary(product_code) and side do
       avg = Map.get(row, "average_price") || Map.get(row, :average_price)
 
-      %{
-        exchange_order_id: exchange_order_id,
-        product_code: product_code,
-        side: side,
-        size: to_decimal(Map.get(row, "size") || Map.get(row, :size)),
-        filled_size: to_decimal(Map.get(row, "executed_size") || Map.get(row, :executed_size)),
-        average_price: if(avg in [nil, 0, 0.0, "0"], do: nil, else: to_decimal(avg)),
-        status:
-          order_status(Map.get(row, "child_order_state") || Map.get(row, :child_order_state))
-      }
+      with {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)),
+           {:ok, filled_size} <-
+             require_decimal(Map.get(row, "executed_size") || Map.get(row, :executed_size)),
+           {:ok, average_price} <- optional_average_price(avg) do
+        {:ok,
+         %{
+           exchange_order_id: exchange_order_id,
+           product_code: product_code,
+           side: side,
+           size: size,
+           filled_size: filled_size,
+           average_price: average_price,
+           status:
+             order_status(Map.get(row, "child_order_state") || Map.get(row, :child_order_state))
+         }}
+      end
     else
-      nil
+      :skip
     end
   end
 
   @doc false
-  @spec execution(map(), String.t() | nil) :: Client.execution() | nil
+  @spec execution(map(), String.t() | nil) :: decode_result(Client.execution())
   def execution(%{} = row, default_product \\ nil) do
     exchange_order_id =
       Map.get(row, "child_order_acceptance_id") || Map.get(row, :child_order_acceptance_id)
@@ -131,18 +192,22 @@ defmodule Bitflyer.Exchange.Rest.Decode do
     id = Map.get(row, "id") || Map.get(row, :id)
 
     if exchange_order_id && side && id do
-      %{
-        id: id,
-        exchange_order_id: exchange_order_id,
-        product_code:
-          Map.get(row, "product_code") || Map.get(row, :product_code) || default_product,
-        side: side,
-        price: to_decimal(Map.get(row, "price") || Map.get(row, :price)),
-        size: to_decimal(Map.get(row, "size") || Map.get(row, :size)),
-        executed_at: Map.get(row, "exec_date") || Map.get(row, :exec_date)
-      }
+      with {:ok, price} <- require_decimal(Map.get(row, "price") || Map.get(row, :price)),
+           {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)) do
+        {:ok,
+         %{
+           id: id,
+           exchange_order_id: exchange_order_id,
+           product_code:
+             Map.get(row, "product_code") || Map.get(row, :product_code) || default_product,
+           side: side,
+           price: price,
+           size: size,
+           executed_at: Map.get(row, "exec_date") || Map.get(row, :exec_date)
+         }}
+      end
     else
-      nil
+      :skip
     end
   end
 
@@ -183,6 +248,46 @@ defmodule Bitflyer.Exchange.Rest.Decode do
   def transport_error(:nxdomain), do: :disconnected
   def transport_error(reason) when is_atom(reason), do: classify_transport(reason)
   def transport_error(_), do: :disconnected
+
+  defp require_decimal(term) do
+    case to_decimal(term) do
+      {:ok, decimal} -> {:ok, decimal}
+      :error -> {:error, :invalid_number}
+    end
+  end
+
+  # 未約定などで average_price が 0 / 欠落は許容（"0" / "0.0" / "0.00" 含む）。不正は拒否。
+  defp optional_average_price(avg) when avg in [nil, ""], do: {:ok, nil}
+
+  defp optional_average_price(avg) do
+    case to_decimal(avg) do
+      {:ok, decimal} ->
+        if Decimal.compare(decimal, 0) == :eq do
+          {:ok, nil}
+        else
+          {:ok, decimal}
+        end
+
+      :error ->
+        {:error, :invalid_number}
+    end
+  end
+
+  defp decimal_finite?(%Decimal{} = d) do
+    not (Decimal.nan?(d) or Decimal.inf?(d))
+  end
+
+  defp non_finite_string?(s) do
+    String.downcase(s) in [
+      "nan",
+      "inf",
+      "+inf",
+      "-inf",
+      "infinity",
+      "+infinity",
+      "-infinity"
+    ]
+  end
 
   defp classify_transport(:timeout), do: :timeout
   defp classify_transport(:closed), do: :closed

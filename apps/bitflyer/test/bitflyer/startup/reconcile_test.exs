@@ -186,6 +186,17 @@ defmodule Bitflyer.Startup.ReconcileTest do
     def place_order(_request), do: {:error, :not_used_in_reconcile}
   end
 
+  defmodule InvalidNumberExchange do
+    @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
+
+    @impl true
+    def fetch_reconcile_snapshot, do: {:error, :invalid_number}
+
+    @impl true
+    def place_order(_request), do: {:error, :not_used_in_reconcile}
+  end
+
   setup do
     reset_readiness()
     clear_default_risk_state()
@@ -281,6 +292,26 @@ defmodule Bitflyer.Startup.ReconcileTest do
     assert {:error, :reconcile_mismatch} = Reconciler.run_now()
     assert Readiness.get() == {:halted, :reconcile_mismatch}
     refute Readiness.ready?()
+  end
+
+  test "live invalid exchange number fails snapshot and halts" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, InvalidNumberExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+    end)
+
+    seed_live_balance_baseline!()
+
+    assert {:error, :invalid_exchange_payload, %{kind: :invalid_number}} =
+             Reconcile.run(trade_mode: :live, exchange: InvalidNumberExchange)
+
+    assert {:error, :invalid_exchange_payload} = Reconciler.run_now()
+    assert Readiness.get() == {:halted, :invalid_exchange_payload}
   end
 
   test "live with required balance baseline matching exchange can become ready" do

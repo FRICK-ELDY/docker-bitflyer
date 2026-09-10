@@ -26,6 +26,7 @@ defmodule Bitflyer.Startup.Reconcile do
           :reconcile_mismatch
           | :restore_failed
           | :exchange_unavailable
+          | :invalid_exchange_payload
           | :risk_halted
           | atom()
 
@@ -43,6 +44,7 @@ defmodule Bitflyer.Startup.Reconcile do
                    :reconcile_mismatch,
                    :restore_failed,
                    :exchange_unavailable,
+                   :invalid_exchange_payload,
                    :risk_halted
                  ])
 
@@ -109,6 +111,7 @@ defmodule Bitflyer.Startup.Reconcile do
       "reconcile_mismatch" -> :reconcile_mismatch
       "restore_failed" -> :restore_failed
       "exchange_unavailable" -> :exchange_unavailable
+      "invalid_exchange_payload" -> :invalid_exchange_payload
       "risk_halted" -> :risk_halted
       _ -> :risk_halted
     end
@@ -179,6 +182,10 @@ defmodule Bitflyer.Startup.Reconcile do
 
       {:error, :exchange_unavailable} ->
         {:error, :exchange_unavailable, %{trade_mode: :live}}
+
+      # 通信障害と区別する（停止は同等、運用ログ・RiskState 理由は別）
+      {:error, :invalid_number} ->
+        {:error, :invalid_exchange_payload, %{kind: :invalid_number, trade_mode: :live}}
 
       {:error, detail} ->
         {:error, :exchange_unavailable, %{detail: detail, trade_mode: :live}}

@@ -11,7 +11,7 @@
 
 前回計画の P0 #1–#4、P1 全般、P2 全般、P3 #15–#19（UI 認証、API キー枠、本番 release、Exchange.Rest、deps audit）はコード上で解決済み。再掲しない。
 
-**未消化として持ち越すもの:** 旧 P0 #5 のうち Decode strict 等。日次損失（#1）・残高検査（#2）・両建て建玉突合（#3）・live 既定安全化（#4）は解決済み。
+**未消化として持ち越すもの:** なし（旧 P0 #5 の Decode strict まで解決済み）。
 
 ---
 
@@ -23,7 +23,7 @@
 | 2 | ~~残高検査の実効化~~ **済** | ETS + invalidate/reload（paper、残 hold 再適用）+ `reserve(hold_id)` / 部分約定 `consume_*` / `release_hold` 残額返却 + 突合一致時 exchange `put(clear_holds)`。baseline 更新は P1 #6 | pending+別 fill・部分約定 cancel・market 取消 LTP 差分などが緑 |
 | 3 | ~~両建て建玉突合~~ **済** | 外部 `{product_code,side}` を突合前に net（buy−sell）正規化。順序反転 fixture で Ready/halt が一致 | buy+sell 並存でも片側上書きせず、ネット一致時 Ready・片脚一致のみは mismatch |
 | 4 | ~~live 既定の安全化~~ **済** | live で Strategy 既定 enabled: false（BITFLYER_STRATEGY_ENABLED=true のみ有効）。FixedOnce 有効化は起動拒否＋evaluate 空。Risk 5 上限は環境変数必須 | live+confirm だけでは意図も開発上限も載らない |
-| 5 | Decode strict 化 | 不正・欠損数値を 0 に丸めず snapshot 失敗 → halt | malformed/null fixture で halt するテストが緑 |
+| 5 | ~~Decode strict 化~~ **済** | 不正・欠損・NaN/Inf を 0 に丸めず :invalid_number で snapshot 失敗 → reconcile halt。構造欠落行は skip | NaN/null fixture と Reconciler halt が緑 |
 
 ---
 
