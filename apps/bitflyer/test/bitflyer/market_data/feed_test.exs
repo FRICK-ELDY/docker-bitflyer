@@ -192,7 +192,8 @@ defmodule Bitflyer.MarketData.FeedTest do
                  market_key: @market_key
                },
                positions: [],
-               now: now
+               now: now,
+               check_persisted_circuit: false
              )
 
     Socket.Local.notify_disconnected(socket, :test_closed)

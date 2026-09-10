@@ -1,10 +1,11 @@
 defmodule Bitflyer.Release do
   @moduledoc """
-  mix 無しの本番 release 向けタスク（migrate / resume / baseline / recover）。
+  mix 無しの本番 release 向けタスク（migrate / halt / resume / baseline / recover）。
 
   Docker 例:
 
       bin/docker_bitflyer eval "Bitflyer.Release.migrate()"
+      bin/docker_bitflyer rpc "Bitflyer.Release.halt_trading()"
       bin/docker_bitflyer rpc "Bitflyer.Release.resume()"
       bin/docker_bitflyer rpc "Bitflyer.Release.import_baseline(dry_run: true, operator: \\"alice\\")"
       bin/docker_bitflyer rpc "Bitflyer.Release.import_baseline(confirm: true, operator: \\"alice\\", expected_hash: \\"<hash>\\")"
@@ -42,6 +43,35 @@ defmodule Bitflyer.Release do
     end
 
     :ok
+  end
+
+  @doc """
+  運用 kill switch。即サーキットを開く（`mix bitflyer.halt` 相当）。
+  常駐 BEAM 上で実行すること。
+
+  `{:ok, :persist_failed}` は ETS 上は停止済みだが RiskState 永続化失敗。
+  発注は止まるが再起動で解除されうるため警告ログのうえで `:ok` 相当として返す。
+  """
+  def halt_trading(opts \\ []) do
+    opts
+    |> Keyword.put_new(:operator, "release")
+    |> Bitflyer.System.halt_trading()
+    |> halt_trading_result()
+  end
+
+  @doc false
+  def halt_trading_result(:ok), do: :ok
+
+  def halt_trading_result({:ok, :persist_failed}) do
+    IO.warn(
+      "halt_trading: orders halted in ETS but RiskState persist failed; restart may clear it"
+    )
+
+    :ok
+  end
+
+  def halt_trading_result({:error, error}) do
+    raise "halt_trading failed: #{inspect(error)}"
   end
 
   @doc """

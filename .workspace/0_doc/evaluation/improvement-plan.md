@@ -57,7 +57,7 @@
 |:---:|:---|:---|:---|
 | 16 | ~~paper 手数料・スリッページ~~ **済** | `FillPricing`: 成行 LTP±(slip+fee)、指値は fee のみ。buy 拘束も同価格。不正 bps は fail-closed | paper 損益が過大楽観にならない |
 | 17 | ~~AuthorizedOrder 型~~ **済** | Risk 成功時のみ ETS ワンショット発行。`consume` 必須。公開 `new!` なし | 偽造・再利用・TTL 超過で拒否。境界テスト緑 |
-| 18 | Kill switch / StatusLive resume | 認証付き即 halt・再突合操作 | console 以外で運用できる |
+| 18 | ~~Kill switch / StatusLive resume~~ **済** | StatusLive + `mix bitflyer.halt` / `System.halt_trading`。halt 中に resume・reconcile。操作者は BasicAuth username | UI から即 halt・再突合・復帰できる |
 | 19 | 残骸棚卸し | Heartbeat・Layouts 生成ヘッダ・Mailer 等 | ノイズが減る |
 
 ---

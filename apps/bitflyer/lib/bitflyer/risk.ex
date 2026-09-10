@@ -40,7 +40,9 @@ defmodule Bitflyer.Risk do
   - `:now` / `:server` — Cache.fresh?/3・LTP 取得へ転送
   - `:authorized_order_server` — `AuthorizedOrder` GenServer（Cache の `:server` とは別）
   - `:now_utc` — 時計ずれ検査用の壁時計（既定 `DateTime.utc_now/0`）
-  - `:check_persisted_circuit` — 既定 false。true のとき Ready でも RiskState を見る
+  - `:check_persisted_circuit` — 既定 **false**（ホットパスで RiskState を読まない）。
+    別 BEAM の `mix bitflyer.halt` は `Risk.CircuitSync` が DB→ETS 同期する。
+    テストや即時検査で DB を直接見るときだけ `true`
   - `:recent_order_count` — 直近 1 分の発注件数（テスト注入。未指定時は OrderRate ETS）
   - `:daily_loss` — 当日損失額（テスト注入。`allow_test_injections: true` のときのみ。未指定時は DailyLoss ETS）
   - `:balances` — 残高マップまたはリスト（テスト注入。未指定時は BalanceCache ETS。paper/live 必須）
@@ -172,6 +174,7 @@ defmodule Bitflyer.Risk do
       :ok ->
         # 実行時の正本は Readiness（ETS）。サーキット開は先に halt する設計のため
         # 既定では RiskState を読まない（発注ホットパスの DB 往復を避ける）。
+        # 別 BEAM の mix halt は CircuitSync が ETS へ反映する。
         if Keyword.get(opts, :check_persisted_circuit, false) and
              Circuit.open?(readiness: readiness) do
           {:error, :circuit_open, %{source: :risk_state}}

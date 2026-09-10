@@ -199,6 +199,55 @@ defmodule Bitflyer.RiskTest do
              )
   end
 
+  test "authorize ignores persisted RiskState by default until CircuitSync" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    halted_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, _} =
+             RiskState
+             |> Ash.Changeset.for_create(:create, %{
+               name: "default",
+               halted: true,
+               reason: "mix_halt",
+               halted_at: halted_at
+             })
+             |> Ash.create()
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(valid_command(), positions: [])
+
+    assert {:ok, :synced} = Bitflyer.Risk.CircuitSync.sync_now()
+    assert match?({:halted, _}, Readiness.get())
+
+    assert {:error, :circuit_open, %{readiness: _}} =
+             Risk.authorize(valid_command(), positions: [])
+  end
+
+  test "authorize can opt into persisted circuit check without CircuitSync" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    halted_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, _} =
+             RiskState
+             |> Ash.Changeset.for_create(:create, %{
+               name: "default",
+               halted: true,
+               reason: "mix_halt",
+               halted_at: halted_at
+             })
+             |> Ash.create()
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               check_persisted_circuit: false
+             )
+  end
+
   test "authorize emits risk_rejected telemetry" do
     parent = self()
     handler_id = "risk-rejected-#{System.unique_integer([:positive])}"
