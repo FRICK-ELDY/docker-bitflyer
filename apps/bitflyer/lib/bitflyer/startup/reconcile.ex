@@ -21,6 +21,11 @@ defmodule Bitflyer.Startup.Reconcile do
   require Ash.Query
 
   alias Bitflyer.Trading.{BalanceSnapshot, Order, Position, RiskState}
+  alias Bitflyer.Exchange.Permissions
+  alias Bitflyer.MarketData
+  alias Bitflyer.MarketData.Normalize
+  alias Bitflyer.Risk
+  alias Bitflyer.Risk.Limits
 
   @type reason ::
           :reconcile_mismatch
@@ -28,6 +33,8 @@ defmodule Bitflyer.Startup.Reconcile do
           | :exchange_unavailable
           | :invalid_exchange_payload
           | :risk_halted
+          | :unsafe_api_permissions
+          | :clock_skew
           | atom()
 
   @type internal_state :: %{
@@ -45,7 +52,12 @@ defmodule Bitflyer.Startup.Reconcile do
                    :restore_failed,
                    :exchange_unavailable,
                    :invalid_exchange_payload,
-                   :risk_halted
+                   :risk_halted,
+                   :unsafe_api_permissions,
+                   :clock_skew,
+                   :auth_failed,
+                   :consecutive_exchange_errors,
+                   :submission_unknown
                  ])
 
   @doc """
@@ -56,6 +68,9 @@ defmodule Bitflyer.Startup.Reconcile do
   - `:exchange` — 既定は `Bitflyer.Exchange`
   - `:required_balance_currencies` — live 必須通貨（既定は Application env）
   - `:skip_persisted_risk?` — true なら永続 RiskState halt を無視（手動 resume 用）
+  - `:market_data_rest` — live 時計検査用 ticker REST（既定は MarketData 設定）
+  - `:now_utc` — 時計検査の壁時計注入
+  - `:skip_permissions?` / `:skip_clock_skew?` — テスト用スキップ
   """
   @spec run(keyword()) :: result()
   def run(opts \\ []) do
@@ -67,7 +82,7 @@ defmodule Bitflyer.Startup.Reconcile do
 
     with {:ok, internal} <- restore(trade_mode),
          :ok <- maybe_check_persisted_risk(internal, opts),
-         result <- reconcile_mode(internal, exchange, required) do
+         result <- reconcile_mode(internal, exchange, required, opts) do
       case result do
         :ok -> {:ok, internal}
         {:ok, enriched} when is_map(enriched) -> {:ok, enriched}
@@ -116,6 +131,8 @@ defmodule Bitflyer.Startup.Reconcile do
       "auth_failed" -> :auth_failed
       "consecutive_exchange_errors" -> :consecutive_exchange_errors
       "submission_unknown" -> :submission_unknown
+      "unsafe_api_permissions" -> :unsafe_api_permissions
+      "clock_skew" -> :clock_skew
       _ -> :risk_halted
     end
   end
@@ -153,7 +170,7 @@ defmodule Bitflyer.Startup.Reconcile do
     end
   end
 
-  defp reconcile_mode(%{trade_mode: mode} = internal, exchange, _required)
+  defp reconcile_mode(%{trade_mode: mode} = internal, exchange, _required, _opts)
        when mode in [:dry_run, :paper] do
     # 内部仮想状態が正。取引所とは突合せず、建玉も書き換えない。
     _ = internal
@@ -161,13 +178,100 @@ defmodule Bitflyer.Startup.Reconcile do
     :ok
   end
 
-  defp reconcile_mode(%{trade_mode: :live} = _internal, exchange, required) do
-    # 突合前に約定を建玉へ反映（残高は getbalance 突合の正本。fill では書き換えない）
-    with :ok <- sync_live_fills(exchange),
+  defp reconcile_mode(%{trade_mode: :live} = _internal, exchange, required, opts) do
+    # 突合前に権限・時計 → 約定を建玉へ反映（残高は getbalance 突合の正本。fill では書き換えない）
+    with :ok <- assert_safe_permissions(exchange, opts),
+         :ok <- assert_clock_skew(opts),
+         :ok <- sync_live_fills(exchange),
          {:ok, internal} <- restore(:live),
          {:ok, snapshot} <- fetch_live_snapshot(exchange),
          :ok <- compare_with_exchange(internal, snapshot, required) do
       {:ok, Map.put(internal, :exchange_balances, exchange_balance_map(snapshot))}
+    end
+  end
+
+  defp assert_safe_permissions(exchange, opts) do
+    if Keyword.get(opts, :skip_permissions?, false) do
+      :ok
+    else
+      case exchange.get_permissions() do
+        {:ok, permissions} ->
+          Permissions.assert_safe(permissions)
+
+        {:error, :exchange_unavailable} ->
+          {:error, :exchange_unavailable, %{trade_mode: :live, step: :get_permissions}}
+
+        {:error, :auth_failed} ->
+          {:error, :auth_failed, %{trade_mode: :live, step: :get_permissions}}
+
+        {:error, detail} ->
+          {:error, :exchange_unavailable,
+           %{detail: detail, trade_mode: :live, step: :get_permissions}}
+      end
+    end
+  end
+
+  defp assert_clock_skew(opts) do
+    if Keyword.get(opts, :skip_clock_skew?, false) do
+      :ok
+    else
+      rest =
+        Keyword.get_lazy(opts, :market_data_rest, fn ->
+          Keyword.get(MarketData.config(), :rest_client, Bitflyer.MarketData.Rest)
+        end)
+
+      product_codes = MarketData.product_codes()
+      max_skew_ms = Limits.current().max_clock_skew_ms
+      skew_opts = Keyword.take(opts, [:now_utc])
+
+      if product_codes == [] do
+        {:error, :clock_skew, %{reason: :no_product_codes, trade_mode: :live}}
+      else
+        Enum.reduce_while(product_codes, :ok, fn product_code, :ok ->
+          case check_product_clock_skew(rest, product_code, max_skew_ms, skew_opts) do
+            :ok -> {:cont, :ok}
+            error -> {:halt, error}
+          end
+        end)
+      end
+    end
+  end
+
+  defp check_product_clock_skew(rest, product_code, max_skew_ms, skew_opts) do
+    with {:ok, body} <- fetch_ticker_for_skew(rest, product_code),
+         {:ok, _key, value} <- normalize_ticker_for_skew(body),
+         :ok <- Risk.check_source_timestamp(value, max_skew_ms, skew_opts) do
+      :ok
+    else
+      {:error, :clock_skew, meta} ->
+        {:error, :clock_skew, Map.merge(%{trade_mode: :live, product_code: product_code}, meta)}
+
+      {:error, reason, meta} when is_map(meta) ->
+        {:error, reason, Map.merge(%{trade_mode: :live, product_code: product_code}, meta)}
+
+      {:error, detail} ->
+        {:error, :exchange_unavailable,
+         %{
+           detail: detail,
+           trade_mode: :live,
+           step: :clock_skew_ticker,
+           product_code: product_code
+         }}
+    end
+  end
+
+  defp fetch_ticker_for_skew(rest, product_code) when is_binary(product_code) do
+    case rest.fetch_ticker(product_code) do
+      {:ok, body} when is_map(body) -> {:ok, body}
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:invalid_ticker_response, other}}
+    end
+  end
+
+  defp normalize_ticker_for_skew(body) do
+    case Normalize.from_ticker(body) do
+      {:ok, key, value} -> {:ok, key, value}
+      :error -> {:error, :invalid_exchange_payload, %{kind: :invalid_ticker, step: :clock_skew}}
     end
   end
 

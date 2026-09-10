@@ -47,6 +47,9 @@ config :bitflyer, Bitflyer.MarketData,
   rest_client: Bitflyer.MarketData.Rest.Stub,
   socket_client: Bitflyer.MarketData.Socket.Local
 
+# live 突合の時計検査向け。失敗経路は Stub response: :error で個別に戻す
+config :bitflyer, Bitflyer.MarketData.Rest.Stub, response: :ok
+
 config :bitflyer, Bitflyer.Strategy, enabled: false
 
 # Risk のテスト注入（:daily_loss 等）を許可。本番 config では無効のまま。

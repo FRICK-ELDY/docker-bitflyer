@@ -51,6 +51,7 @@ config :bitflyer, Bitflyer.Risk,
   max_order_size: "1",
   max_position_size: "5",
   market_data_max_age_ms: 5_000,
+  max_clock_skew_ms: 5_000,
   max_daily_loss: "100000",
   max_orders_per_minute: 20,
   max_price_deviation_pct: "2",
@@ -147,7 +148,9 @@ config :logger, :default_formatter,
     :currency,
     :limit,
     :operator,
-    :snapshot_hash
+    :snapshot_hash,
+    :skew_ms,
+    :max_ms
   ]
 
 # Use Jason for JSON parsing in Phoenix

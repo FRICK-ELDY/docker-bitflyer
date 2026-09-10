@@ -6,7 +6,7 @@ defmodule Bitflyer.Risk do
   上限超過・stale・未同期は必ず拒否する。
   サーキットは `open_circuit/1` / `clear_circuit/1`。
 
-  検査: 同期 → 鮮度 → 注文サイズ → 建玉 → 価格逸脱 → 発注頻度 → 日次損失 → 残高。
+  検査: 同期 → 鮮度 → 時計ずれ → 注文サイズ → 建玉 → 価格逸脱 → 発注頻度 → 日次損失 → 残高。
 
   発注ホットパスでは RiskState・発注頻度・日次損失・残高のために DB 往復しない。
   頻度は `Risk.OrderRate`、取引所エラー連続は `Risk.FailureRate`、
@@ -24,6 +24,7 @@ defmodule Bitflyer.Risk do
           | :unsynced
           | :circuit_open
           | :stale
+          | :clock_skew
           | :limit_exceeded
 
   @type result :: :ok | {:error, rejection_code(), map()}
@@ -36,6 +37,7 @@ defmodule Bitflyer.Risk do
   - `:limits` — 上限上書き（`Limits.normalize/1` される）
   - `:positions` — 建玉リスト（未指定時は DB から当該銘柄を読む）
   - `:now` / `:server` — Cache.fresh?/3・LTP 取得へ転送
+  - `:now_utc` — 時計ずれ検査用の壁時計（既定 `DateTime.utc_now/0`）
   - `:check_persisted_circuit` — 既定 false。true のとき Ready でも RiskState を見る
   - `:recent_order_count` — 直近 1 分の発注件数（テスト注入。未指定時は OrderRate ETS）
   - `:daily_loss` — 当日損失額（テスト注入。`allow_test_injections: true` のときのみ。未指定時は DailyLoss ETS）
@@ -53,6 +55,7 @@ defmodule Bitflyer.Risk do
       with :ok <- validate_command(command),
            :ok <- check_sync(opts),
            :ok <- check_freshness(command, limits, opts),
+           :ok <- check_clock_skew(command, limits, opts),
            :ok <- check_order_size(command, limits),
            :ok <- check_position_size(command, limits, opts),
            :ok <- check_price_deviation(command, limits, opts),
@@ -186,6 +189,50 @@ defmodule Bitflyer.Risk do
     else
       {:error, :stale, %{market_key: key, max_age_ms: max_age}}
     end
+  end
+
+  defp check_clock_skew(command, limits, opts) do
+    key = Map.fetch!(command, :market_key)
+    server = Keyword.get(opts, :server, Cache)
+
+    case Cache.get(key, server) do
+      {:ok, value, _received_at} ->
+        check_source_timestamp(value, limits.max_clock_skew_ms, opts)
+
+      :miss ->
+        {:error, :stale, %{market_key: key, max_age_ms: limits.market_data_max_age_ms}}
+    end
+  end
+
+  @doc """
+  ticker 値の取引所時刻とホスト壁時計のずれを検査する。
+
+  `source_timestamp` 欠落は常に fail-closed（リプレイ耐性）。
+  """
+  @spec check_source_timestamp(map() | term(), non_neg_integer(), keyword()) ::
+          :ok | {:error, :clock_skew, map()}
+  def check_source_timestamp(value, max_skew_ms, opts \\ [])
+
+  def check_source_timestamp(%{source_timestamp: %DateTime{} = source}, max_skew_ms, opts)
+      when is_integer(max_skew_ms) and max_skew_ms >= 0 do
+    now = Keyword.get_lazy(opts, :now_utc, &DateTime.utc_now/0)
+    skew_ms = abs(DateTime.diff(now, source, :millisecond))
+
+    if skew_ms > max_skew_ms do
+      {:error, :clock_skew,
+       %{
+         skew_ms: skew_ms,
+         max_ms: max_skew_ms,
+         source_timestamp: source
+       }}
+    else
+      :ok
+    end
+  end
+
+  def check_source_timestamp(_value, max_skew_ms, _opts)
+      when is_integer(max_skew_ms) and max_skew_ms >= 0 do
+    {:error, :clock_skew, %{reason: :missing_source_timestamp, max_ms: max_skew_ms}}
   end
 
   defp check_order_size(command, limits) do
@@ -618,7 +665,7 @@ defmodule Bitflyer.Risk do
           product_code: Map.get(command, :product_code) || Map.get(meta, :product_code),
           side: Map.get(command, :side)
         },
-        Map.take(meta, [:limit, :currency, :kind])
+        Map.take(meta, [:limit, :currency, :kind, :skew_ms, :max_ms])
       )
     )
   end

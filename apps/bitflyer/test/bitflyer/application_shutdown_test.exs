@@ -9,7 +9,6 @@ defmodule Bitflyer.ApplicationShutdownTest do
   import Bitflyer.TestSupport.ReadinessHelper
   import Bitflyer.TestSupport.InFlightHelper
 
-  alias Bitflyer.MarketData.Cache
   alias Bitflyer.OrderExecutor
   alias Bitflyer.OrderExecutor.InFlight
   alias Bitflyer.Readiness
@@ -19,6 +18,7 @@ defmodule Bitflyer.ApplicationShutdownTest do
 
   defmodule HealExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
@@ -77,7 +77,7 @@ defmodule Bitflyer.ApplicationShutdownTest do
 
   test "prep_stop closes order gate and rejects new submit" do
     assert Readiness.mark_ready() == :ok
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert put_fresh_ticker(@market_key) == :ok
 
     assert [] = Bitflyer.Application.prep_stop([])
     assert Readiness.get() == :not_ready

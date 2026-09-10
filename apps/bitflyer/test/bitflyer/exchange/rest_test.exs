@@ -108,6 +108,21 @@ defmodule Bitflyer.Exchange.RestTest do
     assert Decimal.eq?(filled, Decimal.new("0"))
   end
 
+  test "get_permissions returns permission path list" do
+    Process.put(:rest_http_handler, fn method, url, headers, body ->
+      assert method == :get
+      assert body == ""
+      assert String.ends_with?(url, "/v1/me/getpermissions")
+      assert_signed_headers(headers)
+      {:ok, response(200, fixture("getpermissions.json"))}
+    end)
+
+    assert {:ok, perms} = Rest.get_permissions()
+    assert "/v1/me/getbalance" in perms
+    assert "/v1/me/sendchildorder" in perms
+    refute "/v1/me/withdraw" in perms
+  end
+
   test "place_order signs POST body and returns acceptance id" do
     Process.put(:rest_http_handler, fn method, url, headers, body ->
       assert method == :post

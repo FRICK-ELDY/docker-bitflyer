@@ -54,7 +54,9 @@ defmodule Bitflyer.Telemetry do
                         :limit,
                         :operator,
                         :snapshot_hash,
-                        :timeout_ms
+                        :timeout_ms,
+                        :skew_ms,
+                        :max_ms
                       ])
 
   @doc """

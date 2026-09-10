@@ -59,6 +59,14 @@ defmodule Bitflyer.Exchange do
     client().fetch_executions(request)
   end
 
+  @doc """
+  API キー権限一覧（live 起動時の出金禁止検査用）。
+  """
+  @spec get_permissions() :: {:ok, [String.t()]} | {:error, term()}
+  def get_permissions do
+    client().get_permissions()
+  end
+
   defp client do
     Application.get_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
   end

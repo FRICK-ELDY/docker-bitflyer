@@ -28,10 +28,25 @@ defmodule Bitflyer.TestSupport.ExchangeClientStubs do
       @impl true
       def list_child_orders(_request), do: {:ok, []}
 
+      @impl true
+      def get_permissions do
+        {:ok,
+         [
+           "/v1/me/getpermissions",
+           "/v1/me/getbalance",
+           "/v1/me/getchildorders",
+           "/v1/me/getexecutions",
+           "/v1/me/getpositions",
+           "/v1/me/sendchildorder",
+           "/v1/me/cancelchildorder"
+         ]}
+      end
+
       defoverridable cancel_order: 1,
                      fetch_order: 1,
                      fetch_executions: 1,
-                     list_child_orders: 1
+                     list_child_orders: 1,
+                     get_permissions: 0
     end
   end
 end
