@@ -448,7 +448,7 @@ defmodule Bitflyer.RiskTest do
     put_fresh_market()
 
     assert :ok = Bitflyer.Risk.OrderRate.record(:dry_run)
-    assert Bitflyer.Risk.OrderRate.count(:dry_run) == 1
+    assert Bitflyer.Risk.OrderRate.count(:dry_run) == {:ok, 1}
 
     assert {:error, :limit_exceeded, %{limit: :max_orders_per_minute, count: 1, max: 1}} =
              Risk.authorize(valid_command(),
