@@ -136,11 +136,18 @@ defmodule Bitflyer.Strategy.Revision do
 
   defp json_value(v) when is_list(v), do: Enum.map(v, &json_value/1)
 
-  defp json_value(v) when is_map(v) do
+  # 構造体は Enumerable ではない。Decimal は上で処理済み。
+  defp json_value(v) when is_map(v) and not is_struct(v) do
     v
     |> Enum.map(fn {k, val} -> {to_string(k), json_value(val)} end)
     |> Enum.sort_by(&elem(&1, 0))
     |> Map.new()
+  end
+
+  defp json_value(v) when is_struct(v) do
+    v
+    |> Map.from_struct()
+    |> json_value()
   end
 
   defp json_value(v), do: inspect(v)
@@ -167,14 +174,21 @@ defmodule Bitflyer.Strategy.Revision do
   end
 
   defp to_ordered(%Jason.OrderedObject{} = ordered), do: ordered
+  defp to_ordered(%Decimal{} = d), do: Decimal.to_string(d, :normal)
 
-  defp to_ordered(map) when is_map(map) do
+  defp to_ordered(map) when is_map(map) and not is_struct(map) do
     values =
       map
       |> Enum.map(fn {k, v} -> {to_string(k), to_ordered(v)} end)
       |> Enum.sort_by(&elem(&1, 0))
 
     %Jason.OrderedObject{values: values}
+  end
+
+  defp to_ordered(struct) when is_struct(struct) do
+    struct
+    |> Map.from_struct()
+    |> to_ordered()
   end
 
   defp to_ordered(list) when is_list(list), do: Enum.map(list, &to_ordered/1)

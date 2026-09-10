@@ -47,6 +47,9 @@ defmodule Bitflyer.Strategy.RunnerTest do
     {:ok, pid} = start_supervised({Runner, opts})
     allow_runner_repo(pid)
 
+    # handle_continue（ensure_revision）完了を待つ
+    _ = :sys.get_state(Runner)
+
     if opts[:load_submitted?] == false do
       send(pid, :load_submitted)
     end

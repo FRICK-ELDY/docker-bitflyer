@@ -118,6 +118,23 @@ defmodule Bitflyer.Strategy.RevisionTest do
       assert revision.params["side"] == "buy"
     end
 
+    test "accepts nested structs without crashing" do
+      assert {:ok, revision} =
+               Revision.ensure_current(
+                 trade_mode: :live,
+                 module: Bitflyer.Strategy.FixedOnce,
+                 params: %{
+                   side: :buy,
+                   as_of: ~U[2026-09-10 00:00:00.000000Z],
+                   size: Decimal.new("0.01")
+                 },
+                 throttle_ms: 100
+               )
+
+      assert is_map(revision.params["as_of"])
+      assert revision.params["size"] == "0.01"
+    end
+
     test "params_hash is stable across key insertion order" do
       a = %{"side" => "buy", "size" => "0.01", "nested" => %{"b" => 2, "a" => 1}}
       b = %{"nested" => %{"a" => 1, "b" => 2}, "size" => "0.01", "side" => "buy"}
