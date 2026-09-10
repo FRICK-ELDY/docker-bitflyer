@@ -389,10 +389,11 @@ defmodule Bitflyer.Strategy.Runner do
   end
 
   defp attach_provenance(command, state) do
-    command
-    |> Map.put(:strategy_parameter_revision_id, state.revision_id)
-    |> Map.put(:strategy_module, Atom.to_string(state.module))
-    |> Map.put(:command_hash, Revision.command_hash(command))
+    Map.merge(command, %{
+      strategy_parameter_revision_id: state.revision_id,
+      strategy_module: Atom.to_string(state.module),
+      command_hash: Revision.command_hash(command)
+    })
   end
 
   defp ensure_revision(module, params, throttle_ms, opts) do

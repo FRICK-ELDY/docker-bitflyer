@@ -122,10 +122,8 @@ defmodule Bitflyer.Strategy.Revision do
   defp normalize_params(params) when is_list(params), do: Map.new(params)
 
   defp stringify_params(params) when is_map(params) do
-    params
-    |> Enum.map(fn {k, v} -> {to_string(k), json_value(v)} end)
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Map.new()
+    # キー順は to_ordered/1 が担保。ここは永続用の正規化のみ。
+    Map.new(params, fn {k, v} -> {to_string(k), json_value(v)} end)
   end
 
   # true/false/nil は atom なので is_atom より先に判定する
@@ -138,10 +136,7 @@ defmodule Bitflyer.Strategy.Revision do
 
   # 構造体は Enumerable ではない。Decimal は上で処理済み。
   defp json_value(v) when is_map(v) and not is_struct(v) do
-    v
-    |> Enum.map(fn {k, val} -> {to_string(k), json_value(val)} end)
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Map.new()
+    Map.new(v, fn {k, val} -> {to_string(k), json_value(val)} end)
   end
 
   defp json_value(v) when is_struct(v) do
@@ -173,8 +168,9 @@ defmodule Bitflyer.Strategy.Revision do
     |> Base.encode16(case: :lower)
   end
 
+  # params_hash / command_hash の入力は事前正規化済みの plain map。
+  # struct を Enum しないよう not is_struct は残す（防御）。
   defp to_ordered(%Jason.OrderedObject{} = ordered), do: ordered
-  defp to_ordered(%Decimal{} = d), do: Decimal.to_string(d, :normal)
 
   defp to_ordered(map) when is_map(map) and not is_struct(map) do
     values =
@@ -183,12 +179,6 @@ defmodule Bitflyer.Strategy.Revision do
       |> Enum.sort_by(&elem(&1, 0))
 
     %Jason.OrderedObject{values: values}
-  end
-
-  defp to_ordered(struct) when is_struct(struct) do
-    struct
-    |> Map.from_struct()
-    |> to_ordered()
   end
 
   defp to_ordered(list) when is_list(list), do: Enum.map(list, &to_ordered/1)
