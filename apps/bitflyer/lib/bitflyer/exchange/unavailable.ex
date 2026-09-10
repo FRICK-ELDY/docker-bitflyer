@@ -34,4 +34,9 @@ defmodule Bitflyer.Exchange.Unavailable do
   def fetch_executions(_request) do
     {:error, :exchange_unavailable}
   end
+
+  @impl true
+  def get_permissions do
+    {:error, :exchange_unavailable}
+  end
 end

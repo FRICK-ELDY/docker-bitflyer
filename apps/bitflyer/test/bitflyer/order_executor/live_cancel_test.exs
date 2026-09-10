@@ -10,6 +10,7 @@ defmodule Bitflyer.OrderExecutor.Live.CancelTest do
 
   defmodule CancelExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}

@@ -8,7 +8,6 @@ defmodule Bitflyer.Strategy.RunnerTest do
   import Bitflyer.TestSupport.DailyLossHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
-  alias Bitflyer.MarketData.Cache
   alias Bitflyer.Readiness
   alias Bitflyer.Strategy.Runner
   alias Bitflyer.Trading.Order
@@ -61,7 +60,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
   end
 
   test "tick before ready does not persist order; retries after ready" do
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert put_fresh_ticker(@market_key) == :ok
     assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
     _ = :sys.get_state(Runner)
 
@@ -82,7 +81,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
 
   test "successful intent is only submitted once per internal_order_id" do
     assert Readiness.mark_ready() == :ok
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert put_fresh_ticker(@market_key) == :ok
 
     assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
     _ = :sys.get_state(Runner)
@@ -99,7 +98,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
     stop_supervised(Runner)
     start_runner(throttle_ms: 60_000)
 
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert put_fresh_ticker(@market_key) == :ok
     assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
     _ = :sys.get_state(Runner)
 
@@ -134,7 +133,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
     assert MapSet.member?(state.submitted, @order_id)
 
     assert Readiness.mark_ready() == :ok
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert put_fresh_ticker(@market_key) == :ok
     assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
     _ = :sys.get_state(Runner)
 
@@ -153,7 +152,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
     assert %{submitted: nil} = :sys.get_state(pid)
 
     assert Readiness.mark_ready() == :ok
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert put_fresh_ticker(@market_key) == :ok
     assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
     _ = :sys.get_state(pid)
 
@@ -185,7 +184,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
     assert is_integer(state.ticks_ready_at)
 
     assert Readiness.mark_ready() == :ok
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert put_fresh_ticker(@market_key) == :ok
 
     send(
       pid,
@@ -220,7 +219,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
     start_runner(throttle_ms: 0)
 
     assert Readiness.mark_ready() == :ok
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert put_fresh_ticker(@market_key) == :ok
 
     assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
     state = :sys.get_state(Runner)
@@ -253,7 +252,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
     assert submitted == MapSet.new()
 
     assert Readiness.mark_ready() == :ok
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert put_fresh_ticker(@market_key) == :ok
     assert {:ok, before_orders} = Ash.read(Order)
 
     assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
@@ -291,7 +290,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
     end)
 
     assert Readiness.mark_ready() == :ok
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert put_fresh_ticker(@market_key) == :ok
     assert {:ok, before} = Ash.read(Order)
 
     assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})

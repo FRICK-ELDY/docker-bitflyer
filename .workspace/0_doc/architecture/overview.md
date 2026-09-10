@@ -165,7 +165,7 @@ strategy から API を直接叩かない。market-data の遅延や欠損があ
 - コンテナは `restart: unless-stopped` 相当で自動再起動する
 - ヘルスチェックは「プロセス生存」だけでなく「データ鮮度」と「取引所との同期」を見る
 - WebSocket 切断時は再接続し、必要なら REST で穴埋めする
-- 時計ずれは注文や署名に影響するため、ホストの時刻同期を前提にする
+- 時計ずれは注文や署名に影響するため、ホストの時刻同期を前提にする。ticker `source_timestamp` とホスト壁時計の差が `max_clock_skew_ms` を超えると Risk が拒否し、live 起動突合でも halt する。`source_timestamp` 欠落も発注拒否（fail-closed）
 - グレースフルシャットダウンでは、新規発注を止め、進行中の書き込みを終えてから終了する
 
 ## セキュリティ
@@ -173,7 +173,7 @@ strategy から API を直接叩かない。market-data の遅延や欠損があ
 - API キーは環境変数またはシークレットストアから注入する。イメージや Git に埋め込まない
 - 名前は `BITFLYER_API_KEY` / `BITFLYER_API_SECRET` で固定。`TRADE_MODE=live` のときのみ起動時必須
 - ビルドコンテキストは `.dockerignore` で `.env` / `_build` / `deps` / `.git` 等を除外する（本番 Dockerfile の `COPY` 時に混入するのを防ぐ）
-- 本番キーは出金権限を付けない
+- 本番キーは出金権限を付けない。live 起動時に `getpermissions` で `/v1/me/withdraw` / `/v1/me/sendcoin` が無いか検査し、あれば halt
 - 開発用キーと本番キーを混在させない
 - ログにシークレット、完全なリクエスト署名、不要な個人情報を出さない
 

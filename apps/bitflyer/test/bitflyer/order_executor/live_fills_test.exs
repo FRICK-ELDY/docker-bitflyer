@@ -10,6 +10,7 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
 
   defmodule FillExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
@@ -43,6 +44,7 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
 
   defmodule BrokenExecExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}

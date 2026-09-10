@@ -119,6 +119,24 @@ defmodule Bitflyer.Exchange.Rest do
     end
   end
 
+  @impl true
+  def get_permissions do
+    with :ok <- require_credentials(),
+         {:ok, body} <- request(:get, "/v1/me/getpermissions") do
+      decode_permissions(body)
+    end
+  end
+
+  defp decode_permissions(body) when is_list(body) do
+    if Enum.all?(body, &is_binary/1) do
+      {:ok, body}
+    else
+      {:error, {:invalid_response, body}}
+    end
+  end
+
+  defp decode_permissions(other), do: {:error, {:invalid_response, other}}
+
   defp get_balances do
     with :ok <- require_credentials(),
          {:ok, body} <- request(:get, "/v1/me/getbalance"),

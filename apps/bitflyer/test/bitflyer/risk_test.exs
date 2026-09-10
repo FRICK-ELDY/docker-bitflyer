@@ -49,6 +49,41 @@ defmodule Bitflyer.RiskTest do
              Risk.authorize(valid_command(), positions: [])
   end
 
+  test "authorize rejects clock skew when source_timestamp is too far" do
+    assert Readiness.mark_ready() == :ok
+
+    skewed = DateTime.add(DateTime.utc_now(), -60, :second)
+
+    assert Cache.put(@market_key, %{
+             ltp: Decimal.new("5000000"),
+             source_timestamp: skewed
+           }) == :ok
+
+    assert {:error, :clock_skew, %{skew_ms: skew_ms, max_ms: 5_000}} =
+             Risk.authorize(valid_command(), positions: [])
+
+    assert skew_ms > 5_000
+  end
+
+  test "authorize rejects missing source_timestamp" do
+    assert Readiness.mark_ready() == :ok
+    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+
+    assert {:error, :clock_skew, %{reason: :missing_source_timestamp}} =
+             Risk.authorize(valid_command(), positions: [])
+  end
+
+  test "authorize accepts source_timestamp within skew limit" do
+    assert Readiness.mark_ready() == :ok
+
+    assert Cache.put(@market_key, %{
+             ltp: Decimal.new("5000000"),
+             source_timestamp: DateTime.utc_now()
+           }) == :ok
+
+    assert :ok = Risk.authorize(valid_command(), positions: [])
+  end
+
   test "authorize rejects order size over limit" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
@@ -362,7 +397,11 @@ defmodule Bitflyer.RiskTest do
 
   test "authorize treats non-positive LTP as miss and rejects string daily_loss over limit" do
     assert Readiness.mark_ready() == :ok
-    assert Cache.put(@market_key, %{ltp: Decimal.new("0")}) == :ok
+
+    assert Cache.put(@market_key, %{
+             ltp: Decimal.new("0"),
+             source_timestamp: DateTime.utc_now()
+           }) == :ok
 
     assert {:error, :stale, %{reason: :ltp_missing}} =
              Risk.authorize(
@@ -530,7 +569,7 @@ defmodule Bitflyer.RiskTest do
   end
 
   defp put_fresh_market do
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert put_fresh_ticker(@market_key) == :ok
   end
 
   defp clear_default_risk_state do

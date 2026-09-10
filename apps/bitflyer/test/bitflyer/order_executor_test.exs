@@ -10,7 +10,6 @@ defmodule Bitflyer.OrderExecutorTest do
   import Bitflyer.TestSupport.BalanceCacheHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
-  alias Bitflyer.MarketData.Cache
   alias Bitflyer.OrderExecutor
   alias Bitflyer.Readiness
   alias Bitflyer.Trading.{BalanceSnapshot, Order, Position, RiskState}
@@ -19,6 +18,7 @@ defmodule Bitflyer.OrderExecutorTest do
 
   defmodule SpyExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot do
@@ -848,7 +848,7 @@ defmodule Bitflyer.OrderExecutorTest do
   end
 
   defp put_fresh_market do
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+    assert put_fresh_ticker(@market_key) == :ok
   end
 
   defp seed_paper_balance!(currency, amount) do

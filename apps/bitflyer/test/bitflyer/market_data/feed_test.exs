@@ -27,7 +27,8 @@ defmodule Bitflyer.MarketData.FeedTest do
       {:ok,
        %{
          "product_code" => product_code,
-         "ltp" => 4_900_000
+         "ltp" => 4_900_000,
+         "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
        }}
     end
 

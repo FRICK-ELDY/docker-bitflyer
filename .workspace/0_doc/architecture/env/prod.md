@@ -33,6 +33,8 @@
 - 環境変数名は上記で固定。ホスト側シークレットのみ。Git・イメージ・ログに出さない
 - `dry_run` / `paper` では省略可。`live` では両方揃っていないと起動しない
 - 権限は取引に必要な参照・発注のみ。**出金・送付権限は付けない**（Vision / overview と同旨）
+- live 起動突合で `GET /v1/me/getpermissions` を呼び、`/v1/me/withdraw` / `/v1/me/sendcoin` が含まれていれば `unsafe_api_permissions` で halt
+- 公開 ticker の `timestamp` とホスト時刻の差が `max_clock_skew_ms`（既定 5s）を超えると `clock_skew` で halt
 - 開発用キーと本番キーを混在させない
 - 署名付き REST client は `Bitflyer.Exchange.Rest`（`TRADE_MODE=live` かつ `BITFLYER_API_*` ありで runtime が差し込む）。キー欠落・dry_run/paper の既定は `Exchange.Unavailable`
 

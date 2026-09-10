@@ -50,6 +50,40 @@ defmodule Bitflyer.Startup.ReconcileTest do
     def place_order(_request), do: {:error, :not_used_in_reconcile}
   end
 
+  defmodule UnsafePermissionsExchange do
+    @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
+
+    @impl true
+    def fetch_reconcile_snapshot do
+      {:ok, %{positions: [], balances: [], open_orders: []}}
+    end
+
+    @impl true
+    def place_order(_request), do: {:error, :not_used_in_reconcile}
+
+    @impl true
+    def get_permissions do
+      {:ok, ["/v1/me/getbalance", "/v1/me/withdraw"]}
+    end
+  end
+
+  defmodule SkewedTickerRest do
+    @behaviour Bitflyer.MarketData.Rest.Client
+
+    @impl true
+    def fetch_ticker(product_code) do
+      skewed = DateTime.add(DateTime.utc_now(), -120, :second)
+
+      {:ok,
+       %{
+         "product_code" => product_code,
+         "ltp" => 5_000_000,
+         "timestamp" => DateTime.to_iso8601(skewed)
+       }}
+    end
+  end
+
   defmodule MismatchExchange do
     @behaviour Bitflyer.Exchange.Client
     use Bitflyer.TestSupport.ExchangeClientStubs
@@ -84,6 +118,7 @@ defmodule Bitflyer.Startup.ReconcileTest do
 
   defmodule AttrMismatchExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot do
@@ -687,6 +722,55 @@ defmodule Bitflyer.Startup.ReconcileTest do
     assert {:ok, _} = Reconcile.run(trade_mode: :dry_run)
     assert Reconciler.run_now() == :ok
     assert Readiness.get() == {:halted, :reconcile_mismatch}
+  end
+
+  test "live with withdraw permission halts as unsafe_api_permissions" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, UnsafePermissionsExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+    end)
+
+    seed_live_balance_baseline!()
+
+    assert {:error, :unsafe_api_permissions, %{permission: "/v1/me/withdraw"}} =
+             Reconcile.run(trade_mode: :live, exchange: UnsafePermissionsExchange)
+
+    assert {:error, :unsafe_api_permissions} = Reconciler.run_now()
+    assert Readiness.get() == {:halted, :unsafe_api_permissions}
+  end
+
+  test "live with skewed ticker timestamp halts as clock_skew" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+    previous_md = Application.get_env(:bitflyer, Bitflyer.MarketData)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, MatchingBalancesExchange)
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.MarketData,
+      Keyword.merge(previous_md || [], rest_client: SkewedTickerRest)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.put_env(:bitflyer, Bitflyer.MarketData, previous_md)
+    end)
+
+    seed_live_balance_baseline!()
+
+    assert {:error, :clock_skew, %{skew_ms: skew_ms}} =
+             Reconcile.run(trade_mode: :live, exchange: MatchingBalancesExchange)
+
+    assert skew_ms > 5_000
+    assert {:error, :clock_skew} = Reconciler.run_now()
+    assert Readiness.get() == {:halted, :clock_skew}
   end
 
   defp seed_live_balance_baseline! do

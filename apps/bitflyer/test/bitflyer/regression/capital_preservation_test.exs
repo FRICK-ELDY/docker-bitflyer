@@ -56,6 +56,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
   defmodule CancelOkExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
@@ -95,6 +96,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
   defmodule CancelKeepOpenExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
@@ -128,6 +130,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
   defmodule PartialFillExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
@@ -155,6 +158,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
   defmodule LossFillExchange do
     @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
 
     @impl true
     def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
@@ -1139,7 +1143,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   end
 
   defp put_fresh_market(ltp \\ Decimal.new("5000000")) do
-    assert Cache.put(@market_key, %{ltp: ltp}) == :ok
+    assert put_fresh_ticker(@market_key, ltp) == :ok
   end
 
   defp clear_default_risk_state do

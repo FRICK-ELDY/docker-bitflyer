@@ -8,6 +8,7 @@ defmodule Bitflyer.Exchange.Client do
   - 照会: `fetch_order/1`
   - 一覧: `list_child_orders/1`（submission_unknown 回収用。時刻・side・size 照合）
   - 約定: `fetch_executions/1`（live 約定反映用）
+  - 権限: `get_permissions/0`（live 起動時の出金禁止検査）
 
   未実装クライアントは `Bitflyer.Exchange.Unavailable`（fail-closed）。
   署名付き REST は `Bitflyer.Exchange.Rest`。
@@ -129,4 +130,5 @@ defmodule Bitflyer.Exchange.Client do
               {:ok, [child_order()]} | {:error, term()}
   @callback fetch_executions(fetch_executions_request()) ::
               {:ok, [execution()]} | {:error, term()}
+  @callback get_permissions() :: {:ok, [String.t()]} | {:error, term()}
 end
