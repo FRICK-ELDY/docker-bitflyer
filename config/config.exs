@@ -137,7 +137,9 @@ config :logger, :default_formatter,
     :healthy,
     :kind,
     :currency,
-    :limit
+    :limit,
+    :operator,
+    :snapshot_hash
   ]
 
 # Use Jason for JSON parsing in Phoenix

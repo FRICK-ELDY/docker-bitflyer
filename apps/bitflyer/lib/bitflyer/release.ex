@@ -1,11 +1,13 @@
 defmodule Bitflyer.Release do
   @moduledoc """
-  mix 無しの本番 release 向けタスク（migrate / resume）。
+  mix 無しの本番 release 向けタスク（migrate / resume / baseline import）。
 
   Docker 例:
 
       bin/docker_bitflyer eval "Bitflyer.Release.migrate()"
       bin/docker_bitflyer rpc "Bitflyer.Release.resume()"
+      bin/docker_bitflyer rpc "Bitflyer.Release.import_baseline(dry_run: true, operator: \\"alice\\")"
+      bin/docker_bitflyer rpc "Bitflyer.Release.import_baseline(confirm: true, operator: \\"alice\\", expected_hash: \\"<hash>\\")"
   """
 
   @app :bitflyer
@@ -52,6 +54,36 @@ defmodule Bitflyer.Release do
 
       {:error, reason} ->
         raise "resume failed: #{inspect(reason)}"
+    end
+  end
+
+  @doc """
+  live 初回 BalanceSnapshot baseline を取り込む（`mix bitflyer.baseline` 相当）。
+
+  - `dry_run: true` — preview のみ
+  - `confirm: true` — 書き込み（Ready にはしない）
+  - `operator:` — 必須
+  - `expected_hash:` — confirm 必須（dry-run の snapshot_hash）
+
+  常駐 BEAM 上で RPC すること。
+  """
+  def import_baseline(opts \\ []) do
+    normalized =
+      opts
+      |> Keyword.put(:dry_run?, Keyword.get(opts, :dry_run, Keyword.get(opts, :dry_run?, false)))
+      |> Keyword.put(:confirm?, Keyword.get(opts, :confirm, Keyword.get(opts, :confirm?, false)))
+      |> Keyword.put_new(:expected_hash, Keyword.get(opts, :hash))
+      |> Keyword.drop([:dry_run, :confirm, :hash])
+
+    case Bitflyer.System.import_baseline(normalized) do
+      {:ok, result} ->
+        result
+
+      {:error, reason, details} when is_map(details) ->
+        raise "baseline import failed: #{inspect(reason)} #{inspect(details)}"
+
+      {:error, reason} ->
+        raise "baseline import failed: #{inspect(reason)}"
     end
   end
 

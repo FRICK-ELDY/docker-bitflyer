@@ -67,7 +67,7 @@ defmodule Bitflyer.TelemetryTest do
     allowlist = Telemetry.metadata_allowlist()
     logger_metadata = Application.get_env(:logger, :default_formatter)[:metadata] || []
 
-    for key <- [:kind, :currency, :limit] do
+    for key <- [:kind, :currency, :limit, :operator, :snapshot_hash] do
       assert MapSet.member?(allowlist, key)
       assert key in logger_metadata
     end

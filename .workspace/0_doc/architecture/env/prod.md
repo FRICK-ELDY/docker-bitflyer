@@ -101,6 +101,34 @@
 - 新規 submit は拒否される（`:circuit_open` / `:unsynced`）
 - Feed 切断・市場データ stale は `GET /health/ready` が 503（`reason` が `feed_disconnected` / `stale_market_data` 等）。Compose の `/health/live` は落とさない
 
+### 初回 baseline（`mix bitflyer.baseline`）
+
+live で必須通貨（既定: JPY / BTC）の `BalanceSnapshot` が無いと起動突合は `balance_baseline_missing` で止まる。人手 SQL ではなく承認付き import で作る。
+
+1. 取引所残高を確認したうえで dry-run:
+
+   ```bash
+   docker compose exec -e BITFLYER_BASELINE_OPERATOR=alice app mix bitflyer.baseline --dry-run
+   ```
+
+2. hash・金額を見て問題なければ、**dry-run と同じ hash** を付けて confirm（**Ready にはしない**）:
+
+   ```bash
+   docker compose exec -e BITFLYER_BASELINE_OPERATOR=alice app \
+     mix bitflyer.baseline --confirm --hash=<dry-run の hash>
+   ```
+
+   再取得結果が dry-run と違えば `snapshot_hash_mismatch` で拒否する（見た金額の承認）。
+
+3. 起動突合または `mix bitflyer.resume` が成功したときだけ Ready。release なら常駐 BEAM 上で:
+
+   ```bash
+   bin/docker_bitflyer rpc 'Bitflyer.Release.import_baseline(dry_run: true, operator: "alice")'
+   bin/docker_bitflyer rpc 'Bitflyer.Release.import_baseline(confirm: true, operator: "alice", expected_hash: "<hash>")'
+   ```
+
+必須通貨のうち tip が無いものだけを書く（欠落分の補完可）。全必須通貨に tip がある場合は `baseline_already_complete`。live 運用中の残高更新は引き続き紙の append ではなく取引所突合が正本。
+
 ### 再開（`mix bitflyer.resume`）
 
 remote console だけに頼らず、再突合成功時のみ halt を外す。
