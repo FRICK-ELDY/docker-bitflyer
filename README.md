@@ -30,7 +30,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | datastore（Ash: Order / Position / Fill / Balance / RiskState） | implemented | `Bitflyer.Repo` に閉じる |
 | cache（ETS） | implemented | 単一ノード前提。Redis なし |
 | TradeMode | implemented | `dry_run` / `paper` / `live` + `BITFLYER_LIVE_CONFIRM` |
-| Readiness / 突合 / resume / baseline | implemented | boot・定期突合。`mix bitflyer.resume`。live 初回は `mix bitflyer.baseline` |
+| Readiness / 突合 / resume / baseline / recover | implemented | boot・定期突合。`mix bitflyer.resume`。live 初回 baseline。`mix bitflyer.recover`（submission_unknown） |
 | observe — telemetry / 構造化ログ | implemented | allowlist（`:kind` / `:currency` / `:limit` 含む） |
 | observe — Discord 通知 | implemented | Incoming Webhook。未設定でも起動。発注は止めない |
 | observe — health | implemented | `/health/live`・`/health/ready`・`/health` |

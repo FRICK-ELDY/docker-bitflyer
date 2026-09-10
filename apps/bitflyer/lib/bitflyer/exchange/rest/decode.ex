@@ -9,7 +9,7 @@ defmodule Bitflyer.Exchange.Rest.Decode do
 
   alias Bitflyer.Exchange.Client
 
-  @type decode_result(t) :: {:ok, t} | :skip | {:error, :invalid_number}
+  @type decode_result(t) :: {:ok, t} | :skip | {:error, :invalid_number | :invalid_datetime}
 
   @doc """
   数値を `Decimal` へ。不正・欠損・NaN/Inf は `:error`（0 に丸めない）。
@@ -212,6 +212,32 @@ defmodule Bitflyer.Exchange.Rest.Decode do
   end
 
   @doc false
+  @spec child_order(map()) :: decode_result(Client.child_order())
+  def child_order(%{} = row) do
+    case order_info(row) do
+      {:ok, info} ->
+        with {:ok, price} <- optional_price(Map.get(row, "price") || Map.get(row, :price)),
+             {:ok, ordered_at} <-
+               child_order_datetime(
+                 Map.get(row, "child_order_date") || Map.get(row, :child_order_date)
+               ) do
+          {:ok,
+           Map.merge(info, %{
+             price: price,
+             order_type:
+               child_order_type(
+                 Map.get(row, "child_order_type") || Map.get(row, :child_order_type)
+               ),
+             ordered_at: ordered_at
+           })}
+        end
+
+      other ->
+        other
+    end
+  end
+
+  @doc false
   @spec map_error(integer(), term()) :: atom()
   def map_error(status, body) when status in 400..499 do
     message =
@@ -272,6 +298,54 @@ defmodule Bitflyer.Exchange.Rest.Decode do
         {:error, :invalid_number}
     end
   end
+
+  defp optional_price(nil), do: {:ok, nil}
+  defp optional_price(""), do: {:ok, nil}
+
+  defp optional_price(price) do
+    case to_decimal(price) do
+      {:ok, decimal} -> {:ok, decimal}
+      :error -> {:error, :invalid_number}
+    end
+  end
+
+  defp child_order_type("LIMIT"), do: :limit
+  defp child_order_type("MARKET"), do: :market
+  defp child_order_type(:limit), do: :limit
+  defp child_order_type(:market), do: :market
+  defp child_order_type(_), do: nil
+
+  # bitFlyer Private API の日時はオフセット無しの JST 壁時計が契約（例: "2015-07-07T08:45:53"）。
+  # オフセット付き ISO8601 が来た場合はそのまま解釈する（誤って -9h しない）。
+  # 欠落・不正は fail-closed（{:error, :invalid_datetime}）。nil に丸めない。
+  @jst_offset_seconds 9 * 60 * 60
+
+  defp child_order_datetime(nil), do: {:error, :invalid_datetime}
+  defp child_order_datetime(""), do: {:error, :invalid_datetime}
+
+  defp child_order_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, dt, _offset} ->
+        {:ok, dt}
+
+      {:error, :missing_offset} ->
+        case NaiveDateTime.from_iso8601(value) do
+          {:ok, naive} ->
+            naive
+            |> NaiveDateTime.add(-@jst_offset_seconds, :second)
+            |> DateTime.from_naive("Etc/UTC")
+
+          {:error, _} ->
+            {:error, :invalid_datetime}
+        end
+
+      {:error, _} ->
+        {:error, :invalid_datetime}
+    end
+  end
+
+  defp child_order_datetime(%DateTime{} = dt), do: {:ok, dt}
+  defp child_order_datetime(_), do: {:error, :invalid_datetime}
 
   defp decimal_finite?(%Decimal{} = d) do
     not (Decimal.nan?(d) or Decimal.inf?(d))

@@ -87,6 +87,22 @@ defmodule Bitflyer.Exchange.Rest do
   end
 
   @impl true
+  def list_child_orders(request) when is_map(request) do
+    product_code = Map.fetch!(request, :product_code)
+
+    query =
+      [{"product_code", product_code}]
+      |> maybe_put_query("count", Map.get(request, :count) || 500)
+      |> maybe_put_query("child_order_state", Map.get(request, :child_order_state))
+
+    with :ok <- require_credentials(),
+         {:ok, body} <- request(:get, "/v1/me/getchildorders", "", query),
+         {:ok, orders} <- decode_rows(List.wrap(body), &Decode.child_order/1) do
+      {:ok, orders}
+    end
+  end
+
+  @impl true
   def fetch_executions(request) when is_map(request) do
     product_code = Map.fetch!(request, :product_code)
 
@@ -188,6 +204,15 @@ defmodule Bitflyer.Exchange.Rest do
           Bitflyer.Telemetry.log(
             :warning,
             "exchange decode rejected invalid number; failing snapshot",
+            decode_error_meta(row)
+          )
+
+          {:halt, error}
+
+        {:error, :invalid_datetime} = error ->
+          Bitflyer.Telemetry.log(
+            :warning,
+            "exchange decode rejected invalid datetime; failing list",
             decode_error_meta(row)
           )
 

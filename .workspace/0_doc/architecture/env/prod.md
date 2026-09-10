@@ -129,6 +129,35 @@ live で必須通貨（既定: JPY / BTC）の `BalanceSnapshot` が無いと起
 
 必須通貨のうち tip が無いものだけを書く（欠落分の補完可）。全必須通貨に tip がある場合は `baseline_already_complete`。live 運用中の残高更新は引き続き紙の append ではなく取引所突合が正本。
 
+### submission_unknown 回収（`mix bitflyer.recover`）
+
+発注 timeout 等で Order が `submission_unknown`（または ID 未埋込の `pending`）になり halt したとき、取引所 `getchildorders` を時刻窓 + side + size（limit は price）で照合して ID を埋める。**Ready にはしない**。
+
+1. halt 理由と対象 `internal_order_id` をログから確認する
+2. dry-run で候補を見る:
+
+   ```bash
+   docker compose exec -e BITFLYER_RECOVER_OPERATOR=alice app \
+     mix bitflyer.recover --dry-run --internal-order-id=<id>
+   ```
+
+3. 結果に応じて confirm（いずれも dry-run の `hash` 必須）:
+
+   - **候補 1 件**: `--confirm --hash=<hash>`
+   - **候補複数**: 取引所画面と突合し `--confirm --hash=<hash> --exchange-order-id=JRF-...`
+   - **候補 0**: 取引所に無いと確認できたら `--confirm --hash=<hash> --absent`（cancelled。**BalanceCache hold は残す** — 誤解放で available 過大にしない）
+
+4. 続けて `mix bitflyer.resume`（下記）。release なら:
+
+   ```bash
+   bin/docker_bitflyer rpc 'Bitflyer.Release.recover_submission(dry_run: true, operator: "alice", internal_order_id: "<id>")'
+   bin/docker_bitflyer rpc 'Bitflyer.Release.recover_submission(confirm: true, operator: "alice", internal_order_id: "<id>", expected_hash: "<hash>")'
+   ```
+
+窓幅は `--window-seconds`（既定 300）。一覧は要求 count（既定 500）に対し内部で count+1 を取り、超過時のみ切り捨て失敗（ちょうど count 件でも成功）。`child_order_date` 欠落・不正も一覧失敗。曖昧な候補を自動確定しない。
+
+対象は `submission_unknown` と persist_failed 由来の **ID 未埋込 `pending`**。誤 `--absent` で `cancelled` になっても ID 無しなら再 recover で紐付けできる（hold は継続）。
+
 ### 再開（`mix bitflyer.resume`）
 
 remote console だけに頼らず、再突合成功時のみ halt を外す。

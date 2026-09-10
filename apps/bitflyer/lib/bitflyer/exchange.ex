@@ -42,6 +42,15 @@ defmodule Bitflyer.Exchange do
   end
 
   @doc """
+  銘柄の子注文一覧（submission_unknown 回収用）。
+  """
+  @spec list_child_orders(Client.list_child_orders_request()) ::
+          {:ok, [Client.child_order()]} | {:error, term()}
+  def list_child_orders(request) when is_map(request) do
+    client().list_child_orders(request)
+  end
+
+  @doc """
   約定一覧を取得する（live 約定反映用）。
   """
   @spec fetch_executions(Client.fetch_executions_request()) ::

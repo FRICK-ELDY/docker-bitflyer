@@ -47,6 +47,9 @@ defmodule Bitflyer.OrderExecutor.Live.CancelTest do
     @impl true
     def fetch_executions(_), do: {:ok, []}
 
+    @impl true
+    def list_child_orders(_), do: {:ok, []}
+
     def cancel_count, do: Agent.get(__MODULE__.Counter, & &1)
   end
 

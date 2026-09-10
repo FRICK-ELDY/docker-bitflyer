@@ -135,6 +135,9 @@ defmodule Bitflyer.Startup.ReconcileTest do
 
     @impl true
     def fetch_executions(_request), do: {:ok, []}
+
+    @impl true
+    def list_child_orders(_request), do: {:ok, []}
   end
 
   defmodule DustExchange do

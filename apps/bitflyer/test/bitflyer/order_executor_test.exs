@@ -72,6 +72,9 @@ defmodule Bitflyer.OrderExecutorTest do
     @impl true
     def fetch_executions(_request), do: {:ok, []}
 
+    @impl true
+    def list_child_orders(_request), do: {:ok, []}
+
     def place_count do
       Agent.get(__MODULE__.Counter, & &1)
     end

@@ -26,6 +26,11 @@ defmodule Bitflyer.Exchange.Unavailable do
   end
 
   @impl true
+  def list_child_orders(_request) do
+    {:error, :exchange_unavailable}
+  end
+
+  @impl true
   def fetch_executions(_request) do
     {:error, :exchange_unavailable}
   end
