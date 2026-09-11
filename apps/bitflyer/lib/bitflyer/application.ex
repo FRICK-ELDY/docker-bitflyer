@@ -22,6 +22,7 @@ defmodule Bitflyer.Application do
         Bitflyer.Risk.AuthorizedOrder,
         Bitflyer.Risk.CircuitSync,
         Bitflyer.OrderExecutor.InFlight,
+        Bitflyer.OrderExecutor.LiveFills.Gate,
         Bitflyer.Risk.DailyLoss,
         Bitflyer.Risk.BalanceCache,
         Supervisor.child_spec(

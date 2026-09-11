@@ -5,7 +5,8 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
   - 建玉: `Positions.apply_fill` で差分反映（Risk が DB Position を見るため必須）
   - 残高: **触らない**。live の残高正本は `getbalance` 突合（紙の `Balances.apply_fill` は FX と矛盾する）
   - 発注認可前（`System.submit_order`）・発注後・取消後・定期突合前に呼ぶ
-  - `sync_open_orders/1` は最小間隔で間引き（認可前の連打抑制）。突合は `:force`
+  - `sync_open_orders/1` は `LiveFills.Gate` で最小間隔＋単一ノード直列化（認可前の連打抑制）。
+    突合は `:force`
 
   間引き中は直近の試行を信頼して `:ok` を返す（1s 以内に他 open の未反映約定があると
   認可時建玉が古くなりうる意図的トレードオフ。最終安全網は起動・定期突合の `:force`）。
@@ -18,17 +19,14 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
 
   require Ash.Query
 
+  alias Bitflyer.OrderExecutor.LiveFills.Gate
   alias Bitflyer.OrderExecutor.Positions
   alias Bitflyer.Trading.Order
-
-  @last_sync_key {__MODULE__, :last_open_orders_sync_ms}
-  @sync_lock_resource {__MODULE__, :open_orders_sync}
-  @default_min_sync_interval_ms 1_000
 
   @doc """
   `pending` / `partially_filled` の live 注文を取引所状態に合わせて進める。
 
-  最小間隔の判定・ロック取得・時計更新は同一クリティカルセクションで行う。
+  最小間隔の判定・直列化・時計更新は `Gate` が担う（sync 本体は呼び出し元で実行）。
   時計は成功/失敗を問わず「試行開始時」に進め、失敗連打での private REST 連打を抑える。
   """
   @spec sync_open_orders(keyword()) :: :ok | {:error, atom(), map()}
@@ -36,52 +34,23 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
     force? = Keyword.get(opts, :force, false)
     now = Keyword.get_lazy(opts, :now, fn -> System.monotonic_time(:millisecond) end)
 
-    if not force? and recently_synced_open_orders?(now) do
-      :ok
-    else
-      with_open_orders_sync_lock(force?, fn ->
-        # ロック後に再判定（並行 submit の間引きすり抜け防止）
-        if not force? and recently_synced_open_orders?(now) do
-          :ok
-        else
-          # 試行時点で時計を進める（失敗継続でも間隔を守る）
-          _ = mark_open_orders_synced(now)
+    case Gate.begin(force?, now) do
+      :skip ->
+        :ok
+
+      :run ->
+        try do
           do_sync_open_orders(opts)
+        after
+          Gate.release()
         end
-      end)
     end
   end
 
   @doc false
   @spec clear_open_orders_sync_clock() :: :ok
   def clear_open_orders_sync_clock do
-    :persistent_term.erase(@last_sync_key)
-    :ok
-  end
-
-  defp with_open_orders_sync_lock(force?, fun) when is_function(fun, 0) do
-    lock_id = {@sync_lock_resource, self()}
-    nodes = [Node.self()]
-
-    acquired? =
-      if force? do
-        # 突合は他の認可前 sync 完了を待つ（スキップしない）
-        true = :global.set_lock(lock_id, nodes)
-        true
-      else
-        :global.set_lock(lock_id, nodes, 0)
-      end
-
-    if acquired? do
-      try do
-        fun.()
-      after
-        :global.del_lock(lock_id, nodes)
-      end
-    else
-      # 他プロセスが sync 中 → 間引き扱い（過大 REST 防止）
-      :ok
-    end
+    Gate.clear_clock()
   end
 
   defp do_sync_open_orders(opts) do
@@ -100,26 +69,6 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
       {:error, error} ->
         {:error, :persist_failed, %{error: error}}
     end
-  end
-
-  defp recently_synced_open_orders?(now) when is_integer(now) do
-    case :persistent_term.get(@last_sync_key, :missing) do
-      last when is_integer(last) ->
-        now - last < min_sync_interval_ms()
-
-      :missing ->
-        false
-    end
-  end
-
-  defp mark_open_orders_synced(now) when is_integer(now) do
-    :persistent_term.put(@last_sync_key, now)
-    :ok
-  end
-
-  defp min_sync_interval_ms do
-    Application.get_env(:bitflyer, __MODULE__, [])
-    |> Keyword.get(:min_sync_interval_ms, @default_min_sync_interval_ms)
   end
 
   @doc """

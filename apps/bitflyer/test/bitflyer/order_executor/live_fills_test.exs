@@ -753,7 +753,7 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
 
     results = Enum.map(tasks, &Task.await(&1, 5_000))
     assert Enum.all?(results, &(&1 == :ok))
-    # ロックにより実 fetch は 1 回（他は間引き :ok）
+    # Gate 直列化により実 fetch は 1 回（他は間引き :ok）
     assert CountingFillExchange.fetch_count() == 1
   end
 
