@@ -25,11 +25,12 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | --- | --- | --- |
 | market-data（Feed / Cache / 再接続 / gap-fill） | implemented | ETS 鮮度＋取引所 `source_timestamp`。stale / skew は risk。無通信は鮮度窓×3（`stall_timeout_ms` 上書き可）で切断→再接続 |
 | strategy（Behaviour / Runner / FixedOnce） | implemented | dry_run/paper の骨。live は既定オフ・FixedOnce 禁止・Risk 上限は env 必須。適用履歴は `StrategyParameterRevision` + Order 由来 |
-| risk-manager（limits / circuit / 鮮度） | partial | サイズ・建玉・頻度（再起動時 Order 温存）・価格逸脱・時計ずれは実効。日次損失は Fill/DailyLoss。残高は BalanceCache。成功時はワンショット `AuthorizedOrder`（偽造・再利用不可）。401/403 即 halt・窓内連続拒否は FailureRate。含み損は未計上 |
+| risk-manager（limits / circuit / 鮮度） | partial | サイズ・建玉・頻度（再起動時 Order 温存）・価格逸脱・時計ずれは実効。日次損失は Fill/DailyLoss。残高は BalanceCache（**live は spot `getbalance` のみ。FX/CFD 証拠金は未実装**）。成功時はワンショット `AuthorizedOrder`（偽造・再利用不可）。401/403 即 halt・窓内連続拒否は FailureRate。含み損は未計上 |
 | order-executor（dry_run / paper / live 出口） | implemented | `AuthorizedOrder.consume` 必須（`System.submit_order` 経由）。冪等キーあり。paper は成行 LTP±bps（slip+fee）/ 指値は fee のみ。認可拘束も同価格。live はゲート通過時のみ REST |
 | datastore（Ash: Order / Position / Fill / Balance / RiskState） | implemented | `Bitflyer.Repo` に閉じる |
 | cache（ETS） | implemented | 単一ノード前提。Redis なし |
 | TradeMode | implemented | `dry_run` / `paper` / `live` + `BITFLYER_LIVE_CONFIRM` |
+| 既定銘柄 | **spot `BTC_JPY`**（allowlist） | live は spot 限定（`FX_*` / 未登録ペアは起動・認可で拒否）。FX live は `getcollateral` 実装後（[backlog](.workspace/1_backlog/fx-collateral-adapter.md)） |
 | Readiness / 突合 / resume / baseline / recover | implemented | boot・定期突合。live は権限（出金禁止）・ticker 時計検査あり。`mix bitflyer.resume` / baseline / recover。`prep_stop` はゲート閉鎖＋ drain |
 | observe — telemetry / 構造化ログ | implemented | allowlist（`:kind` / `:currency` / `:limit` 含む）。prod は ConsoleReporter 既定オン（低頻度ドメインのみ） |
 | observe — Discord 通知 | implemented | Incoming Webhook。未設定でも起動。発注は止めない |
@@ -160,13 +161,13 @@ Hex の既知 advisory が対象。`heroicons` / `daisyui` など GitHub タグ�
 | 取得できる情報 | 主なパス | 本リポ |
 | --- | --- | --- |
 | API キーの権限一覧 | `GET /v1/me/getpermissions` | live 起動検査（出金・送付禁止） |
-| 資産残高 | `GET /v1/me/getbalance` | Rest 突合 |
-| 証拠金の状態 | `GET /v1/me/getcollateral` | — |
+| 資産残高 | `GET /v1/me/getbalance` | Rest 突合（**live 残高正本。既定 spot**） |
+| 証拠金の状態 | `GET /v1/me/getcollateral` | —（FX live 未対応） |
 | 通貨別証拠金 | `GET /v1/me/getcollateralaccounts` | — |
 | 注文一覧（未約定含む） | `GET /v1/me/getchildorders` | Rest 突合・照会 |
 | 親注文一覧 / 詳細 | `GET /v1/me/getparentorders` 等 | 使わない想定 |
 | 自分の約定一覧 | `GET /v1/me/getexecutions` | Rest 約定反映 |
-| 建玉一覧（CFD / FX） | `GET /v1/me/getpositions` | Rest 突合 |
+| 建玉一覧（CFD / FX） | `GET /v1/me/getpositions` | Rest 突合（**spot では呼ばない**） |
 | 残高履歴 | `GET /v1/me/getbalancehistory` | — |
 | 証拠金変動履歴 | `GET /v1/me/getcollateralhistory` | — |
 | 取引手数料 | `GET /v1/me/gettradingcommission` | — |
@@ -174,6 +175,12 @@ Hex の既知 advisory が対象。`heroicons` / `daisyui` など GitHub タグ�
 | 銀行口座 / 入出金履歴 | `GET /v1/me/getbankaccounts` 等 | 使わない |
 
 発注・取消・出金などは取得ではなく操作 API（`sendchildorder` / `cancelchildorder` 等）。本システムの live 出口で使うのは発注・取消側。**出金 API は使わない。**
+
+### live（spot 限定）の運用前提
+
+- 既定・推奨は **`BTC_JPY` + `getbalance`**。`product_codes` に `FX_*` を入れると live 起動が拒否される
+- **同一 API キー口座の手動 FX/CFD 建玉は監視しない。** spot 設定時は `getpositions` を呼ばず建玉突合もしないため、口座に残る CFD エクスポージャはボットの Ready / Risk から見えない。live 解禁前に当該キー口座を spot 専用にするか、手動建玉を解消すること
+- spot の内部 `Position` は Risk の建玉上限用であり、取引所建玉との突合対象外。**在庫の正本は `getbalance`（BTC/JPY）**。Fill 後の Position ドリフトは残高突合と LiveFills に依存する
 
 ### Realtime（WebSocket）
 

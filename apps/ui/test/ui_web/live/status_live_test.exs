@@ -10,7 +10,7 @@ defmodule UiWeb.StatusLiveTest do
   alias Bitflyer.Readiness
   alias Bitflyer.Trading.RiskState
 
-  @product "FX_BTC_JPY"
+  @product "BTC_JPY"
   @market_key {:ticker, @product}
 
   setup do
@@ -97,7 +97,7 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#readiness", "ready")
     assert has_element?(view, "#feed-status", "disabled")
     assert has_element?(view, "#market-freshness", "fresh")
-    assert has_element?(view, "#market-freshness-FX_BTC_JPY", "fresh")
+    assert has_element?(view, "#market-freshness-BTC_JPY", "fresh")
     refute has_element?(view, "#ops-resume")
   end
 

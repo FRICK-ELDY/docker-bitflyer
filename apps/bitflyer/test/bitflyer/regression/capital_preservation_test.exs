@@ -35,7 +35,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
   alias Bitflyer.System
   alias Bitflyer.Trading.{Order, Position, RiskState}
 
-  @product "FX_BTC_JPY"
+  @product "BTC_JPY"
   @market_key {:ticker, @product}
 
   defmodule SpyExchange do
@@ -80,7 +80,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
           {:ok,
            %{
              exchange_order_id: id,
-             product_code: "FX_BTC_JPY",
+             product_code: "BTC_JPY",
              side: :buy,
              size: Decimal.new("0.01"),
              filled_size: Decimal.new("0"),
@@ -115,7 +115,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       {:ok,
        %{
          exchange_order_id: id,
-         product_code: "FX_BTC_JPY",
+         product_code: "BTC_JPY",
          side: :buy,
          size: Decimal.new("0.01"),
          filled_size: Decimal.new("0"),
@@ -197,7 +197,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
        %{
          positions: [
            %{
-             product_code: "FX_BTC_JPY",
+             product_code: "BTC_JPY",
              side: :buy,
              size: Decimal.new("0.01"),
              average_price: Decimal.new("5000000")

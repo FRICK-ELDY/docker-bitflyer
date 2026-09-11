@@ -6,7 +6,7 @@ defmodule UiWeb.HealthControllerTest do
   alias Bitflyer.MarketData.Cache
   alias Bitflyer.Readiness
 
-  @product "FX_BTC_JPY"
+  @product "BTC_JPY"
   @market_key {:ticker, @product}
 
   setup do

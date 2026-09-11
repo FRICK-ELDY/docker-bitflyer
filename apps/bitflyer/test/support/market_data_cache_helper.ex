@@ -23,7 +23,7 @@ defmodule Bitflyer.TestSupport.MarketDataCacheHelper do
   @doc """
   既定銘柄へ鮮度付き ticker を書く。
   """
-  def put_fresh_ticker(key \\ {:ticker, "FX_BTC_JPY"}, ltp \\ Decimal.new("5000000"), opts \\ []) do
+  def put_fresh_ticker(key \\ {:ticker, "BTC_JPY"}, ltp \\ Decimal.new("5000000"), opts \\ []) do
     Cache.put(key, fresh_ticker_value(ltp), opts)
   end
 end

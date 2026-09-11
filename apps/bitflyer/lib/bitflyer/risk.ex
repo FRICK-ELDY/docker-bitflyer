@@ -7,6 +7,7 @@ defmodule Bitflyer.Risk do
   サーキットは `open_circuit/1` / `clear_circuit/1`。
 
   検査: 同期 → 鮮度 → 時計ずれ → 注文サイズ → 建玉 → 価格逸脱 → 発注頻度 → 日次損失 → 残高。
+  live は先に銘柄種別を検査し、spot 以外（FX/CFD）を拒否する。
 
   発注ホットパスでは RiskState・発注頻度・日次損失・残高のために DB 往復しない。
   頻度は `Risk.OrderRate`、取引所エラー連続は `Risk.FailureRate`、
@@ -57,6 +58,7 @@ defmodule Bitflyer.Risk do
 
     result =
       with :ok <- validate_command(command),
+           :ok <- check_live_product(command, opts),
            :ok <- check_sync(opts),
            :ok <- check_freshness(command, limits, opts),
            :ok <- check_clock_skew(command, limits, opts),
@@ -164,6 +166,28 @@ defmodule Bitflyer.Risk do
 
       true ->
         :ok
+    end
+  end
+
+  # live は spot のみ（getbalance モデル）。FX は証拠金未実装のため拒否。
+  defp check_live_product(command, opts) do
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+    product_code = Map.get(command, :product_code)
+
+    cond do
+      trade_mode != :live ->
+        :ok
+
+      Product.spot?(product_code) ->
+        :ok
+
+      true ->
+        {:error, :invalid_command,
+         %{
+           reason: :unsupported_product_for_live,
+           product_code: product_code,
+           market_type: Product.market_type(product_code)
+         }}
     end
   end
 

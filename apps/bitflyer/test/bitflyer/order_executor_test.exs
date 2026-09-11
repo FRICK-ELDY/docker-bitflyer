@@ -15,7 +15,7 @@ defmodule Bitflyer.OrderExecutorTest do
   alias Bitflyer.System
   alias Bitflyer.Trading.{BalanceSnapshot, Fill, Order, Position, RiskState}
 
-  @market_key {:ticker, "FX_BTC_JPY"}
+  @market_key {:ticker, "BTC_JPY"}
 
   defmodule SpyExchange do
     @behaviour Bitflyer.Exchange.Client
@@ -65,7 +65,7 @@ defmodule Bitflyer.OrderExecutorTest do
       {:ok,
        %{
          exchange_order_id: id,
-         product_code: "FX_BTC_JPY",
+         product_code: "BTC_JPY",
          side: :buy,
          size: Decimal.new("1"),
          filled_size: Decimal.new("0"),
@@ -160,7 +160,7 @@ defmodule Bitflyer.OrderExecutorTest do
 
     assert {:ok, []} =
              Position
-             |> Ash.Query.filter(product_code == "FX_BTC_JPY" and trade_mode == :dry_run)
+             |> Ash.Query.filter(product_code == "BTC_JPY" and trade_mode == :dry_run)
              |> Ash.read()
 
     assert order.internal_order_id == "dry-1"
@@ -186,7 +186,7 @@ defmodule Bitflyer.OrderExecutorTest do
 
     assert {:ok, %Position{side: :buy, size: size}} =
              Position
-             |> Ash.Query.filter(product_code == "FX_BTC_JPY" and trade_mode == :paper)
+             |> Ash.Query.filter(product_code == "BTC_JPY" and trade_mode == :paper)
              |> Ash.read_one()
 
     assert Decimal.equal?(size, Decimal.new("0.01"))
@@ -392,7 +392,7 @@ defmodule Bitflyer.OrderExecutorTest do
 
     assert {:ok, nil} =
              Position
-             |> Ash.Query.filter(product_code == "FX_BTC_JPY" and trade_mode == :paper)
+             |> Ash.Query.filter(product_code == "BTC_JPY" and trade_mode == :paper)
              |> Ash.read_one()
 
     assert {:ok, after_balances} =
@@ -993,7 +993,7 @@ defmodule Bitflyer.OrderExecutorTest do
     Map.merge(
       %{
         internal_order_id: internal_order_id,
-        product_code: "FX_BTC_JPY",
+        product_code: "BTC_JPY",
         side: :buy,
         size: Decimal.new("0.01"),
         market_key: @market_key,

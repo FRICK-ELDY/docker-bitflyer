@@ -9,7 +9,7 @@ defmodule Bitflyer.MarketData.FeedTest do
   alias Bitflyer.Readiness
   alias Bitflyer.Risk
 
-  @product "FX_BTC_JPY"
+  @product "BTC_JPY"
   @market_key {:ticker, @product}
 
   defmodule FakeRest do
@@ -47,7 +47,17 @@ defmodule Bitflyer.MarketData.FeedTest do
       reset_market_data_cache()
       reset_readiness()
 
-      if Process.whereis(FakeRest.Counter), do: Agent.stop(FakeRest.Counter)
+      case Process.whereis(FakeRest.Counter) do
+        pid when is_pid(pid) ->
+          try do
+            Agent.stop(pid)
+          catch
+            :exit, _ -> :ok
+          end
+
+        _ ->
+          :ok
+      end
 
       if Process.whereis(FakeRest) == self() do
         Process.unregister(FakeRest)

@@ -95,10 +95,10 @@ defmodule Bitflyer.Risk.OrderRateTest do
     assert {:error, :unsynced, %{reason: :order_rate_unsynced}} =
              Risk.authorize(
                %{
-                 product_code: "FX_BTC_JPY",
+                 product_code: "BTC_JPY",
                  side: :buy,
                  size: Decimal.new("0.01"),
-                 market_key: {:ticker, "FX_BTC_JPY"},
+                 market_key: {:ticker, "BTC_JPY"},
                  intent_id: "intent-rate-unsynced"
                },
                positions: []

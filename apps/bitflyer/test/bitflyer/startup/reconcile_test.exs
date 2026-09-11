@@ -398,6 +398,36 @@ defmodule Bitflyer.Startup.ReconcileTest do
     assert risk.reason == "reconcile_mismatch"
   end
 
+  test "live spot internal position is excluded from position compare" do
+    alias Bitflyer.Trading.Position
+
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, MatchingBalancesExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+    end)
+
+    seed_live_balance_baseline!()
+
+    # spot 内部 Position があっても getpositions 空なら建玉不一致にしない（正本は getbalance）
+    assert {:ok, _} =
+             Position
+             |> Ash.Changeset.for_create(:create, %{
+               product_code: "BTC_JPY",
+               trade_mode: :live,
+               side: :buy,
+               size: Decimal.new("0.01"),
+               average_price: Decimal.new("5000000")
+             })
+             |> Ash.create()
+
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: MatchingBalancesExchange)
+  end
+
   test "live open order attribute mismatch is detected" do
     alias Bitflyer.Trading.Order
 

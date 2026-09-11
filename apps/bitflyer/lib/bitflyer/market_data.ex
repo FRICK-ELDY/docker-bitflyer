@@ -11,7 +11,8 @@ defmodule Bitflyer.MarketData do
   """
   @spec config() :: keyword()
   def config do
-    Application.get_env(:bitflyer, __MODULE__, [])
+    # 明示的に nil が載っていると第3引数デフォルトは使われない
+    Application.get_env(:bitflyer, __MODULE__) || []
   end
 
   @spec enabled?() :: boolean()
@@ -19,10 +20,15 @@ defmodule Bitflyer.MarketData do
 
   @spec product_codes() :: [String.t()]
   def product_codes do
-    case Keyword.get(config(), :product_codes, ["FX_BTC_JPY"]) do
-      codes when is_list(codes) -> Enum.map(codes, &to_string/1)
-      code when is_binary(code) -> [code]
-      _ -> ["FX_BTC_JPY"]
+    case Keyword.get(config(), :product_codes, ["BTC_JPY"]) do
+      codes when is_list(codes) and codes != [] ->
+        Enum.map(codes, &to_string/1)
+
+      code when is_binary(code) and code != "" ->
+        [code]
+
+      _ ->
+        ["BTC_JPY"]
     end
   end
 
