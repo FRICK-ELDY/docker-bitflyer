@@ -109,7 +109,9 @@ defmodule Bitflyer.Exchange.Rest do
     query =
       [{"product_code", product_code}]
       |> maybe_put_query("child_order_acceptance_id", Map.get(request, :exchange_order_id))
-      |> maybe_put_query("count", Map.get(request, :count))
+      # getchildorders と同様、既定件数を明示（API 既定超えの分割約定で coverage 失敗を防ぐ）。
+      # bitFlyer の count 上限はおおむね 500。1 注文がそれを超えるとページ欠けで fail-closed のまま。
+      |> maybe_put_query("count", Map.get(request, :count) || 500)
 
     with :ok <- require_credentials(),
          {:ok, body} <- request(:get, "/v1/me/getexecutions", "", query),

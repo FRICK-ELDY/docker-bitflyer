@@ -23,7 +23,9 @@ defmodule Bitflyer.TestSupport.ExchangeClientStubs do
       end
 
       @impl true
-      def fetch_executions(_request), do: {:ok, []}
+      def fetch_executions(%{exchange_order_id: id}) do
+        {:ok, Bitflyer.TestSupport.FillExecutions.from_process(id)}
+      end
 
       @impl true
       def list_child_orders(_request), do: {:ok, []}

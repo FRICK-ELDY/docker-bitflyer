@@ -128,6 +128,25 @@ defmodule Bitflyer.Exchange.Rest.DecodeTest do
              )
   end
 
+  test "execution parses exec_date and rejects invalid datetime" do
+    base = %{
+      "id" => 42,
+      "child_order_acceptance_id" => "JRF-1",
+      "side" => "BUY",
+      "price" => "100",
+      "size" => "0.01"
+    }
+
+    assert {:ok, %{id: "42", executed_at: %DateTime{}}} =
+             Decode.execution(Map.put(base, "exec_date", "2026-01-15T01:02:03.456"), "BTC_JPY")
+
+    assert {:ok, %{executed_at: nil}} =
+             Decode.execution(base, "BTC_JPY")
+
+    assert {:error, :invalid_datetime} =
+             Decode.execution(Map.put(base, "exec_date", "not-a-date"), "BTC_JPY")
+  end
+
   test "order_info accepts atom child_order_state like side atoms" do
     base = %{
       child_order_acceptance_id: "JRF-1",

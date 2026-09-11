@@ -4,6 +4,21 @@ defmodule Bitflyer.Trading.Fill do
 
   建玉反映と同一トランザクションで 1 行ずつ残す。
   `realized_pnl` は決済分のみ（建増しは 0）。日次損失はここから集計する。
+
+  live は取引所 execution 単位で書き、`(trade_mode, exchange_execution_id)` で二重記帳を拒む。
+  paper は `exchange_execution_id` を nil のまま残す（一意制約の対象外）。
+
+  本変更以前の live Fill は id=nil のまま残りうる。`LiveFills` はそうした baseline 上の
+  **追加約定**を `:legacy_nil_execution_id` で拒否する（誤った再記帳より fail-closed）。
+  デプロイ前に open live 注文へぶら下がる nil id Fill がゼロか確認すること
+  （Gate は失敗後も間隔内 `:skip` しうるため、legacy 恒久失敗を残したまま live を上げない）:
+
+      SELECT count(*)
+      FROM fills f
+      JOIN orders o ON o.internal_order_id = f.internal_order_id AND o.trade_mode = f.trade_mode
+      WHERE f.trade_mode = 'live'
+        AND f.exchange_execution_id IS NULL
+        AND o.status IN ('pending', 'partially_filled');
   """
   use Ash.Resource,
     otp_app: :bitflyer,
@@ -17,6 +32,7 @@ defmodule Bitflyer.Trading.Fill do
     custom_indexes do
       index [:trade_mode, :filled_at], name: "fills_trade_mode_filled_at_index"
       index [:internal_order_id], name: "fills_internal_order_id_index"
+      index [:order_id], name: "fills_order_id_index"
     end
   end
 
@@ -26,6 +42,7 @@ defmodule Bitflyer.Trading.Fill do
       :destroy,
       create: [
         :internal_order_id,
+        :order_id,
         :exchange_execution_id,
         :product_code,
         :side,
@@ -43,6 +60,11 @@ defmodule Bitflyer.Trading.Fill do
 
     attribute :internal_order_id, :string do
       allow_nil? false
+      public? true
+    end
+
+    attribute :order_id, :uuid do
+      allow_nil? true
       public? true
     end
 
@@ -93,5 +115,11 @@ defmodule Bitflyer.Trading.Fill do
 
     create_timestamp :inserted_at
     update_timestamp :updated_at
+  end
+
+  identities do
+    # nil は複数可（paper）。live の同一 execution 二重 Fill を DB が拒否する。
+    identity :unique_trade_mode_exchange_execution_id, [:trade_mode, :exchange_execution_id],
+      nils_distinct?: true
   end
 end

@@ -10,10 +10,15 @@ defmodule Bitflyer.OrderExecutor.Positions do
 
   戻り値の第 3 要素はコミット後に `Risk.DailyLoss.record_realized/2` へ渡す。
   既存建玉は `FOR UPDATE` でロックし、Lost Update を防ぐ。
+
+  ## Options
+  - `:exchange_execution_id` — live の取引所 execution id（string）
+  - `:filled_at` — 取引所時刻優先。未指定時は `DateTime.utc_now/0`
+  - `:order_id` — Order FK。未指定時は `order.id`
   """
-  @spec apply_fill(Order.t(), Decimal.t()) ::
+  @spec apply_fill(Order.t(), Decimal.t(), keyword()) ::
           {:ok, list(), %{realized_pnl: Decimal.t()}} | {:error, atom(), map()}
-  def apply_fill(%Order{} = order, %Decimal{} = fill_price) do
+  def apply_fill(%Order{} = order, %Decimal{} = fill_price, opts \\ []) do
     trade_mode = order.trade_mode
     product_code = order.product_code
     side = order.side
@@ -24,19 +29,19 @@ defmodule Bitflyer.OrderExecutor.Positions do
         case create_position(product_code, trade_mode, side, size, fill_price) do
           {:ok, notifications} ->
             with {:ok, fill_notifications} <-
-                   insert_fill(order, fill_price, size, Decimal.new(0)) do
+                   insert_fill(order, fill_price, size, Decimal.new(0), opts) do
               {:ok, notifications ++ fill_notifications, %{realized_pnl: Decimal.new(0)}}
             end
 
           {:race, %Position{} = position} ->
-            merge_position(position, order, side, size, fill_price)
+            merge_position(position, order, side, size, fill_price, opts)
 
           {:error, _, _} = error ->
             error
         end
 
       {:ok, %Position{} = position} ->
-        merge_position(position, order, side, size, fill_price)
+        merge_position(position, order, side, size, fill_price, opts)
 
       {:error, error} ->
         {:error, :persist_failed, %{error: error}}
@@ -74,7 +79,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
     end
   end
 
-  defp merge_position(%Position{} = position, %Order{} = order, side, size, fill_price) do
+  defp merge_position(%Position{} = position, %Order{} = order, side, size, fill_price, opts) do
     cond do
       position.side == side ->
         new_size = Decimal.add(position.size, size)
@@ -88,7 +93,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
         with {:ok, notifications} <-
                update_position(position, %{size: new_size, average_price: new_avg}),
              {:ok, fill_notifications} <-
-               insert_fill(order, fill_price, size, Decimal.new(0)) do
+               insert_fill(order, fill_price, size, Decimal.new(0), opts) do
           {:ok, notifications ++ fill_notifications, %{realized_pnl: Decimal.new(0)}}
         end
 
@@ -98,7 +103,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
         new_size = Decimal.sub(position.size, size)
 
         with {:ok, notifications} <- update_position(position, %{size: new_size}),
-             {:ok, fill_notifications} <- insert_fill(order, fill_price, size, realized) do
+             {:ok, fill_notifications} <- insert_fill(order, fill_price, size, realized, opts) do
           {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
         end
 
@@ -107,7 +112,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
         realized = realized_pnl(position.side, position.average_price, fill_price, closed)
 
         with {:ok, notifications} <- destroy_position(position),
-             {:ok, fill_notifications} <- insert_fill(order, fill_price, size, realized) do
+             {:ok, fill_notifications} <- insert_fill(order, fill_price, size, realized, opts) do
           {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
         end
 
@@ -122,7 +127,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
                  size: remainder,
                  average_price: fill_price
                }),
-             {:ok, fill_notifications} <- insert_fill(order, fill_price, size, realized) do
+             {:ok, fill_notifications} <- insert_fill(order, fill_price, size, realized, opts) do
           {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
         end
     end
@@ -157,24 +162,89 @@ defmodule Bitflyer.OrderExecutor.Positions do
     |> Decimal.mult(closed_size)
   end
 
-  defp insert_fill(%Order{} = order, fill_price, size, realized_pnl) do
+  defp insert_fill(%Order{} = order, fill_price, size, realized_pnl, opts) do
+    filled_at =
+      case Keyword.get(opts, :filled_at) do
+        %DateTime{} = dt -> DateTime.truncate(dt, :microsecond)
+        _ -> DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      end
+
     attrs = %{
       internal_order_id: order.internal_order_id,
-      exchange_execution_id: nil,
+      order_id: Keyword.get(opts, :order_id, order.id),
+      exchange_execution_id: Keyword.get(opts, :exchange_execution_id),
       product_code: order.product_code,
       side: order.side,
       size: size,
       price: fill_price,
       realized_pnl: realized_pnl,
       trade_mode: order.trade_mode,
-      filled_at: DateTime.utc_now()
+      filled_at: filled_at
     }
 
     case Fill
          |> Ash.Changeset.for_create(:create, attrs)
          |> Ash.create(return_notifications?: true) do
-      {:ok, _, notifications} -> {:ok, notifications}
-      {:error, error} -> {:error, :persist_failed, %{error: error}}
+      {:ok, _, notifications} ->
+        {:ok, notifications}
+
+      {:error, error} ->
+        if duplicate_execution_error?(error) do
+          {:error, :duplicate_execution,
+           %{
+             exchange_execution_id: attrs.exchange_execution_id,
+             trade_mode: order.trade_mode,
+             error: error
+           }}
+        else
+          {:error, :persist_failed, %{error: error}}
+        end
     end
   end
+
+  defp duplicate_execution_error?(error) do
+    error
+    |> error_leaves()
+    |> Enum.any?(&identity_collision?/1)
+  end
+
+  defp identity_collision?(%{identity: :unique_trade_mode_exchange_execution_id}), do: true
+
+  defp identity_collision?(%{constraint: constraint}) when is_binary(constraint) do
+    constraint_name_collision?(constraint)
+  end
+
+  defp identity_collision?(%Postgrex.Error{postgres: %{constraint: constraint}})
+       when is_binary(constraint) do
+    constraint_name_collision?(constraint)
+  end
+
+  # Ecto/Ash が map 形で postgres 情報だけ載せる場合
+  defp identity_collision?(%{postgres: %{constraint: constraint}}) when is_binary(constraint) do
+    constraint_name_collision?(constraint)
+  end
+
+  # 最終手段: メッセージ文字列。identity / constraint パスで拾えない未知ラッパ向け。
+  defp identity_collision?(other) do
+    other
+    |> Exception.message()
+    |> constraint_name_collision?()
+  rescue
+    _ -> false
+  end
+
+  defp constraint_name_collision?(text) when is_binary(text) do
+    String.contains?(text, "unique_trade_mode_exchange_execution_id") or
+      String.contains?(text, "fills_unique_trade_mode_exchange_execution_id")
+  end
+
+  defp error_leaves(%Ash.Error.Invalid{errors: errors}) when is_list(errors) do
+    Enum.flat_map(errors, &error_leaves/1)
+  end
+
+  defp error_leaves(%{errors: errors}) when is_list(errors) do
+    Enum.flat_map(errors, &error_leaves/1)
+  end
+
+  defp error_leaves(other), do: [other]
 end

@@ -112,13 +112,13 @@ defmodule Bitflyer.Exchange.Client do
         }
 
   @type execution :: %{
-          id: integer() | String.t(),
+          id: String.t(),
           exchange_order_id: String.t(),
           product_code: String.t(),
           side: :buy | :sell,
           price: Decimal.t(),
           size: Decimal.t(),
-          executed_at: String.t() | nil
+          executed_at: DateTime.t() | nil
         }
 
   @callback fetch_reconcile_snapshot() :: {:ok, snapshot()} | {:error, term()}
