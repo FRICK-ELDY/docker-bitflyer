@@ -17,8 +17,6 @@ defmodule Bitflyer.Risk.BalanceCache do
 
   use GenServer
 
-  require Ash.Query
-
   alias Bitflyer.Trading.BalanceSnapshot
 
   @name __MODULE__
@@ -667,21 +665,9 @@ defmodule Bitflyer.Risk.BalanceCache do
   defp to_decimal(_), do: nil
 
   defp load_latest(trade_mode) do
-    case BalanceSnapshot
-         |> Ash.Query.filter(trade_mode == ^trade_mode)
-         |> Ash.Query.sort(captured_at: :desc, id: :desc)
-         |> Ash.read() do
-      {:ok, rows} ->
-        balances =
-          rows
-          |> Enum.reduce(%{}, fn row, acc ->
-            Map.put_new(acc, row.currency, row.available || row.amount)
-          end)
-
-        {:ok, balances}
-
-      {:error, error} ->
-        {:error, error}
+    case BalanceSnapshot.latest_tips(trade_mode) do
+      {:ok, rows} -> {:ok, BalanceSnapshot.available_map(rows)}
+      {:error, _} = error -> error
     end
   end
 end

@@ -2,7 +2,10 @@ defmodule Bitflyer.Trading.BalanceSnapshot do
   @moduledoc """
   残高の時点スナップショット。
 
-  直近行が起動突合の基準になる。金額は Decimal。
+  直近行が起動突合・BalanceCache の基準になる。金額は Decimal。
+  append-only のため、先端取得は `latest_tips/1`（DISTINCT ON）を使う。
+  インデックス `[:trade_mode, :currency, :captured_at]` がフィルタを支えるが、
+  履歴肥大時の DISTINCT ON コストは DB 側に残る（アプリ全件読よりは安い）。
   """
   use Ash.Resource,
     otp_app: :bitflyer,
@@ -62,5 +65,36 @@ defmodule Bitflyer.Trading.BalanceSnapshot do
 
   validations do
     validate compare(:available, less_than_or_equal_to: :amount)
+  end
+
+  @doc """
+  `trade_mode` 配下の通貨ごと最新 1 行。
+
+  `DISTINCT ON (currency)` + `captured_at/id DESC`。接続・Postgrex 障害のみ
+  `{:error, _}` に倒し、クエリ定義ミス等のプログラミングエラーは rescue しない。
+  """
+  @spec latest_tips(atom()) :: {:ok, [struct()]} | {:error, term()}
+  def latest_tips(trade_mode) when trade_mode in [:dry_run, :paper, :live] do
+    import Ecto.Query
+
+    query =
+      from(b in __MODULE__,
+        where: b.trade_mode == ^trade_mode,
+        distinct: b.currency,
+        order_by: [asc: b.currency, desc: b.captured_at, desc: b.id]
+      )
+
+    {:ok, Bitflyer.Repo.all(query)}
+  rescue
+    e in [DBConnection.ConnectionError, Postgrex.Error] ->
+      {:error, e}
+  end
+
+  @doc """
+  tip 行リストを `%{currency => available}` に畳む。
+  """
+  @spec available_map([struct()]) :: %{optional(String.t()) => Decimal.t()}
+  def available_map(rows) when is_list(rows) do
+    Map.new(rows, fn row -> {row.currency, row.available || row.amount} end)
   end
 end

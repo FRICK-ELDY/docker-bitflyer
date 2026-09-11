@@ -62,6 +62,79 @@ defmodule Bitflyer.Risk.BalanceCacheTest do
     assert Decimal.equal?(balances["BTC"], Decimal.new("0.2"))
   end
 
+  test "refresh prefers newest tip per currency among many historical rows" do
+    older = DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
+    newer = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    for {currency, amount, at} <- [
+          {"JPY", "1000", older},
+          {"BTC", "0.1", older},
+          {"JPY", "1000", older},
+          {"BTC", "0.1", older},
+          {"JPY", "9999", newer},
+          {"BTC", "1.5", newer}
+        ] do
+      assert {:ok, _} =
+               BalanceSnapshot
+               |> Ash.Changeset.for_create(:create, %{
+                 currency: currency,
+                 amount: Decimal.new(amount),
+                 available: Decimal.new(amount),
+                 captured_at: at,
+                 trade_mode: :paper
+               })
+               |> Ash.create()
+    end
+
+    assert {:ok, tips} = BalanceSnapshot.latest_tips(:paper)
+    assert length(tips) == 2
+    assert MapSet.new(Enum.map(tips, & &1.currency)) == MapSet.new(["JPY", "BTC"])
+
+    assert :ok = BalanceCache.refresh(:paper)
+    assert {:ok, balances} = BalanceCache.get(:paper)
+    assert map_size(balances) == 2
+    assert Decimal.equal?(balances["JPY"], Decimal.new("9999"))
+    assert Decimal.equal?(balances["BTC"], Decimal.new("1.5"))
+  end
+
+  test "latest_tips breaks captured_at ties by higher id" do
+    captured_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, older_row} =
+             BalanceSnapshot
+             |> Ash.Changeset.for_create(:create, %{
+               currency: "JPY",
+               amount: Decimal.new("100"),
+               available: Decimal.new("100"),
+               captured_at: captured_at,
+               trade_mode: :paper
+             })
+             |> Ash.create()
+
+    assert {:ok, newer_row} =
+             BalanceSnapshot
+             |> Ash.Changeset.for_create(:create, %{
+               currency: "JPY",
+               amount: Decimal.new("200"),
+               available: Decimal.new("200"),
+               captured_at: captured_at,
+               trade_mode: :paper
+             })
+             |> Ash.create()
+
+    assert older_row.captured_at == newer_row.captured_at
+    assert newer_row.id > older_row.id
+
+    assert {:ok, [tip]} = BalanceSnapshot.latest_tips(:paper)
+    assert tip.id == newer_row.id
+    assert Decimal.equal?(tip.available, Decimal.new("200"))
+
+    assert :ok = BalanceCache.refresh(:paper)
+    assert {:ok, balances} = BalanceCache.get(:paper)
+    assert map_size(balances) == 1
+    assert Decimal.equal?(balances["JPY"], Decimal.new("200"))
+  end
+
   test "invalidate keeps get unsynced until matching release reload" do
     balances = %{
       "JPY" => Decimal.new("1000"),
