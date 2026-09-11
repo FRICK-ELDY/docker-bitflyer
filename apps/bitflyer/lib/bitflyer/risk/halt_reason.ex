@@ -15,6 +15,7 @@ defmodule Bitflyer.Risk.HaltReason do
            :clock_skew,
            :auth_failed,
            :consecutive_exchange_errors,
+           :failure_rate_unsynced,
            :submission_unknown,
            :manual_halt,
            :persist_failed,

@@ -32,7 +32,7 @@
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
 | 6 | BalanceCache.load_latest | **完了:** `DISTINCT ON (currency)` + `captured_at/id DESC`（全件読廃止）。`Reconcile.read_latest_balances` と同型 | 突合周期で全表スキャンしない |
-| 7 | FailureRate 再起動復元 | rejected Order 窓から warm、または RiskState 補助。失敗時は fail-closed 方針を明示 | クラッシュループで連続障害カウントが消えない |
+| 7 | FailureRate 再起動復元 | **完了:** rejected Order 窓から warm。起動失敗は unsynced（authorize / evaluate fail-closed） | クラッシュループで連続障害カウントが消えない |
 | 8 | Fill 証跡 | `exchange_execution_id` 書込 + unique、`filled_at` は取引所時刻優先、可能なら Order FK | 同一 execution の二重 Fill を DB が拒否 |
 | 9 | Status / ready 統一 | Feed 接続を OperationalStatus の orders gate に含め、Health と同一 classifier | 切断直後に ALLOWED と ready が矛盾しない |
 | 10 | 未約定期限 / halt cancel-all | open age・TIF・理由別全取消ポリシーを文書化のうえ実装 | halt 後に放置 open が残らない運用が可能 |

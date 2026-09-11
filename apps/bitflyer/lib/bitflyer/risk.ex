@@ -6,18 +6,29 @@ defmodule Bitflyer.Risk do
   上限超過・stale・未同期は必ず拒否する。
   サーキットは `open_circuit/1` / `clear_circuit/1`。
 
-  検査: 同期 → 鮮度 → 時計ずれ → 注文サイズ → 建玉 → 価格逸脱 → 発注頻度予約 → 日次損失 → 残高。
+  検査: 同期 → FailureRate 同期 → 鮮度 → 時計ずれ → 注文サイズ → 建玉 → 価格逸脱 →
+  発注頻度予約 → 日次損失 → 残高。
   live は先に銘柄種別を検査し、spot 以外（FX/CFD）を拒否する。
 
   発注ホットパスでは RiskState・発注頻度・日次損失・残高のために DB 往復しない。
-  頻度は `Risk.OrderRate.reserve/3`（authorize 時に原子的予約）、取引所エラー連続は `Risk.FailureRate`、
-  日次損失は `Risk.DailyLoss`、残高は `Risk.BalanceCache`（ETS）。
+  頻度は `Risk.OrderRate.reserve/3`（authorize 時に原子的予約）、取引所エラー連続は `Risk.FailureRate`
+  （起動 warm 失敗時は unsynced で認可拒否）、日次損失は `Risk.DailyLoss`、残高は `Risk.BalanceCache`（ETS）。
   """
 
   require Ash.Query
 
   alias Bitflyer.MarketData.Cache
-  alias Bitflyer.Risk.{AuthorizedOrder, BalanceCache, Circuit, DailyLoss, Limits, OrderRate}
+
+  alias Bitflyer.Risk.{
+    AuthorizedOrder,
+    BalanceCache,
+    Circuit,
+    DailyLoss,
+    FailureRate,
+    Limits,
+    OrderRate
+  }
+
   alias Bitflyer.Trading.{Position, Product}
 
   @type rejection_code ::
@@ -40,6 +51,7 @@ defmodule Bitflyer.Risk do
   - `:positions` — 建玉リスト（未指定時は DB から当該銘柄を読む）
   - `:now` / `:server` — Cache.fresh?/3・LTP 取得へ転送
   - `:authorized_order_server` — `AuthorizedOrder` GenServer（Cache の `:server` とは別）
+  - `:failure_rate` / `:failure_rate_server` — FailureRate モジュールと GenServer 名（テスト注入）
   - `:now_utc` — 時計ずれ検査用の壁時計（既定 `DateTime.utc_now/0`）
   - `:check_persisted_circuit` — 既定 **false**（ホットパスで RiskState を読まない）。
     別 BEAM の `mix bitflyer.halt` は `Risk.CircuitSync` が DB→ETS 同期する。
@@ -60,6 +72,7 @@ defmodule Bitflyer.Risk do
       with :ok <- validate_command(command),
            :ok <- check_live_product(command, opts),
            :ok <- check_sync(opts),
+           :ok <- check_failure_rate(opts),
            :ok <- check_freshness(command, limits, opts),
            :ok <- check_clock_skew(command, limits, opts),
            :ok <- check_order_size(command, limits),
@@ -228,6 +241,23 @@ defmodule Bitflyer.Risk do
 
       {:halted, reason} ->
         {:error, :circuit_open, %{readiness: reason}}
+    end
+  end
+
+  defp check_failure_rate(opts) do
+    failure_rate = Keyword.get(opts, :failure_rate, FailureRate)
+
+    # `:server` は MarketData.Cache 用のため転送しない（OrderRate の歴史的衝突を増やさない）
+    failure_rate_opts =
+      case Keyword.fetch(opts, :failure_rate_server) do
+        {:ok, server} -> [server: server]
+        :error -> []
+      end
+
+    if failure_rate.synced?(failure_rate_opts) do
+      :ok
+    else
+      {:error, :unsynced, %{reason: :failure_rate_unsynced}}
     end
   end
 

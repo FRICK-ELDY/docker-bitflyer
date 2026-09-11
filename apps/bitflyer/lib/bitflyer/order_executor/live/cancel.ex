@@ -42,6 +42,8 @@ defmodule Bitflyer.OrderExecutor.Live.Cancel do
 
       {:error, reason} ->
         if reason in @definite_rejection_reasons do
+          # FailureRate は ETS に数えるが、建玉が残る取消失敗では Order を :rejected にできない。
+          # 再起動後の warm は place 由来 rejected のみ復元する（cancel 嵐＋crash は窓が空振りしうる）。
           _ = maybe_open_failure_circuit(reason, order)
           {:error, :exchange_error, %{reason: reason}}
         else

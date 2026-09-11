@@ -10,6 +10,7 @@ defmodule Bitflyer.Risk.HaltReasonTest do
     assert HaltReason.from_string("manual_halt") == :manual_halt
     assert HaltReason.from_string("submission_unknown") == :submission_unknown
     assert HaltReason.from_string("fill_price_unavailable") == :fill_price_unavailable
+    assert HaltReason.from_string("failure_rate_unsynced") == :failure_rate_unsynced
   end
 
   test "from_string collapses unknown and nil to risk_halted" do
