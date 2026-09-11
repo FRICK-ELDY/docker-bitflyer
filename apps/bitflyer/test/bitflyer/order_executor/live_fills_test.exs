@@ -96,9 +96,11 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
     @impl true
     def list_child_orders(_), do: {:ok, []}
 
-    def start_counter! do
-      {:ok, _} = Agent.start_link(fn -> 0 end, name: __MODULE__.Counter)
-      :ok
+    def counter_child_spec do
+      %{
+        id: __MODULE__.Counter,
+        start: {Agent, :start_link, [fn -> 0 end, [name: __MODULE__.Counter]]}
+      }
     end
 
     def fetch_count, do: Agent.get(__MODULE__.Counter, & &1)
@@ -647,12 +649,7 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
     previous = Application.get_env(:bitflyer, LiveFills, [])
     Application.put_env(:bitflyer, LiveFills, Keyword.put(previous, :min_sync_interval_ms, 1_000))
     LiveFills.clear_open_orders_sync_clock()
-    CountingFillExchange.start_counter!()
-
-    on_exit(fn ->
-      if Process.whereis(CountingFillExchange.Counter),
-        do: Agent.stop(CountingFillExchange.Counter)
-    end)
+    start_supervised!(CountingFillExchange.counter_child_spec())
 
     {:ok, _} = create_live_order("live-min-interval", "JRF-min-interval")
 
@@ -695,12 +692,7 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
     previous = Application.get_env(:bitflyer, LiveFills, [])
     Application.put_env(:bitflyer, LiveFills, Keyword.put(previous, :min_sync_interval_ms, 1_000))
     LiveFills.clear_open_orders_sync_clock()
-    CountingFillExchange.start_counter!()
-
-    on_exit(fn ->
-      if Process.whereis(CountingFillExchange.Counter),
-        do: Agent.stop(CountingFillExchange.Counter)
-    end)
+    start_supervised!(CountingFillExchange.counter_child_spec())
 
     {:ok, _} = create_live_order("live-fail-clock", "JRF-fail-clock")
 
@@ -724,12 +716,7 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
     previous = Application.get_env(:bitflyer, LiveFills, [])
     Application.put_env(:bitflyer, LiveFills, Keyword.put(previous, :min_sync_interval_ms, 1_000))
     LiveFills.clear_open_orders_sync_clock()
-    CountingFillExchange.start_counter!()
-
-    on_exit(fn ->
-      if Process.whereis(CountingFillExchange.Counter),
-        do: Agent.stop(CountingFillExchange.Counter)
-    end)
+    start_supervised!(CountingFillExchange.counter_child_spec())
 
     {:ok, _} = create_live_order("live-concurrent-sync", "JRF-concurrent-sync")
 

@@ -122,6 +122,40 @@ defmodule Bitflyer.OrderExecutorTest do
     def list_child_orders(_), do: {:ok, []}
   end
 
+  defmodule ImmediateFillSyncExchange do
+    @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
+
+    @impl true
+    def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
+
+    @impl true
+    def place_order(_), do: {:error, :not_used}
+
+    @impl true
+    def cancel_order(_), do: {:error, :not_used}
+
+    @impl true
+    def fetch_order(%{exchange_order_id: id}) do
+      {:ok,
+       %{
+         exchange_order_id: id,
+         product_code: "BTC_JPY",
+         side: :buy,
+         size: Decimal.new("0.01"),
+         filled_size: Decimal.new("0.01"),
+         average_price: Decimal.new("5000000"),
+         status: :completed
+       }}
+    end
+
+    @impl true
+    def fetch_executions(_), do: {:ok, []}
+
+    @impl true
+    def list_child_orders(_), do: {:ok, []}
+  end
+
   setup do
     reset_readiness()
     reset_market_data_cache()
@@ -584,6 +618,24 @@ defmodule Bitflyer.OrderExecutorTest do
 
     assert SpyExchange.place_count() == 1
     assert_received {:place_order, %{internal_order_id: "live-ok-1"}}
+  end
+
+  test "live submit returns post-place synced order when immediately filled" do
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_balance_cache!(:live)
+
+    assert {:ok, %Order{status: :filled, exchange_order_id: "ex-live-imm-1"} = order} =
+             System.submit_order(valid_command("live-imm-1"),
+               positions: [],
+               trade_mode: :live,
+               exchange: ImmediateFillSyncExchange
+             )
+
+    assert Decimal.eq?(order.filled_size, Decimal.new("0.01"))
+    assert SpyExchange.place_count() == 1
   end
 
   test "live timeout marks submission_unknown, halts, and blocks further submits" do

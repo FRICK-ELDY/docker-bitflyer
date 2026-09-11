@@ -49,9 +49,10 @@ defmodule Bitflyer.OrderExecutor.Live do
         case persist_exchange_order_id(order, exchange_order_id, opts) do
           {:ok, updated} ->
             # 成行即時約定などを取り込む。失敗は成功と分け、halt して盲目継続しない。
+            # sync 後の Order（filled / partially_filled 等）を呼び出し元へ返す。
             case sync_fills_after_place(updated, opts) do
-              :ok ->
-                {:ok, updated}
+              {:ok, final_order} ->
+                {:ok, final_order}
 
               {:error, reason, meta} ->
                 # 取引所は受注済み。成功と分離し halt。呼び出し元は meta.order_accepted を見る。
@@ -115,10 +116,10 @@ defmodule Bitflyer.OrderExecutor.Live do
 
     case Bitflyer.OrderExecutor.LiveFills.sync_order(order, exchange: exchange) do
       :ok ->
-        :ok
+        {:ok, order}
 
-      {:ok, _} ->
-        :ok
+      {:ok, %Order{} = synced} ->
+        {:ok, synced}
 
       {:error, reason, meta} ->
         Bitflyer.Telemetry.log(

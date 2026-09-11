@@ -66,7 +66,7 @@ defmodule Bitflyer.OrderExecutor.LiveFills.Gate do
       busy? and force? ->
         {pid, _} = from
         mon = Process.monitor(pid)
-        waiter = {from, now, mon}
+        waiter = {from, mon}
         {:noreply, %{state | waiters: :queue.in(waiter, state.waiters)}}
 
       not force? and recently_synced?(state.last_ms, now) ->
@@ -110,10 +110,12 @@ defmodule Bitflyer.OrderExecutor.LiveFills.Gate do
 
   defp promote_or_idle(state) do
     case :queue.out(state.waiters) do
-      {{:value, {from, now, mon}}, waiters} ->
+      {{:value, {from, mon}}, waiters} ->
         {pid, _} = from
         GenServer.reply(from, :run)
-        # 待機中から付けた monitor を busy 監視に流用
+        # 待機中から付けた monitor を busy 監視に流用。
+        # last_ms はキュー投入時ではなく昇格時点の monotonic（古い now で間隔が空かないように）
+        now = System.monotonic_time(:millisecond)
         %{state | busy_ref: mon, busy_pid: pid, last_ms: now, waiters: waiters}
 
       {:empty, waiters} ->
@@ -124,7 +126,7 @@ defmodule Bitflyer.OrderExecutor.LiveFills.Gate do
   defp drop_waiter(waiters, ref) do
     waiters
     |> :queue.to_list()
-    |> Enum.reject(fn {_from, _now, mon} -> mon == ref end)
+    |> Enum.reject(fn {_from, mon} -> mon == ref end)
     |> :queue.from_list()
   end
 
