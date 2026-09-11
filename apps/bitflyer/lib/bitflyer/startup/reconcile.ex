@@ -258,8 +258,12 @@ defmodule Bitflyer.Startup.Reconcile do
         {:error, :exchange_unavailable, %{trade_mode: :live}}
 
       # 通信障害と区別する（停止は同等、運用ログ・RiskState 理由は別）
-      {:error, :invalid_number} ->
-        {:error, :invalid_exchange_payload, %{kind: :invalid_number, trade_mode: :live}}
+      {:error, kind} when is_atom(kind) ->
+        if Bitflyer.Exchange.Rest.Decode.payload_error?(kind) do
+          {:error, :invalid_exchange_payload, %{kind: kind, trade_mode: :live}}
+        else
+          {:error, :exchange_unavailable, %{detail: kind, trade_mode: :live}}
+        end
 
       {:error, detail} ->
         {:error, :exchange_unavailable, %{detail: detail, trade_mode: :live}}

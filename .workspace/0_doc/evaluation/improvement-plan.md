@@ -21,8 +21,7 @@
 |:---:|:---|:---|:---|
 | 1 | 部分約定の増分価格 | Order に `filled_notional`（または同等）を持ち、`incremental = remote_avg×remote_filled − local_notional` で差分価格を算出。または `getexecutions` を execution ID 単位で Fill 化し `(trade_mode, exchange_execution_id)` unique。2回以上の部分約定・途中決済の縦貫通テスト | 連続部分約定でも Position VWAP / realized_pnl / DailyLoss が取引所と一致 |
 | 2 | FX 証拠金 or spot 限定 | **今回は B:** live を spot（`BTC_JPY`）に限定し README/config を一致。**A（getcollateral）は backlog へ** → [.workspace/1_backlog/fx-collateral-adapter.md](../../1_backlog/fx-collateral-adapter.md) | spot 限定なら既定プロダクトが spot（B 完了条件） |
-
-| 3 | Decode 構造 fail-closed | private snapshot の未知 side・識別子欠落を `:skip` せず snapshot 全体失敗 → reconcile halt。skip は明示 allowlist のみ | 未知 side fixture で Ready にならず halt |
+| 3 | Decode 構造 fail-closed | **完了:** 未知 side/status・識別子欠落は payload error → snapshot 失敗 → reconcile halt。`:skip` は allowlist のみ。`decode_rows` は未知戻りも fail-closed | 未知 side fixture（FX positions / spot open_orders）で Ready にならず halt |
 | 4 | OrderRate 原子的予約 | authorize 時に reserve、成功 commit / 失敗 release。並行 `submit_order` で上限超過できないテスト | 並行 N 認可でも per-minute を超えない |
 | 5 | live fill 同期の整理 | 認可前 sync と `do_submit` 内 sync を一方に統一。post-place sync 失敗は not_ready/halt または「同期待ち」を成功と分離。最小間隔/クライアント側レート制限 | 1発注あたりの private REST が過剰にならず、同期失敗で盲目継続しない |
 

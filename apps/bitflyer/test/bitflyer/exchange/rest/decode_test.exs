@@ -64,9 +64,81 @@ defmodule Bitflyer.Exchange.Rest.DecodeTest do
              })
   end
 
-  test "incomplete identity rows are skipped" do
-    assert :skip = Decode.balance(%{"amount" => "1", "available" => "1"})
-    assert :skip = Decode.position(%{"product_code" => "FX_BTC_JPY", "size" => "0.01"})
+  test "incomplete identity and unknown side fail closed" do
+    assert {:error, :missing_identifier} =
+             Decode.balance(%{"amount" => "1", "available" => "1"})
+
+    assert {:error, :missing_identifier} =
+             Decode.position(%{"product_code" => "FX_BTC_JPY", "size" => "0.01"})
+
+    assert {:error, :unknown_side} =
+             Decode.position(%{
+               "product_code" => "FX_BTC_JPY",
+               "side" => "HOLD",
+               "size" => "0.01",
+               "price" => "5000000"
+             })
+
+    assert {:error, :unknown_side} =
+             Decode.open_order(%{
+               "child_order_acceptance_id" => "JRF-1",
+               "product_code" => "FX_BTC_JPY",
+               "side" => "FLAT",
+               "size" => "0.01",
+               "executed_size" => "0"
+             })
+
+    assert {:error, :missing_identifier} =
+             Decode.open_order(%{
+               "product_code" => "FX_BTC_JPY",
+               "side" => "BUY",
+               "size" => "0.01",
+               "executed_size" => "0"
+             })
+
+    assert {:error, :unknown_status} =
+             Decode.order_info(%{
+               "child_order_acceptance_id" => "JRF-1",
+               "product_code" => "FX_BTC_JPY",
+               "side" => "BUY",
+               "size" => "0.01",
+               "executed_size" => "0",
+               "child_order_state" => "PENDING"
+             })
+
+    assert {:error, :missing_identifier} =
+             Decode.execution(%{
+               "id" => 1,
+               "child_order_acceptance_id" => "JRF-1",
+               "side" => "BUY",
+               "price" => "100",
+               "size" => "0.01"
+             })
+
+    assert {:ok, %{product_code: "BTC_JPY"}} =
+             Decode.execution(
+               %{
+                 "id" => 1,
+                 "child_order_acceptance_id" => "JRF-1",
+                 "side" => "BUY",
+                 "price" => "100",
+                 "size" => "0.01"
+               },
+               "BTC_JPY"
+             )
+  end
+
+  test "order_info accepts atom child_order_state like side atoms" do
+    base = %{
+      child_order_acceptance_id: "JRF-1",
+      product_code: "BTC_JPY",
+      side: :buy,
+      size: "0.01",
+      executed_size: "0",
+      child_order_state: :active
+    }
+
+    assert {:ok, %{status: :active, side: :buy}} = Decode.order_info(base)
   end
 
   test "order_info treats 0.0 and 0.00 average_price as absent" do

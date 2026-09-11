@@ -395,6 +395,104 @@ defmodule Bitflyer.Exchange.RestTest do
     assert {:error, :invalid_number} = Rest.fetch_reconcile_snapshot()
   end
 
+  test "fetch_reconcile_snapshot fails on unknown position side" do
+    Process.put(:rest_http_handler, fn method, url, headers, body ->
+      assert method == :get
+      assert body == ""
+      assert_signed_headers(headers)
+
+      cond do
+        String.contains?(url, "/v1/me/getbalance") ->
+          {:ok, response(200, fixture("getbalance.json"))}
+
+        String.contains?(url, "/v1/me/getpositions") ->
+          {:ok, response(200, fixture("getpositions_unknown_side.json"))}
+
+        true ->
+          flunk("should fail before #{url}")
+      end
+    end)
+
+    assert {:error, :unknown_side} = Rest.fetch_reconcile_snapshot()
+  end
+
+  test "fetch_reconcile_snapshot for spot fails on unknown open order side" do
+    previous_md = Application.get_env(:bitflyer, Bitflyer.MarketData)
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.MarketData,
+      Keyword.merge(previous_md || [], product_codes: ["BTC_JPY"])
+    )
+
+    Process.put(:rest_http_handler, fn method, url, headers, body ->
+      assert method == :get
+      assert body == ""
+      assert_signed_headers(headers)
+
+      cond do
+        String.contains?(url, "/v1/me/getbalance") ->
+          {:ok, response(200, fixture("getbalance.json"))}
+
+        String.contains?(url, "/v1/me/getpositions") ->
+          flunk("spot product must not call getpositions: #{url}")
+
+        String.contains?(url, "/v1/me/getchildorders") ->
+          assert String.contains?(url, "product_code=BTC_JPY")
+
+          {:ok,
+           response(200, [
+             %{
+               "child_order_acceptance_id" => "JRF-spot-1",
+               "product_code" => "BTC_JPY",
+               "side" => "HOLD",
+               "size" => "0.01",
+               "executed_size" => "0",
+               "child_order_state" => "ACTIVE"
+             }
+           ])}
+
+        true ->
+          flunk("unexpected url: #{url}")
+      end
+    end)
+
+    assert {:error, :unknown_side} = Rest.fetch_reconcile_snapshot()
+  end
+
+  test "fetch_reconcile_snapshot fails on missing open order identity" do
+    Process.put(:rest_http_handler, fn method, url, headers, body ->
+      assert method == :get
+      assert body == ""
+      assert_signed_headers(headers)
+
+      cond do
+        String.contains?(url, "/v1/me/getbalance") ->
+          {:ok, response(200, fixture("getbalance.json"))}
+
+        String.contains?(url, "/v1/me/getpositions") ->
+          {:ok, response(200, [])}
+
+        String.contains?(url, "/v1/me/getchildorders") ->
+          {:ok,
+           response(200, [
+             %{
+               "product_code" => "FX_BTC_JPY",
+               "side" => "BUY",
+               "size" => "0.01",
+               "executed_size" => "0",
+               "child_order_state" => "ACTIVE"
+             }
+           ])}
+
+        true ->
+          flunk("unexpected url: #{url}")
+      end
+    end)
+
+    assert {:error, :missing_identifier} = Rest.fetch_reconcile_snapshot()
+  end
+
   test "Exchange facade can inject Rest instead of Unavailable" do
     previous = Application.get_env(:bitflyer, :exchange_client)
     Application.put_env(:bitflyer, :exchange_client, Rest)

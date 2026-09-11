@@ -74,8 +74,7 @@ defmodule Bitflyer.Exchange.Client do
           required(:exchange_order_id) => String.t()
         }
 
-  @type order_status ::
-          :active | :completed | :canceled | :expired | :rejected | :unknown
+  @type order_status :: :active | :completed | :canceled | :expired | :rejected
 
   @type order_info :: %{
           exchange_order_id: String.t(),
@@ -115,7 +114,7 @@ defmodule Bitflyer.Exchange.Client do
   @type execution :: %{
           id: integer() | String.t(),
           exchange_order_id: String.t(),
-          product_code: String.t() | nil,
+          product_code: String.t(),
           side: :buy | :sell,
           price: Decimal.t(),
           size: Decimal.t(),
