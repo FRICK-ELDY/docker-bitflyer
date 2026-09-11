@@ -619,18 +619,7 @@ defmodule Bitflyer.Startup.Reconcile do
   end
 
   defp read_latest_balances(trade_mode) do
-    import Ecto.Query
-
-    query =
-      from(b in BalanceSnapshot,
-        where: b.trade_mode == ^trade_mode,
-        distinct: b.currency,
-        order_by: [asc: b.currency, desc: b.captured_at]
-      )
-
-    {:ok, Bitflyer.Repo.all(query)}
-  rescue
-    error -> {:error, error}
+    BalanceSnapshot.latest_tips(trade_mode)
   end
 
   defp read_open_orders(trade_mode) do
