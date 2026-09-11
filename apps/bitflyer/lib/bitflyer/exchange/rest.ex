@@ -13,7 +13,6 @@ defmodule Bitflyer.Exchange.Rest do
   alias Bitflyer.Trading.Product
 
   @default_base_url "https://api.bitflyer.com"
-  @default_product "BTC_JPY"
 
   @impl true
   def fetch_reconcile_snapshot do
@@ -158,17 +157,17 @@ defmodule Bitflyer.Exchange.Rest do
   defp get_positions_for(product_code) do
     product_code = to_string(product_code)
 
-    # spot は getpositions 対象外。残高（getbalance）が正本。
+    # getpositions は FX/CFD 専用。spot・unsupported では呼ばない（正本は getbalance 等）。
     # product_codes が spot のみのとき、同一キー口座の FX 建玉は取得しない（運用前提は README）。
-    if Product.spot?(product_code) do
-      {:ok, []}
-    else
+    if Product.fx?(product_code) do
       with :ok <- require_credentials(),
            {:ok, body} <-
              request(:get, "/v1/me/getpositions", "", [{"product_code", product_code}]),
            {:ok, positions} <- decode_rows(List.wrap(body), &Decode.position/1) do
         {:ok, aggregate_positions(positions)}
       end
+    else
+      {:ok, []}
     end
   end
 
@@ -396,13 +395,5 @@ defmodule Bitflyer.Exchange.Rest do
     Keyword.get(config(), :receive_timeout, 5_000)
   end
 
-  defp product_codes do
-    codes =
-      Application.get_env(:bitflyer, Bitflyer.MarketData, [])
-      |> Keyword.get(:product_codes, [@default_product])
-      |> List.wrap()
-      |> Enum.map(&to_string/1)
-
-    if codes == [], do: [@default_product], else: codes
-  end
+  defp product_codes, do: Bitflyer.MarketData.product_codes()
 end

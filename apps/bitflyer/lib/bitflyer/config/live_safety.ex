@@ -69,11 +69,7 @@ defmodule Bitflyer.Config.LiveSafety do
     :ok
   end
 
-  defp configured_product_codes do
-    Application.get_env(:bitflyer, Bitflyer.MarketData, [])
-    |> Keyword.get(:product_codes, ["BTC_JPY"])
-    |> List.wrap()
-  end
+  defp configured_product_codes, do: Bitflyer.MarketData.product_codes()
 
   @doc """
   `BITFLYER_STRATEGY_ENABLED`。`"true"` のみ有効。未設定・他値は無効。

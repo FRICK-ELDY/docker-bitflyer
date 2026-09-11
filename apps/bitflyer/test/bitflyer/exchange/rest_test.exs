@@ -144,6 +144,41 @@ defmodule Bitflyer.Exchange.RestTest do
     assert length(snapshot.balances) == 2
   end
 
+  test "fetch_reconcile_snapshot for unsupported product skips getpositions" do
+    previous_md = Application.get_env(:bitflyer, Bitflyer.MarketData)
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.MarketData,
+      Keyword.merge(previous_md || [], product_codes: ["FOO_BAR"])
+    )
+
+    Process.put(:rest_http_handler, fn method, url, headers, body ->
+      assert method == :get
+      assert body == ""
+      assert_signed_headers(headers)
+
+      cond do
+        String.contains?(url, "/v1/me/getbalance") ->
+          {:ok, response(200, fixture("getbalance.json"))}
+
+        String.contains?(url, "/v1/me/getpositions") ->
+          flunk("unsupported product must not call getpositions: #{url}")
+
+        String.contains?(url, "/v1/me/getchildorders") ->
+          assert String.contains?(url, "product_code=FOO_BAR")
+          {:ok, response(200, [])}
+
+        true ->
+          flunk("unexpected url: #{url}")
+      end
+    end)
+
+    assert {:ok, snapshot} = Rest.fetch_reconcile_snapshot()
+    assert snapshot.positions == []
+    assert snapshot.open_orders == []
+  end
+
   test "get_permissions returns permission path list" do
     Process.put(:rest_http_handler, fn method, url, headers, body ->
       assert method == :get
