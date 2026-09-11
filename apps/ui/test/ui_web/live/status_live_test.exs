@@ -101,6 +101,44 @@ defmodule UiWeb.StatusLiveTest do
     refute has_element?(view, "#ops-resume")
   end
 
+  test "orders gate shows STOPPED when feed is disconnected while market still fresh", %{
+    conn: conn
+  } do
+    assert Readiness.mark_ready() == :ok
+    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+
+    previous = Application.get_env(:bitflyer, :operational_status_snapshot_opts, [])
+
+    Application.put_env(:bitflyer, :operational_status_snapshot_opts,
+      market_data: %{
+        enabled?: true,
+        max_age_ms: 5_000,
+        all_fresh?: true,
+        entries: [
+          %{product_code: @product, key: @market_key, fresh?: true, age_ms: 10}
+        ]
+      },
+      feed: %{
+        enabled?: true,
+        available?: true,
+        connected?: false,
+        subscribe_count: 1,
+        reconnect_attempt: 2
+      }
+    )
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :operational_status_snapshot_opts, previous)
+    end)
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    assert has_element?(view, "#orders-gate-label", "STOPPED")
+    assert has_element?(view, "#orders-gate-reason", "feed_disconnected")
+    assert has_element?(view, "#feed-status", "disconnected")
+    assert has_element?(view, "#market-freshness", "fresh")
+  end
+
   test "kill switch opens circuit and shows resume controls", %{conn: conn} do
     assert Readiness.mark_ready() == :ok
 
@@ -108,7 +146,8 @@ defmodule UiWeb.StatusLiveTest do
     refute has_element?(view, "#ops-resume")
 
     view |> element("#ops-kill-switch") |> render_click()
-    _ = render_async(view)
+    # halt_trading の RiskState 永続化が既定 100ms を超えることがある
+    _ = render_async(view, 1_000)
 
     assert has_element?(view, "#readiness", "halted:manual_halt")
     assert has_element?(view, "#halt-reason", "manual_halt")
@@ -125,7 +164,7 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#halt-reason", "reconcile_mismatch")
 
     view |> element("#ops-kill-switch") |> render_click()
-    _ = render_async(view)
+    _ = render_async(view, 1_000)
 
     assert has_element?(view, "#halt-reason", "reconcile_mismatch")
     assert Readiness.get() == {:halted, :reconcile_mismatch}
@@ -139,7 +178,8 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#ops-resume")
 
     view |> element("#ops-resume") |> render_click()
-    _ = render_async(view)
+    # resume 再突合が既定 100ms を超えることがある
+    _ = render_async(view, 1_000)
 
     assert has_element?(view, "#readiness", "ready")
     refute has_element?(view, "#ops-resume")
@@ -153,7 +193,7 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#ops-reconcile-now")
 
     view |> element("#ops-reconcile-now") |> render_click()
-    _ = render_async(view)
+    _ = render_async(view, 1_000)
 
     assert match?({:halted, _}, Readiness.get())
     assert has_element?(view, "#ops-resume")

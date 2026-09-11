@@ -3,12 +3,62 @@ defmodule Bitflyer.OperationalStatusTest do
 
   import Bitflyer.TestSupport.ReadinessHelper
 
+  alias Bitflyer.Health
   alias Bitflyer.MarketData.Cache
   alias Bitflyer.OperationalStatus
   alias Bitflyer.Readiness
 
   @product "BTC_JPY"
   @market_key {:ticker, @product}
+
+  @connected_feed %{
+    enabled?: true,
+    available?: true,
+    connected?: true,
+    subscribe_count: 1,
+    reconnect_attempt: 0
+  }
+
+  @disconnected_feed %{
+    enabled?: true,
+    available?: true,
+    connected?: false,
+    subscribe_count: 1,
+    reconnect_attempt: 2
+  }
+
+  @unavailable_feed %{
+    enabled?: true,
+    available?: false,
+    connected?: false,
+    subscribe_count: 0,
+    reconnect_attempt: 0
+  }
+
+  @fresh_market %{
+    enabled?: true,
+    max_age_ms: 5_000,
+    all_fresh?: true,
+    entries: [
+      %{product_code: @product, key: @market_key, fresh?: true, age_ms: 10}
+    ]
+  }
+
+  @stale_market %{
+    enabled?: true,
+    max_age_ms: 5_000,
+    all_fresh?: false,
+    entries: [
+      %{product_code: @product, key: @market_key, fresh?: false, age_ms: :miss}
+    ]
+  }
+
+  @disabled_market %{
+    enabled?: false,
+    max_age_ms: 5_000,
+    all_fresh?: false,
+    entries: []
+  }
 
   setup do
     reset_readiness()
@@ -22,25 +72,20 @@ defmodule Bitflyer.OperationalStatusTest do
     :ok
   end
 
-  test "snapshot reports not_ready and stale until ready and fresh" do
+  test "snapshot reports not_ready until ready; MD disabled skips freshness" do
     status = OperationalStatus.snapshot(trade_mode: :dry_run, live_confirmed?: false)
 
     refute status.orders_allowed?
     assert status.orders_reason == :not_ready
     assert status.readiness == :not_ready
     assert status.halt_reason == nil
-    refute status.market_data.all_fresh?
+    refute status.market_data.enabled?
 
     assert Readiness.mark_ready() == :ok
     status = OperationalStatus.snapshot(trade_mode: :dry_run, live_confirmed?: false)
-    refute status.orders_allowed?
-    assert status.orders_reason == :stale_market_data
-
-    assert Cache.put(@market_key, %{ltp: Decimal.new("1")}) == :ok
-    status = OperationalStatus.snapshot(trade_mode: :dry_run, live_confirmed?: false)
+    # test.exs では MarketData.enabled? = false → Health ready と同様に鮮度を見ない
     assert status.orders_allowed?
     assert status.orders_reason == nil
-    assert status.market_data.all_fresh?
   end
 
   test "halt reason becomes orders_reason" do
@@ -55,31 +100,122 @@ defmodule Bitflyer.OperationalStatusTest do
 
   test "live without confirm stays halted even when ready and fresh" do
     assert Readiness.mark_ready() == :ok
-    assert Cache.put(@market_key, %{ltp: Decimal.new("1")}) == :ok
 
-    status = OperationalStatus.snapshot(trade_mode: :live, live_confirmed?: false)
+    status =
+      OperationalStatus.snapshot(
+        trade_mode: :live,
+        live_confirmed?: false,
+        market_data: @fresh_market,
+        feed: @connected_feed
+      )
+
     refute status.orders_allowed?
     assert status.orders_reason == :live_confirm_missing
 
-    status = OperationalStatus.snapshot(trade_mode: :live, live_confirmed?: true)
+    status =
+      OperationalStatus.snapshot(
+        trade_mode: :live,
+        live_confirmed?: true,
+        market_data: @fresh_market,
+        feed: @connected_feed
+      )
+
     assert status.orders_allowed?
   end
 
   test "orders_gate returns :ok or {:halted, reason}" do
-    market = %{
-      enabled?: true,
-      max_age_ms: 5_000,
-      all_fresh?: true,
-      entries: []
-    }
+    assert OperationalStatus.orders_gate(:ready, :dry_run, @fresh_market, false, @connected_feed) ==
+             :ok
 
-    assert OperationalStatus.orders_gate(:ready, :dry_run, market, false) == :ok
+    assert OperationalStatus.orders_gate(
+             :not_ready,
+             :dry_run,
+             @fresh_market,
+             false,
+             @connected_feed
+           ) == {:halted, :not_ready}
 
-    assert OperationalStatus.orders_gate(:not_ready, :dry_run, market, false) ==
-             {:halted, :not_ready}
+    assert OperationalStatus.orders_gate(
+             {:halted, :circuit_open},
+             :dry_run,
+             @fresh_market,
+             false,
+             @connected_feed
+           ) == {:halted, :circuit_open}
+  end
 
-    assert OperationalStatus.orders_gate({:halted, :circuit_open}, :dry_run, market, false) ==
-             {:halted, :circuit_open}
+  test "feed disconnect refuses orders even when market data is still fresh" do
+    assert Readiness.mark_ready() == :ok
+
+    status =
+      OperationalStatus.snapshot(
+        trade_mode: :dry_run,
+        live_confirmed?: false,
+        market_data: @fresh_market,
+        feed: @disconnected_feed
+      )
+
+    refute status.orders_allowed?
+    assert status.orders_reason == :feed_disconnected
+
+    assert OperationalStatus.orders_gate(
+             :ready,
+             :dry_run,
+             @fresh_market,
+             false,
+             @disconnected_feed
+           ) == {:halted, :feed_disconnected}
+  end
+
+  test "feed unavailable refuses orders when market data is enabled" do
+    assert OperationalStatus.orders_gate(
+             :ready,
+             :dry_run,
+             @fresh_market,
+             false,
+             @unavailable_feed
+           ) == {:halted, :feed_unavailable}
+  end
+
+  test "stale market data refuses orders when feed is connected" do
+    assert OperationalStatus.orders_gate(
+             :ready,
+             :dry_run,
+             @stale_market,
+             false,
+             @connected_feed
+           ) == {:halted, :stale_market_data}
+  end
+
+  test "market_feed_gate matches Health ready reasons" do
+    assert OperationalStatus.market_feed_gate(@fresh_market, @connected_feed) == :ok
+    assert OperationalStatus.market_feed_gate(@disabled_market, @unavailable_feed) == :ok
+
+    assert OperationalStatus.market_feed_gate(@fresh_market, @disconnected_feed) ==
+             {:halted, :feed_disconnected}
+
+    assert OperationalStatus.market_feed_gate(@stale_market, @connected_feed) ==
+             {:halted, :stale_market_data}
+
+    health = Health.build_ready(:ok, :ready, :dry_run, @fresh_market, @disconnected_feed)
+    assert health.reason == :feed_disconnected
+    refute health.healthy?
+
+    health = Health.build_ready(:ok, :ready, :dry_run, @fresh_market, @connected_feed)
+    assert health.status == :ready
+  end
+
+  test "market_feed_gate treats missing keys as fail-closed" do
+    # enabled? 欠落 → 有効扱い → Feed を見る
+    assert OperationalStatus.market_feed_gate(%{all_fresh?: true}, @disconnected_feed) ==
+             {:halted, :feed_disconnected}
+
+    # all_fresh? 欠落 → stale
+    assert OperationalStatus.market_feed_gate(%{enabled?: true}, @connected_feed) ==
+             {:halted, :stale_market_data}
+
+    # 明示 disabled のみスキップ
+    assert OperationalStatus.market_feed_gate(%{enabled?: false}, @disconnected_feed) == :ok
   end
 
   test "snapshot forwards now/max_age_ms into market_data freshness" do
@@ -92,7 +228,10 @@ defmodule Bitflyer.OperationalStatusTest do
         trade_mode: :dry_run,
         live_confirmed?: false,
         now: now,
-        max_age_ms: 5_000
+        max_age_ms: 5_000,
+        enabled?: true,
+        feed_enabled?: true,
+        feed_status: %{connected?: true, subscribe_count: 1, reconnect_attempt: 0}
       )
 
     refute status.orders_allowed?
@@ -155,21 +294,21 @@ defmodule Bitflyer.OperationalStatusTest do
     refute feed.connected?
   end
 
-  test "snapshot includes feed from feed_status override" do
+  test "snapshot includes feed metrics from explicit feed override" do
+    assert Readiness.mark_ready() == :ok
+
     status =
       OperationalStatus.snapshot(
         trade_mode: :dry_run,
         live_confirmed?: false,
-        feed_enabled?: true,
-        feed_status: %{
-          connected?: false,
-          subscribe_count: 1,
-          reconnect_attempt: 3
-        }
+        market_data: @fresh_market,
+        feed: @disconnected_feed
       )
 
+    refute status.orders_allowed?
+    assert status.orders_reason == :feed_disconnected
     refute status.feed.connected?
     assert status.feed.subscribe_count == 1
-    assert status.feed.reconnect_attempt == 3
+    assert status.feed.reconnect_attempt == 2
   end
 end
