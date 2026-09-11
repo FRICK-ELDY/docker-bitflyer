@@ -91,9 +91,6 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
     end
 
     @impl true
-    def fetch_executions(_), do: {:ok, []}
-
-    @impl true
     def list_child_orders(_), do: {:ok, []}
   end
 
@@ -125,9 +122,6 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
     end
 
     @impl true
-    def fetch_executions(_), do: {:ok, []}
-
-    @impl true
     def list_child_orders(_), do: {:ok, []}
   end
 
@@ -153,9 +147,6 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
     end
 
     @impl true
-    def fetch_executions(_), do: {:ok, []}
-
-    @impl true
     def list_child_orders(_), do: {:ok, []}
   end
 
@@ -179,9 +170,6 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
         info -> {:ok, info}
       end
     end
-
-    @impl true
-    def fetch_executions(_), do: {:ok, []}
 
     @impl true
     def list_child_orders(_), do: {:ok, []}

@@ -150,7 +150,15 @@ defmodule Bitflyer.OrderExecutorTest do
     end
 
     @impl true
-    def fetch_executions(_), do: {:ok, []}
+    def fetch_executions(%{exchange_order_id: id}) do
+      {:ok,
+       Bitflyer.TestSupport.FillExecutions.from_order_info(id, %{
+         filled_size: Decimal.new("0.01"),
+         average_price: Decimal.new("5000000"),
+         product_code: "BTC_JPY",
+         side: :buy
+       })}
+    end
 
     @impl true
     def list_child_orders(_), do: {:ok, []}

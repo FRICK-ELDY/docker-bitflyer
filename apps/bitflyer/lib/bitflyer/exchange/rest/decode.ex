@@ -237,12 +237,15 @@ defmodule Bitflyer.Exchange.Rest.Decode do
     product_code =
       Map.get(row, "product_code") || Map.get(row, :product_code) || default_product
 
+    raw_executed_at = Map.get(row, "exec_date") || Map.get(row, :exec_date)
+
     with {:ok, exchange_order_id} <- require_binary(exchange_order_id),
          {:ok, side} <- require_side(raw_side),
-         {:ok, id} <- require_present(id),
+         {:ok, id} <- require_execution_id(id),
          {:ok, product_code} <- require_binary(product_code),
          {:ok, price} <- require_decimal(Map.get(row, "price") || Map.get(row, :price)),
-         {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)) do
+         {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)),
+         {:ok, executed_at} <- optional_execution_datetime(raw_executed_at) do
       {:ok,
        %{
          id: id,
@@ -251,7 +254,7 @@ defmodule Bitflyer.Exchange.Rest.Decode do
          side: side,
          price: price,
          size: size,
-         executed_at: Map.get(row, "exec_date") || Map.get(row, :exec_date)
+         executed_at: executed_at
        }}
     end
   end
@@ -338,9 +341,14 @@ defmodule Bitflyer.Exchange.Rest.Decode do
   defp require_binary(value) when is_binary(value) and value != "", do: {:ok, value}
   defp require_binary(_), do: {:error, :missing_identifier}
 
-  defp require_present(nil), do: {:error, :missing_identifier}
-  defp require_present(""), do: {:error, :missing_identifier}
-  defp require_present(value), do: {:ok, value}
+  defp require_execution_id(id) when is_integer(id), do: {:ok, Integer.to_string(id)}
+  defp require_execution_id(id) when is_binary(id) and id != "", do: {:ok, id}
+  defp require_execution_id(_), do: {:error, :missing_identifier}
+
+  # exec_date 欠落は許容（filled_at は呼び出し側で utc_now フォールバック）。不正文字列は拒否。
+  defp optional_execution_datetime(nil), do: {:ok, nil}
+  defp optional_execution_datetime(""), do: {:ok, nil}
+  defp optional_execution_datetime(value), do: child_order_datetime(value)
 
   defp require_side(raw) do
     case side(raw) do

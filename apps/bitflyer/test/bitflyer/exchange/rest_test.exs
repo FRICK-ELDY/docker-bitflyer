@@ -305,6 +305,23 @@ defmodule Bitflyer.Exchange.RestTest do
     assert Decimal.eq?(e2.size, Decimal.new("0.01"))
   end
 
+  test "fetch_executions defaults count=500" do
+    Process.put(:rest_http_handler, fn method, url, headers, body ->
+      assert method == :get
+      assert body == ""
+      assert_signed_headers(headers)
+      assert String.contains?(url, "/v1/me/getexecutions")
+      assert String.contains?(url, "count=500")
+      {:ok, response(200, [])}
+    end)
+
+    assert {:ok, []} =
+             Rest.fetch_executions(%{
+               product_code: "FX_BTC_JPY",
+               exchange_order_id: "JRF-count"
+             })
+  end
+
   test "4xx maps to definite rejection atoms" do
     Process.put(:rest_http_handler, fn _method, _url, _headers, _body ->
       {:ok, response(400, %{"error_message" => "Insufficient funds"})}

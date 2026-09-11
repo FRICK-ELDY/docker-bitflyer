@@ -2,11 +2,16 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
   @moduledoc """
   live 注文の約定を取引所照会から内部建玉へ反映する。
 
-  - 建玉: `Positions.apply_fill` で差分反映（Risk が DB Position を見るため必須）
+  - 建玉: `Positions.apply_fill` で **execution 単位**に反映（`exchange_execution_id` 付き）
   - 残高: **触らない**。live の残高正本は `getbalance` 突合（紙の `Balances.apply_fill` は FX と矛盾する）
   - 発注認可前（`System.submit_order`）・発注後・取消後・定期突合前に呼ぶ
   - `sync_open_orders/1` は `LiveFills.Gate` で最小間隔＋単一ノード直列化（認可前の連打抑制）。
     突合は `:force`
+  - 増分があるとき `getexecutions` 必須。サイズが remote_filled と一致しない・id 欠落は fail-closed
+  - 旧経路の live Fill（`exchange_execution_id` nil）上での追加約定は `:legacy_nil_execution_id` で拒否
+  - API の同一 execution id 二重返却は `uniq` してから coverage する
+  - Gate は失敗試行でも時計を進める（P0 #5）。legacy は恒久失敗になりやすいので
+    **デプロイ前に open live の nil id Fill がゼロであること**が前提（`Fill` moduledoc の SQL）
 
   間引き中は直近の試行を信頼して `:ok` を返す（1s 以内に他 open の未反映約定があると
   認可時建玉が古くなりうる意図的トレードオフ。最終安全網は起動・定期突合の `:force`）。
@@ -21,7 +26,7 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
 
   alias Bitflyer.OrderExecutor.LiveFills.Gate
   alias Bitflyer.OrderExecutor.Positions
-  alias Bitflyer.Trading.Order
+  alias Bitflyer.Trading.{Fill, Order}
 
   @doc """
   `pending` / `partially_filled` の live 注文を取引所状態に合わせて進める。
@@ -146,14 +151,14 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
           side: order.side,
           size: order.size,
           filled_size: remote_filled,
-          average_price: average_price_from_executions(executions),
+          average_price: nil,
           # 一覧に無い = 板から消えている。fill 後は cancelled（全量なら filled）
           status: :canceled
         }
 
         cond do
           Decimal.compare(delta, 0) == :gt ->
-            reflect_fill(order, info, delta, exchange)
+            apply_executions(order, info, executions)
 
           Decimal.compare(remote_filled, 0) == :gt ->
             # 既にローカルへ載せ済み。終端化のみ
@@ -180,15 +185,6 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
     end
   end
 
-  defp average_price_from_executions([]), do: nil
-
-  defp average_price_from_executions(executions) do
-    case avg_from_executions(executions) do
-      {:ok, price} -> price
-      _ -> nil
-    end
-  end
-
   defp apply_order_info(%Order{} = order, info, exchange) do
     remote_filled = info.filled_size
     local_filled = order.filled_size || Decimal.new("0")
@@ -196,7 +192,7 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
 
     cond do
       Decimal.compare(delta, 0) == :gt ->
-        reflect_fill(order, info, delta, exchange)
+        reflect_fill(order, info, exchange)
 
       info.status in [:canceled, :expired, :rejected] ->
         mark_terminal(order, map_terminal_status(info.status), remote_filled)
@@ -209,84 +205,296 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
     end
   end
 
-  defp reflect_fill(%Order{} = order, info, delta, exchange) do
-    case fill_price(order, info, exchange) do
-      {:ok, price, new_filled_notional} ->
-        apply_fill_transaction(order, info, delta, price, new_filled_notional)
+  defp reflect_fill(%Order{} = order, info, exchange) do
+    case exchange.fetch_executions(%{
+           product_code: order.product_code,
+           exchange_order_id: order.exchange_order_id
+         }) do
+      {:ok, executions} ->
+        apply_executions(order, info, executions)
 
-      {:error, _, _} = error ->
-        error
+      {:error, reason} ->
+        {:error, :exchange_error,
+         %{
+           reason: reason,
+           internal_order_id: order.internal_order_id,
+           cause: :executions_required_for_fill
+         }}
     end
   end
 
-  # 取引所の累積 average_price から、未反映分の増分約定価格を求める。
-  # incremental = (remote_avg × remote_filled − local_notional) / delta
-  defp fill_price(%Order{} = order, info, exchange) do
-    with {:ok, remote_avg} <- remote_average_price(order, info, exchange) do
-      incremental_fill_price(order, remote_avg, info.filled_size)
+  defp apply_executions(%Order{} = order, info, executions) when is_list(executions) do
+    executions = uniq_executions(executions)
+
+    with :ok <- ensure_consistent_filled_baseline(order),
+         {:ok, legacy_nil?} <- has_legacy_nil_execution_fills?(order),
+         {:ok, known_ids} <- known_execution_ids(order) do
+      new_execs = new_executions(executions, known_ids)
+      remote = info.filled_size || Decimal.new("0")
+      local = order.filled_size || Decimal.new("0")
+      delta = Decimal.sub(remote, local)
+
+      cond do
+        # 本変更以前の live Fill は id=nil。known_ids から落ちるため追加約定を
+        # 再記帳しようとすると new_total != delta で恒久失敗する。増分があるうちは明示拒否。
+        # 呼び出し側: 認可前 sync は当該 submit 拒否のみ / post-place・reconcile は halt しうる。
+        legacy_nil? and Decimal.compare(delta, 0) == :gt ->
+          refuse_legacy_nil_execution_id(order)
+
+        # 数量は一致済みなら終端ステータスだけ進める（再記帳しない）
+        legacy_nil? ->
+          apply_order_info_without_delta(order, info)
+
+        true ->
+          with :ok <- ensure_execution_coverage(order, info, executions, new_execs) do
+            if new_execs == [] do
+              apply_order_info_without_delta(order, info)
+            else
+              apply_new_executions_transaction(order, info, new_execs)
+            end
+          end
+      end
     end
   end
 
-  defp remote_average_price(%Order{} = order, info, exchange) do
+  defp apply_order_info_without_delta(%Order{} = order, info) do
+    remote_filled = info.filled_size
+
     cond do
-      match?(%Decimal{}, info.average_price) and Decimal.positive?(info.average_price) ->
-        {:ok, info.average_price}
+      info.status in [:canceled, :expired, :rejected] ->
+        mark_terminal(order, map_terminal_status(info.status), remote_filled)
+
+      info.status == :completed and order.status != :filled ->
+        mark_terminal(order, :filled, remote_filled)
 
       true ->
-        case exchange.fetch_executions(%{
-               product_code: order.product_code,
-               exchange_order_id: order.exchange_order_id
-             }) do
-          {:ok, executions} ->
-            avg_from_executions(executions)
-
-          {:error, reason} ->
-            {:error, :exchange_error, %{reason: reason}}
-        end
+        :ok
     end
   end
 
-  defp incremental_fill_price(%Order{} = order, remote_avg, remote_filled) do
-    local_notional = order.filled_notional || Decimal.new("0")
-    local_filled = order.filled_size || Decimal.new("0")
-    delta = Decimal.sub(remote_filled, local_filled)
-    remote_notional = Decimal.mult(remote_avg, remote_filled)
-    incremental_notional = Decimal.sub(remote_notional, local_notional)
+  defp known_execution_ids(%Order{} = order) do
+    case Fill
+         |> Ash.Query.filter(
+           trade_mode == ^order.trade_mode and internal_order_id == ^order.internal_order_id and
+             not is_nil(exchange_execution_id)
+         )
+         |> Ash.read() do
+      {:ok, fills} ->
+        {:ok, MapSet.new(Enum.map(fills, & &1.exchange_execution_id))}
+
+      {:error, error} ->
+        {:error, :persist_failed, %{error: error}}
+    end
+  end
+
+  # live かつ exchange_execution_id IS NULL の Fill は旧経路の証跡。追加約定の差分記帳に使えない。
+  defp has_legacy_nil_execution_fills?(%Order{} = order) do
+    case Fill
+         |> Ash.Query.filter(
+           trade_mode == :live and internal_order_id == ^order.internal_order_id and
+             is_nil(exchange_execution_id)
+         )
+         |> Ash.read() do
+      {:ok, []} ->
+        {:ok, false}
+
+      {:ok, _} ->
+        {:ok, true}
+
+      {:error, error} ->
+        {:error, :persist_failed, %{error: error}}
+    end
+  end
+
+  defp refuse_legacy_nil_execution_id(%Order{} = order) do
+    Bitflyer.Telemetry.log(
+      :error,
+      "live fill refused: legacy nil exchange_execution_id baseline (deploy SQL must be 0 for open live)",
+      %{
+        internal_order_id: order.internal_order_id,
+        exchange_order_id: order.exchange_order_id,
+        trade_mode: :live
+      }
+    )
+
+    {:error, :fill_price_unavailable,
+     %{
+       reason: :legacy_nil_execution_id,
+       internal_order_id: order.internal_order_id
+     }}
+  end
+
+  defp uniq_executions(executions) when is_list(executions) do
+    executions
+    |> Enum.reduce({[], MapSet.new()}, fn exec, {acc, seen} ->
+      id = normalize_execution_id(exec.id)
+
+      cond do
+        is_nil(id) ->
+          {[exec | acc], seen}
+
+        MapSet.member?(seen, id) ->
+          {acc, seen}
+
+        true ->
+          {[exec | acc], MapSet.put(seen, id)}
+      end
+    end)
+    |> elem(0)
+    |> Enum.reverse()
+  end
+
+  defp new_executions(executions, %MapSet{} = known_ids) do
+    executions
+    |> Enum.filter(fn exec ->
+      id = normalize_execution_id(exec.id)
+      is_binary(id) and not MapSet.member?(known_ids, id)
+    end)
+    |> Enum.sort_by(fn exec ->
+      at = Map.get(exec, :executed_at)
+
+      {if(match?(%DateTime{}, at), do: DateTime.to_unix(at, :microsecond), else: 0),
+       normalize_execution_id(exec.id)}
+    end)
+  end
+
+  defp normalize_execution_id(id) when is_binary(id), do: id
+  defp normalize_execution_id(id) when is_integer(id), do: Integer.to_string(id)
+  defp normalize_execution_id(_), do: nil
+
+  # API 全約定サイズが remote_filled と一致し、未反映分の合計が delta と一致すること。
+  defp ensure_execution_coverage(%Order{} = order, info, all_execs, new_execs) do
+    remote = info.filled_size || Decimal.new("0")
+    local = order.filled_size || Decimal.new("0")
+    delta = Decimal.sub(remote, local)
+
+    exec_total =
+      Enum.reduce(all_execs, Decimal.new("0"), fn exec, acc -> Decimal.add(acc, exec.size) end)
+
+    new_total =
+      Enum.reduce(new_execs, Decimal.new("0"), fn exec, acc -> Decimal.add(acc, exec.size) end)
 
     cond do
-      inconsistent_filled_baseline?(local_filled, local_notional) ->
-        refuse_inconsistent_filled_notional(order, local_filled, local_notional)
+      Enum.any?(all_execs, fn exec -> is_nil(normalize_execution_id(exec.id)) end) ->
+        {:error, :fill_price_unavailable,
+         %{reason: :missing_execution_id, internal_order_id: order.internal_order_id}}
 
-      Decimal.compare(delta, 0) != :gt ->
-        {:error, :fill_price_unavailable, %{reason: :non_positive_delta}}
+      Decimal.compare(exec_total, remote) != :eq ->
+        meta = %{
+          reason: :execution_size_mismatch,
+          exec_total: exec_total,
+          remote_filled: remote,
+          exec_count: length(all_execs),
+          internal_order_id: order.internal_order_id
+        }
 
-      Decimal.compare(incremental_notional, 0) != :gt ->
-        Bitflyer.Telemetry.log(
-          :error,
-          "live fill refused: non-positive incremental notional",
-          %{
-            internal_order_id: order.internal_order_id,
-            exchange_order_id: order.exchange_order_id,
-            local_notional: local_notional,
-            remote_notional: remote_notional,
-            incremental_notional: incremental_notional,
-            trade_mode: :live
-          }
-        )
+        # bitFlyer getexecutions の count 上限付近。ページ欠けの可能性を観測用に残す。
+        meta =
+          if length(all_execs) >= 500 do
+            Map.put(meta, :hint, :execution_page_may_be_truncated)
+          else
+            meta
+          end
 
+        {:error, :fill_price_unavailable, meta}
+
+      Decimal.compare(new_total, delta) != :eq ->
         {:error, :fill_price_unavailable,
          %{
-           reason: :non_positive_incremental_notional,
-           local_notional: local_notional,
-           remote_notional: remote_notional,
-           incremental_notional: incremental_notional,
+           reason: :new_execution_delta_mismatch,
+           new_total: new_total,
+           delta: delta,
            internal_order_id: order.internal_order_id
          }}
 
       true ->
-        {:ok, Decimal.div(incremental_notional, delta), remote_notional}
+        :ok
     end
   end
+
+  defp apply_new_executions_transaction(%Order{} = order, info, new_execs) do
+    total_delta =
+      Enum.reduce(new_execs, Decimal.new("0"), fn exec, acc -> Decimal.add(acc, exec.size) end)
+
+    Bitflyer.OrderExecutor.DailyLossSync.around_fill(:live, fn ->
+      case Bitflyer.Repo.transaction(fn ->
+             Enum.reduce_while(new_execs, {order, []}, fn exec, {current, notifications} ->
+               case apply_one_execution(current, info, exec) do
+                 {:ok, updated, more} ->
+                   {:cont, {updated, notifications ++ more}}
+
+                 {:error, code, meta} when is_atom(code) and is_map(meta) ->
+                   Bitflyer.Repo.rollback({code, meta})
+
+                 other ->
+                   Bitflyer.Repo.rollback(other)
+               end
+             end)
+           end) do
+        {:ok, {updated, notifications}} ->
+          _ = Ash.Notifier.notify(notifications)
+          _ = consume_live_hold(order, total_delta)
+
+          if updated.status == :filled do
+            _ = Bitflyer.Risk.BalanceCache.discard_hold(:live, updated.internal_order_id)
+          end
+
+          Bitflyer.Telemetry.execute(
+            :order_filled,
+            %{count: 1},
+            %{
+              internal_order_id: updated.internal_order_id,
+              exchange_order_id: updated.exchange_order_id,
+              product_code: updated.product_code,
+              side: updated.side,
+              trade_mode: :live,
+              status: updated.status
+            }
+          )
+
+          {:ok, updated}
+
+        {:error, {code, meta}} when is_atom(code) and is_map(meta) ->
+          {:error, code, meta}
+
+        {:error, error} ->
+          {:error, :persist_failed, %{error: error}}
+      end
+    end)
+  end
+
+  defp apply_one_execution(%Order{} = order, info, exec) do
+    exec_id = normalize_execution_id(exec.id)
+    fill_price = exec.price
+    size = exec.size
+    filled_at = execution_filled_at(exec)
+
+    new_filled = Decimal.add(order.filled_size || Decimal.new("0"), size)
+
+    new_notional =
+      Decimal.add(order.filled_notional || Decimal.new("0"), Decimal.mult(fill_price, size))
+
+    status = status_after_fill(order.size, new_filled, info.status)
+    delta_order = %{order | size: size, filled_size: size}
+
+    with {:ok, updated, order_notifications} <-
+           update_order(order, %{
+             status: status,
+             filled_size: new_filled,
+             filled_notional: new_notional
+           }),
+         {:ok, position_notifications, _fill_meta} <-
+           Positions.apply_fill(delta_order, fill_price,
+             exchange_execution_id: exec_id,
+             filled_at: filled_at,
+             order_id: order.id
+           ) do
+      {:ok, updated, order_notifications ++ position_notifications}
+    end
+  end
+
+  defp execution_filled_at(%{executed_at: %DateTime{} = dt}), do: dt
+  defp execution_filled_at(_), do: DateTime.utc_now()
 
   # オープン注文の列挙・sync 入口で検査する。delta=0 でも黙って通さない。
   defp ensure_consistent_filled_baseline(%Order{} = order) do
@@ -328,79 +536,6 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
     notional_positive? = Decimal.compare(local_notional, 0) == :gt
 
     (size_positive? and not notional_positive?) or (notional_positive? and not size_positive?)
-  end
-
-  defp avg_from_executions([]), do: {:error, :fill_price_unavailable, %{}}
-
-  defp avg_from_executions(executions) do
-    {notional, size} =
-      Enum.reduce(executions, {Decimal.new("0"), Decimal.new("0")}, fn exec, {n, s} ->
-        {Decimal.add(n, Decimal.mult(exec.price, exec.size)), Decimal.add(s, exec.size)}
-      end)
-
-    if Decimal.equal?(size, Decimal.new("0")) do
-      {:error, :fill_price_unavailable, %{}}
-    else
-      {:ok, Decimal.div(notional, size)}
-    end
-  end
-
-  defp apply_fill_transaction(%Order{} = order, info, delta, fill_price, new_filled_notional) do
-    new_filled = Decimal.add(order.filled_size || Decimal.new("0"), delta)
-    status = status_after_fill(order.size, new_filled, info.status)
-
-    # 差分サイズだけ建玉へ。残高は live では更新しない（getbalance 突合が正本）
-    delta_order = %{order | size: delta, filled_size: delta}
-
-    Bitflyer.OrderExecutor.DailyLossSync.around_fill(:live, fn ->
-      case Bitflyer.Repo.transaction(fn ->
-             with {:ok, updated, order_notifications} <-
-                    update_order(order, %{
-                      status: status,
-                      filled_size: new_filled,
-                      filled_notional: new_filled_notional
-                    }),
-                  {:ok, position_notifications, _fill_meta} <-
-                    Positions.apply_fill(delta_order, fill_price) do
-               {updated, order_notifications ++ position_notifications}
-             else
-               {:error, code, meta} when is_atom(code) and is_map(meta) ->
-                 Bitflyer.Repo.rollback({code, meta})
-
-               other ->
-                 Bitflyer.Repo.rollback(other)
-             end
-           end) do
-        {:ok, {updated, notifications}} ->
-          _ = Ash.Notifier.notify(notifications)
-          _ = consume_live_hold(order, delta)
-
-          if updated.status == :filled do
-            _ = Bitflyer.Risk.BalanceCache.discard_hold(:live, updated.internal_order_id)
-          end
-
-          Bitflyer.Telemetry.execute(
-            :order_filled,
-            %{count: 1},
-            %{
-              internal_order_id: updated.internal_order_id,
-              exchange_order_id: updated.exchange_order_id,
-              product_code: updated.product_code,
-              side: updated.side,
-              trade_mode: :live,
-              status: updated.status
-            }
-          )
-
-          {:ok, updated}
-
-        {:error, {code, meta}} when is_atom(code) and is_map(meta) ->
-          {:error, code, meta}
-
-        {:error, error} ->
-          {:error, :persist_failed, %{error: error}}
-      end
-    end)
   end
 
   defp consume_live_hold(%Order{} = order, %Decimal{} = delta) do
