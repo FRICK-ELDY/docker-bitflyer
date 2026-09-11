@@ -4,14 +4,17 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
 
   公開コンストラクタは無い。`OrderExecutor.submit/2` は `consume/1` で
   ワンショット検証し、偽造・再利用・TTL 超過を拒否する。
-  未消費の期限切れトークンは周期スイープで ETS から除去する（発注ホットパスでは掃除しない）。
-  ETS は `:protected`（書き込みはオーナーのみ）。クライアント直 `take` のための `:public` 化はしない
-  （任意プロセスの insert で Risk を迂回できるため）。
+  未消費の期限切れトークンは周期スイープで ETS から除去し、紐づく OrderRate 予約も解放する。
+  ETS は `:protected`（書き込みはオーナーのみ）。
 
   GenServer 差し替えは `:authorized_order_server`（MarketData Cache の `:server` と衝突させない）。
   """
 
   use GenServer
+
+  alias Bitflyer.Risk.OrderRate
+
+  @reservation_key :__order_rate_reservation__
 
   @enforce_keys [:token, :command, :authorized_at_ms]
   defstruct [:token, :command, :authorized_at_ms]
@@ -26,6 +29,9 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
   @default_ttl_ms 30_000
   @purge_interval_ms 5_000
 
+  @doc false
+  def reservation_key, do: @reservation_key
+
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, @name)
@@ -34,6 +40,9 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
 
   @doc """
   認可トークンを一度だけ消費する。偽造・再利用・TTL 超過はエラー。
+
+  成功時、command に OrderRate 予約（`#{inspect(@reservation_key)}`）が載る。
+  期限切れ・不一致で破棄する場合は予約を `OrderRate.release/1` する。
 
   ## Options
   - `:authorized_order_server` — GenServer 名（既定 `__MODULE__`）。Cache 用 `:server` とは別
@@ -68,9 +77,6 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
 
   @impl true
   def init(%{table: table_name}) do
-    # :protected 必須。:public にすると任意プロセスが :ets.insert でき、
-    # Risk.authorize を通さず有効トークンを偽造できる（P3 #17 の境界破壊）。
-    # consume の GenServer 直列化は意図的。本システムの発注頻度ではボトルネックにならない。
     table =
       :ets.new(table_name, [
         :set,
@@ -84,11 +90,11 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
   end
 
   @impl true
-  def handle_call({:mint, command, opts}, _from, state) when is_map(command) do
+  def handle_call({:mint, command, reservation, opts}, _from, state) when is_map(command) do
     now_ms = Keyword.get_lazy(opts, :now_ms, &monotonic_ms/0)
 
     token = make_ref()
-    true = :ets.insert(state.table, {token, command, now_ms})
+    true = :ets.insert(state.table, {token, command, now_ms, reservation})
 
     authorized = %__MODULE__{
       token: token,
@@ -106,16 +112,18 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
 
     reply =
       case :ets.take(state.table, token) do
-        [{^token, stored_command, stored_at}] ->
+        [{^token, stored_command, stored_at, reservation}] ->
           cond do
             stored_command != command or stored_at != authorized_at_ms ->
+              _ = OrderRate.release(reservation)
               {:error, :unauthorized, %{reason: :authorization_mismatch}}
 
             now_ms - stored_at > ttl ->
+              _ = OrderRate.release(reservation)
               {:error, :unauthorized, %{reason: :authorization_expired, ttl_ms: ttl}}
 
             true ->
-              {:ok, stored_command}
+              {:ok, Map.put(stored_command, @reservation_key, reservation)}
           end
 
         [] ->
@@ -126,6 +134,7 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
   end
 
   def handle_call(:clear, _from, state) do
+    release_all(state.table)
     true = :ets.delete_all_objects(state.table)
     {:reply, :ok, state}
   end
@@ -149,10 +158,26 @@ defmodule Bitflyer.Risk.AuthorizedOrder do
     expired_before = now_ms - ttl
 
     match_spec = [
-      {{:"$1", :"$2", :"$3"}, [{:<, :"$3", expired_before}], [true]}
+      {{:"$1", :"$2", :"$3", :"$4"}, [{:<, :"$3", expired_before}], [:"$_"]}
     ]
 
-    :ets.select_delete(table, match_spec)
+    for {token, _command, _at, reservation} <- :ets.select(table, match_spec) do
+      true = :ets.delete(table, token)
+      _ = OrderRate.release(reservation)
+    end
+
+    :ok
+  end
+
+  defp release_all(table) do
+    :ets.foldl(
+      fn {_token, _command, _at, reservation}, acc ->
+        _ = OrderRate.release(reservation)
+        acc
+      end,
+      :ok,
+      table
+    )
   end
 
   defp monotonic_ms, do: System.monotonic_time(:millisecond)

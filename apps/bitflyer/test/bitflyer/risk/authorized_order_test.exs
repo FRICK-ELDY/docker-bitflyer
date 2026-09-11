@@ -21,6 +21,8 @@ defmodule Bitflyer.Risk.AuthorizedOrderTest do
   @market_key {:ticker, "FX_BTC_JPY"}
 
   setup do
+    previous_trade_mode = Application.get_env(:bitflyer, :trade_mode)
+
     reset_readiness()
     reset_market_data_cache()
     reset_order_rate()
@@ -37,6 +39,7 @@ defmodule Bitflyer.Risk.AuthorizedOrderTest do
       reset_balance_cache()
       reset_inflight()
       _ = AuthorizedOrder.clear()
+      restore_env(:trade_mode, previous_trade_mode)
     end)
 
     :ok
@@ -143,7 +146,7 @@ defmodule Bitflyer.Risk.AuthorizedOrderTest do
              )
   end
 
-  test "shutting down rejects before consuming token" do
+  test "shutting down consumes token and releases order rate reservation" do
     Application.put_env(:bitflyer, :trade_mode, :dry_run)
     assert Readiness.mark_ready() == :ok
     put_fresh_ticker(@market_key)
@@ -151,16 +154,17 @@ defmodule Bitflyer.Risk.AuthorizedOrderTest do
     assert {:ok, auth} =
              Risk.authorize(valid_command("gate-1"), positions: [], trade_mode: :dry_run)
 
+    assert {:ok, 1} = Bitflyer.Risk.OrderRate.count(:dry_run)
     assert :ok = InFlight.drain(timeout_ms: 100)
 
     assert {:error, :shutting_down, %{reason: :inflight_closed}} =
              OrderExecutor.submit(auth, trade_mode: :dry_run, positions: [])
 
-    assert AuthorizedOrder.size() == 1
+    # consume 済みなので再送不可。予約は解放済み。
+    assert AuthorizedOrder.size() == 0
+    assert {:ok, 0} = Bitflyer.Risk.OrderRate.count(:dry_run)
 
-    reset_inflight()
-
-    assert {:ok, %Order{status: :pending}} =
+    assert {:error, :unauthorized, %{reason: :authorization_missing}} =
              OrderExecutor.submit(auth, trade_mode: :dry_run, positions: [])
   end
 
@@ -190,12 +194,67 @@ defmodule Bitflyer.Risk.AuthorizedOrderTest do
              )
 
     assert AuthorizedOrder.size() == 1
+    assert {:ok, 1} = Bitflyer.Risk.OrderRate.count(:dry_run)
 
     pid = Process.whereis(AuthorizedOrder)
     send(pid, :purge_expired)
     _ = :sys.get_state(pid)
 
     assert AuthorizedOrder.size() == 0
+    assert {:ok, 0} = Bitflyer.Risk.OrderRate.count(:dry_run)
+  end
+
+  test "submit releases order rate when InFlight is closed after authorize" do
+    Application.put_env(:bitflyer, :trade_mode, :dry_run)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_ticker(@market_key)
+
+    assert {:ok, auth} =
+             Risk.authorize(valid_command("inflight-closed-1"),
+               positions: [],
+               trade_mode: :dry_run
+             )
+
+    assert {:ok, 1} = Bitflyer.Risk.OrderRate.count(:dry_run)
+
+    assert :ok = InFlight.drain(timeout_ms: 100)
+
+    assert {:error, :shutting_down, %{reason: :inflight_closed}} =
+             OrderExecutor.submit(auth, trade_mode: :dry_run, positions: [])
+
+    assert {:ok, 0} = Bitflyer.Risk.OrderRate.count(:dry_run)
+  end
+
+  test "submit releases order rate when balance reserve fails" do
+    Application.put_env(:bitflyer, :trade_mode, :paper)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_ticker(@market_key)
+
+    assert {:ok, auth} =
+             Risk.authorize(
+               valid_command("balance-fail-1", %{
+                 order_type: :limit,
+                 price: Decimal.new("5000000"),
+                 size: Decimal.new("0.01")
+               }),
+               positions: [],
+               trade_mode: :paper,
+               balances: %{"JPY" => %{available: Decimal.new("100000")}}
+             )
+
+    assert {:ok, 1} = Bitflyer.Risk.OrderRate.count(:paper)
+
+    # 認可後に残高を枯渇させ、submit の reserve で落とす
+    assert :ok =
+             Bitflyer.Risk.BalanceCache.put(:paper, %{
+               "JPY" => Decimal.new("1"),
+               "BTC" => Decimal.new("0")
+             })
+
+    assert {:error, :limit_exceeded, %{limit: :insufficient_balance}} =
+             OrderExecutor.submit(auth, trade_mode: :paper, positions: [])
+
+    assert {:ok, 0} = Bitflyer.Risk.OrderRate.count(:paper)
   end
 
   defp valid_command(id, overrides \\ %{}) do
@@ -212,4 +271,7 @@ defmodule Bitflyer.Risk.AuthorizedOrderTest do
       overrides
     )
   end
+
+  defp restore_env(key, nil), do: Application.delete_env(:bitflyer, key)
+  defp restore_env(key, value), do: Application.put_env(:bitflyer, key, value)
 end

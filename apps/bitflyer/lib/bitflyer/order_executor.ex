@@ -41,7 +41,8 @@ defmodule Bitflyer.OrderExecutor do
   認可済み注文を実行する。既存 `internal_order_id` があれば再送しない。
 
   `AuthorizedOrder.consume/1` で Risk 発行トークンをワンショット検証する（偽造・再利用不可）。
-  InFlight 閉鎖後は consume 前に `:shutting_down`（トークンを無駄打ちしない）。
+  InFlight 閉鎖後は consume 後に予約を `OrderRate.release` してから `:shutting_down` を返す
+  （トークンは take 済みのため purge に頼れない）。
   live では実行前に未反映約定を再度同期する（認可時点からのずれを縮める）。
   認可検査自体は呼び出し側（通常は `System.submit_order/2`）で済んでいる前提。
 
@@ -54,15 +55,12 @@ defmodule Bitflyer.OrderExecutor do
   """
   @spec submit(AuthorizedOrder.t(), keyword()) :: result()
   def submit(%AuthorizedOrder{} = authorized, opts \\ []) do
-    with :ok <- reject_if_order_gate_closed(),
-         {:ok, command} <- AuthorizedOrder.consume(authorized, opts) do
-      meta = %{
-        kind: :submit,
-        internal_order_id:
-          Map.get(command, :internal_order_id) || Map.get(command, "internal_order_id")
-      }
+    # consume を先に行う。ゲート閉鎖との競合で track が :closed でも、
+    # トークンは take 済みなのでここで OrderRate 予約を必ず release する。
+    with {:ok, command} <- AuthorizedOrder.consume(authorized, opts) do
+      reservation = Map.get(command, AuthorizedOrder.reservation_key())
 
-      case InFlight.track(meta) do
+      case enter_submit(command, reservation) do
         {:ok, ref} ->
           try do
             do_submit(command, opts)
@@ -70,28 +68,43 @@ defmodule Bitflyer.OrderExecutor do
             InFlight.untrack(ref)
           end
 
-        {:error, :closed} ->
-          # reject_if_order_gate_closed と track の間の競合用
-          {:error, :shutting_down, %{reason: :inflight_closed}}
+        {:error, _, _} = error ->
+          error
       end
     end
   end
 
-  defp reject_if_order_gate_closed do
-    if InFlight.closed?() do
-      {:error, :shutting_down, %{reason: :inflight_closed}}
-    else
-      :ok
+  defp enter_submit(command, reservation) do
+    meta = %{
+      kind: :submit,
+      internal_order_id:
+        Map.get(command, :internal_order_id) || Map.get(command, "internal_order_id")
+    }
+
+    cond do
+      InFlight.closed?() ->
+        _ = Bitflyer.Risk.OrderRate.release(reservation)
+        {:error, :shutting_down, %{reason: :inflight_closed}}
+
+      true ->
+        case InFlight.track(meta) do
+          {:ok, ref} ->
+            {:ok, ref}
+
+          {:error, :closed} ->
+            _ = Bitflyer.Risk.OrderRate.release(reservation)
+            {:error, :shutting_down, %{reason: :inflight_closed}}
+        end
     end
   end
 
   defp do_submit(command, opts) do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &TradeMode.current/0)
+    reservation = Map.get(command, AuthorizedOrder.reservation_key())
 
-    with :ok <- validate_command(command),
-         :ok <- maybe_sync_live_fills(trade_mode, opts),
-         {:new, command} <- idempotent_lookup(command),
-         {:ok, hold} <- reserve_balance(trade_mode, command, opts),
+    with :ok <- early_submit_gates(command, trade_mode, opts, reservation),
+         {:new, command} <- idempotent_lookup_releasing(command, reservation),
+         {:ok, hold} <- reserve_balance_releasing(trade_mode, command, opts, reservation),
          {:ok, order} <- create_pending_releasing(command, trade_mode, hold),
          {:ok, order} <- dispatch_releasing(order, command, trade_mode, opts, hold) do
       emit_submitted(order)
@@ -102,6 +115,24 @@ defmodule Bitflyer.OrderExecutor do
 
       other ->
         other
+    end
+  end
+
+  defp early_submit_gates(command, trade_mode, opts, reservation) do
+    case validate_command(command) do
+      :ok ->
+        case maybe_sync_live_fills(trade_mode, opts) do
+          :ok ->
+            :ok
+
+          {:error, _, _} = error ->
+            _ = Bitflyer.Risk.OrderRate.release(reservation)
+            error
+        end
+
+      {:error, _, _} = error ->
+        _ = Bitflyer.Risk.OrderRate.release(reservation)
+        error
     end
   end
 
@@ -261,8 +292,24 @@ defmodule Bitflyer.OrderExecutor do
     end
   end
 
+  defp idempotent_lookup_releasing(command, reservation) do
+    case idempotent_lookup(command) do
+      {:idempotent, order} ->
+        _ = Bitflyer.Risk.OrderRate.release(reservation)
+        {:idempotent, order}
+
+      {:error, _, _} = error ->
+        _ = Bitflyer.Risk.OrderRate.release(reservation)
+        error
+
+      other ->
+        other
+    end
+  end
+
   defp create_pending(command, trade_mode) do
     order_type = Map.get(command, :order_type, :market)
+    reservation = Map.get(command, AuthorizedOrder.reservation_key())
 
     attrs =
       %{
@@ -284,14 +331,19 @@ defmodule Bitflyer.OrderExecutor do
 
     case Order |> Ash.Changeset.for_create(:create, attrs) |> Ash.create() do
       {:ok, order} ->
-        _ = Bitflyer.Risk.OrderRate.record(trade_mode)
+        _ = Bitflyer.Risk.OrderRate.commit(reservation)
         {:ok, order}
 
       {:error, error} ->
         # 競合時は既存行を返す（二重 REST を防ぐ）
         case fetch_order(attrs.internal_order_id) do
-          {:ok, %Order{} = order} -> {:idempotent, order}
-          _ -> {:error, :persist_failed, %{error: error}}
+          {:ok, %Order{} = order} ->
+            _ = Bitflyer.Risk.OrderRate.release(reservation)
+            {:idempotent, order}
+
+          _ ->
+            _ = Bitflyer.Risk.OrderRate.release(reservation)
+            {:error, :persist_failed, %{error: error}}
         end
     end
   end
@@ -362,6 +414,17 @@ defmodule Bitflyer.OrderExecutor do
         end
 
       {:error, _, _} = error ->
+        error
+    end
+  end
+
+  defp reserve_balance_releasing(trade_mode, command, opts, reservation) do
+    case reserve_balance(trade_mode, command, opts) do
+      {:ok, hold} ->
+        {:ok, hold}
+
+      {:error, _, _} = error ->
+        _ = Bitflyer.Risk.OrderRate.release(reservation)
         error
     end
   end
