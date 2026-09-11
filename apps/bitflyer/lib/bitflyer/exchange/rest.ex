@@ -156,6 +156,8 @@ defmodule Bitflyer.Exchange.Rest do
   end
 
   defp get_positions_for(product_code) do
+    product_code = to_string(product_code)
+
     # spot は getpositions 対象外。残高（getbalance）が正本。
     # product_codes が spot のみのとき、同一キー口座の FX 建玉は取得しない（運用前提は README）。
     if Product.spot?(product_code) do
@@ -398,6 +400,8 @@ defmodule Bitflyer.Exchange.Rest do
     codes =
       Application.get_env(:bitflyer, Bitflyer.MarketData, [])
       |> Keyword.get(:product_codes, [@default_product])
+      |> List.wrap()
+      |> Enum.map(&to_string/1)
 
     if codes == [], do: [@default_product], else: codes
   end

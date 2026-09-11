@@ -1,5 +1,5 @@
 defmodule Bitflyer.Config.LiveSafetyTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Bitflyer.Config.LiveSafety
 
