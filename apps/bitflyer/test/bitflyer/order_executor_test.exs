@@ -62,6 +62,8 @@ defmodule Bitflyer.OrderExecutorTest do
 
     @impl true
     def fetch_order(%{exchange_order_id: id}) do
+      Agent.update(__MODULE__.FetchCounter, fn count -> count + 1 end)
+
       {:ok,
        %{
          exchange_order_id: id,
@@ -84,6 +86,10 @@ defmodule Bitflyer.OrderExecutorTest do
       Agent.get(__MODULE__.Counter, & &1)
     end
 
+    def fetch_count do
+      Agent.get(__MODULE__.FetchCounter, & &1)
+    end
+
     def set_next_result(result) do
       Agent.update(__MODULE__.NextResult, fn _ -> result end)
     end
@@ -91,6 +97,29 @@ defmodule Bitflyer.OrderExecutorTest do
     def set_next_cancel_result(result) do
       Agent.update(__MODULE__.CancelNextResult, fn _ -> result end)
     end
+  end
+
+  defmodule BrokenPostPlaceFillExchange do
+    @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
+
+    @impl true
+    def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
+
+    @impl true
+    def place_order(_), do: {:error, :not_used}
+
+    @impl true
+    def cancel_order(_), do: {:error, :not_used}
+
+    @impl true
+    def fetch_order(_), do: {:error, :timeout}
+
+    @impl true
+    def fetch_executions(_), do: {:error, :timeout}
+
+    @impl true
+    def list_child_orders(_), do: {:ok, []}
   end
 
   setup do
@@ -101,14 +130,27 @@ defmodule Bitflyer.OrderExecutorTest do
     reset_daily_loss()
     reset_balance_cache()
     clear_default_risk_state()
+    OrderExecutor.LiveFills.clear_open_orders_sync_clock()
 
     previous_mode = Application.get_env(:bitflyer, :trade_mode, :dry_run)
     previous_client = Application.get_env(:bitflyer, :exchange_client)
     previous_confirm = Application.get_env(:bitflyer, :live_confirmed)
+    previous_fills_cfg = Application.get_env(:bitflyer, OrderExecutor.LiveFills, [])
+
+    Application.put_env(
+      :bitflyer,
+      OrderExecutor.LiveFills,
+      Keyword.put(previous_fills_cfg, :min_sync_interval_ms, 0)
+    )
 
     start_supervised!(%{
       id: SpyExchange.Counter,
       start: {Agent, :start_link, [fn -> 0 end, [name: SpyExchange.Counter]]}
+    })
+
+    start_supervised!(%{
+      id: SpyExchange.FetchCounter,
+      start: {Agent, :start_link, [fn -> 0 end, [name: SpyExchange.FetchCounter]]}
     })
 
     start_supervised!(%{
@@ -132,9 +174,11 @@ defmodule Bitflyer.OrderExecutorTest do
       reset_daily_loss()
       reset_balance_cache()
       clear_default_risk_state()
+      OrderExecutor.LiveFills.clear_open_orders_sync_clock()
       Application.put_env(:bitflyer, :trade_mode, previous_mode)
       Application.put_env(:bitflyer, :exchange_client, previous_client)
       Application.put_env(:bitflyer, :live_confirmed, previous_confirm)
+      Application.put_env(:bitflyer, OrderExecutor.LiveFills, previous_fills_cfg)
 
       if Process.whereis(SpyExchange) == self() do
         Process.unregister(SpyExchange)
@@ -789,6 +833,81 @@ defmodule Bitflyer.OrderExecutorTest do
              Order
              |> Ash.Query.filter(internal_order_id == "live-persist-2")
              |> Ash.read_one()
+  end
+
+  test "live fill sync failure after place_order halts and blocks further submits" do
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_balance_cache!(:live)
+
+    assert {:error, :fill_sync_failed,
+            %{
+              order_accepted: true,
+              internal_order_id: "live-fill-sync-1",
+              exchange_order_id: "ex-live-fill-sync-1"
+            }} =
+             System.submit_order(valid_command("live-fill-sync-1"),
+               positions: [],
+               trade_mode: :live,
+               exchange: BrokenPostPlaceFillExchange
+             )
+
+    assert SpyExchange.place_count() == 1
+    assert Readiness.get() == {:halted, :fill_sync_failed}
+
+    assert {:ok, %RiskState{halted: true, reason: "fill_sync_failed"}} =
+             RiskState
+             |> Ash.Query.filter(name == "default")
+             |> Ash.read_one()
+
+    assert {:ok, %Order{status: :pending, exchange_order_id: "ex-live-fill-sync-1"}} =
+             Order
+             |> Ash.Query.filter(internal_order_id == "live-fill-sync-1")
+             |> Ash.read_one()
+
+    assert {:error, :circuit_open, _} =
+             System.submit_order(valid_command("live-fill-sync-2"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert SpyExchange.place_count() == 1
+  end
+
+  test "live submit syncs open orders once before authorize, not again in do_submit" do
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :live_confirmed, true)
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    seed_balance_cache!(:live)
+
+    {:ok, _} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "live-open-pre",
+        exchange_order_id: "ex-live-open-pre",
+        product_code: "BTC_JPY",
+        side: :buy,
+        status: :pending,
+        order_type: :market,
+        size: Decimal.new("1"),
+        filled_size: Decimal.new("0"),
+        filled_notional: Decimal.new("0"),
+        trade_mode: :live
+      })
+      |> Ash.create()
+
+    assert {:ok, %Order{exchange_order_id: "ex-live-dual-1"}} =
+             System.submit_order(valid_command("live-dual-1"),
+               positions: [],
+               trade_mode: :live
+             )
+
+    # 認可前に open 1 件 + 発注後に新規 1 件。do_submit 内の二重 sync があると open がもう 1 回増える
+    assert SpyExchange.fetch_count() == 2
+    assert SpyExchange.place_count() == 1
   end
 
   test "risk rejection prevents order persistence" do

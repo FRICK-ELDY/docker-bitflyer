@@ -5,6 +5,7 @@ defmodule Bitflyer.Risk.HaltReasonTest do
 
   test "from_string maps known persisted reasons without collapsing" do
     assert HaltReason.from_string("persist_failed") == :persist_failed
+    assert HaltReason.from_string("fill_sync_failed") == :fill_sync_failed
     assert HaltReason.from_string("daily_loss_exceeded") == :daily_loss_exceeded
     assert HaltReason.from_string("manual_halt") == :manual_halt
     assert HaltReason.from_string("submission_unknown") == :submission_unknown
@@ -18,6 +19,7 @@ defmodule Bitflyer.Risk.HaltReasonTest do
 
   test "to_string round-trips known reasons" do
     assert HaltReason.to_string(:persist_failed) == "persist_failed"
+    assert HaltReason.to_string(:fill_sync_failed) == "fill_sync_failed"
     assert HaltReason.to_string(:daily_loss_exceeded) == "daily_loss_exceeded"
     assert HaltReason.to_string(:manual_halt) == "manual_halt"
     assert HaltReason.to_string(:fill_price_unavailable) == "fill_price_unavailable"

@@ -66,12 +66,61 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
     def list_child_orders(_), do: {:ok, []}
   end
 
+  defmodule CountingFillExchange do
+    @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
+
+    @impl true
+    def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
+
+    @impl true
+    def place_order(_), do: {:error, :not_used}
+
+    @impl true
+    def cancel_order(_), do: {:error, :not_used}
+
+    @impl true
+    def fetch_order(%{exchange_order_id: id}) do
+      Agent.update(__MODULE__.Counter, &(&1 + 1))
+
+      case Process.get({:fill_order, id}) do
+        :missing -> {:error, :order_not_found}
+        nil -> {:error, :order_not_found}
+        info -> {:ok, info}
+      end
+    end
+
+    @impl true
+    def fetch_executions(_), do: {:ok, []}
+
+    @impl true
+    def list_child_orders(_), do: {:ok, []}
+
+    def start_counter! do
+      {:ok, _} = Agent.start_link(fn -> 0 end, name: __MODULE__.Counter)
+      :ok
+    end
+
+    def fetch_count, do: Agent.get(__MODULE__.Counter, & &1)
+  end
+
   setup do
     reset_daily_loss()
     seed_balances()
+    LiveFills.clear_open_orders_sync_clock()
+
+    previous_fills_cfg = Application.get_env(:bitflyer, LiveFills, [])
+    # 既存テストは連続 sync を前提にするため既定で間引きを無効化
+    Application.put_env(
+      :bitflyer,
+      LiveFills,
+      Keyword.put(previous_fills_cfg, :min_sync_interval_ms, 0)
+    )
 
     on_exit(fn ->
       reset_daily_loss()
+      LiveFills.clear_open_orders_sync_clock()
+      Application.put_env(:bitflyer, LiveFills, previous_fills_cfg)
     end)
 
     :ok
@@ -592,6 +641,120 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
              LiveFills.sync_order(ahead, exchange: FillExchange)
 
     assert meta.reason == :terminal_filled_size_mismatch
+  end
+
+  test "sync_open_orders skips within min interval unless force" do
+    previous = Application.get_env(:bitflyer, LiveFills, [])
+    Application.put_env(:bitflyer, LiveFills, Keyword.put(previous, :min_sync_interval_ms, 1_000))
+    LiveFills.clear_open_orders_sync_clock()
+    CountingFillExchange.start_counter!()
+
+    on_exit(fn ->
+      if Process.whereis(CountingFillExchange.Counter),
+        do: Agent.stop(CountingFillExchange.Counter)
+    end)
+
+    {:ok, _} = create_live_order("live-min-interval", "JRF-min-interval")
+
+    Process.put({:fill_order, "JRF-min-interval"}, %{
+      exchange_order_id: "JRF-min-interval",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.01"),
+      filled_size: Decimal.new("0"),
+      average_price: nil,
+      status: :active
+    })
+
+    assert :ok =
+             LiveFills.sync_open_orders(exchange: CountingFillExchange, now: 0)
+
+    assert CountingFillExchange.fetch_count() == 1
+
+    assert :ok =
+             LiveFills.sync_open_orders(exchange: CountingFillExchange, now: 500)
+
+    assert CountingFillExchange.fetch_count() == 1
+
+    assert :ok =
+             LiveFills.sync_open_orders(
+               exchange: CountingFillExchange,
+               now: 500,
+               force: true
+             )
+
+    assert CountingFillExchange.fetch_count() == 2
+
+    assert :ok =
+             LiveFills.sync_open_orders(exchange: CountingFillExchange, now: 1_500)
+
+    assert CountingFillExchange.fetch_count() == 3
+  end
+
+  test "sync_open_orders advances clock on failure to avoid REST hammering" do
+    previous = Application.get_env(:bitflyer, LiveFills, [])
+    Application.put_env(:bitflyer, LiveFills, Keyword.put(previous, :min_sync_interval_ms, 1_000))
+    LiveFills.clear_open_orders_sync_clock()
+    CountingFillExchange.start_counter!()
+
+    on_exit(fn ->
+      if Process.whereis(CountingFillExchange.Counter),
+        do: Agent.stop(CountingFillExchange.Counter)
+    end)
+
+    {:ok, _} = create_live_order("live-fail-clock", "JRF-fail-clock")
+
+    # BrokenExecExchange は fetch_order not_found → executions timeout で fail-closed
+    assert {:error, :exchange_error, _} =
+             LiveFills.sync_open_orders(exchange: BrokenExecExchange, now: 0)
+
+    # 失敗後も時計が進むため、間隔内の再試行は REST しない
+    assert :ok =
+             LiveFills.sync_open_orders(exchange: CountingFillExchange, now: 100)
+
+    assert CountingFillExchange.fetch_count() == 0
+
+    assert :ok =
+             LiveFills.sync_open_orders(exchange: CountingFillExchange, now: 1_000)
+
+    assert CountingFillExchange.fetch_count() == 1
+  end
+
+  test "concurrent sync_open_orders does not double-fetch under lock" do
+    previous = Application.get_env(:bitflyer, LiveFills, [])
+    Application.put_env(:bitflyer, LiveFills, Keyword.put(previous, :min_sync_interval_ms, 1_000))
+    LiveFills.clear_open_orders_sync_clock()
+    CountingFillExchange.start_counter!()
+
+    on_exit(fn ->
+      if Process.whereis(CountingFillExchange.Counter),
+        do: Agent.stop(CountingFillExchange.Counter)
+    end)
+
+    {:ok, _} = create_live_order("live-concurrent-sync", "JRF-concurrent-sync")
+
+    order_info = %{
+      exchange_order_id: "JRF-concurrent-sync",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.01"),
+      filled_size: Decimal.new("0"),
+      average_price: nil,
+      status: :active
+    }
+
+    tasks =
+      for _ <- 1..8 do
+        Task.async(fn ->
+          Process.put({:fill_order, "JRF-concurrent-sync"}, order_info)
+          LiveFills.sync_open_orders(exchange: CountingFillExchange, now: 0)
+        end)
+      end
+
+    results = Enum.map(tasks, &Task.await(&1, 5_000))
+    assert Enum.all?(results, &(&1 == :ok))
+    # ロックにより実 fetch は 1 回（他は間引き :ok）
+    assert CountingFillExchange.fetch_count() == 1
   end
 
   defp create_live_order(internal_id, exchange_id, opts \\ []) do

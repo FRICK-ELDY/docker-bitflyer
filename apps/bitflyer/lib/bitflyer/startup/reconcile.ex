@@ -243,7 +243,8 @@ defmodule Bitflyer.Startup.Reconcile do
   end
 
   defp sync_live_fills(exchange) do
-    case Bitflyer.OrderExecutor.LiveFills.sync_open_orders(exchange: exchange) do
+    # 起動・定期突合は最小間隔を無視する（認可前の間引きとは別）
+    case Bitflyer.OrderExecutor.LiveFills.sync_open_orders(exchange: exchange, force: true) do
       :ok -> :ok
       {:error, reason, meta} -> {:error, reason, meta}
     end

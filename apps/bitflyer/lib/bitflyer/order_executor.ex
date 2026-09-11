@@ -29,6 +29,9 @@ defmodule Bitflyer.OrderExecutor do
 
   @doc """
   live submit 前の未反映約定同期。`System.submit_order/2` が認可前に呼ぶ。
+
+  失敗時は当該 submit のみ拒否する（circuit は開けない）。未発注のため
+  post-place の `:fill_sync_failed`（受注済み → halt）とは意図的に非対称。
   """
   @spec sync_live_fills_before_authorize(atom(), keyword()) :: :ok | {:error, atom(), map()}
   def sync_live_fills_before_authorize(trade_mode, opts \\ []) do
@@ -43,7 +46,7 @@ defmodule Bitflyer.OrderExecutor do
   `AuthorizedOrder.consume/1` で Risk 発行トークンをワンショット検証する（偽造・再利用不可）。
   InFlight 閉鎖後は consume 後に予約を `OrderRate.release` してから `:shutting_down` を返す
   （トークンは take 済みのため purge に頼れない）。
-  live では実行前に未反映約定を再度同期する（認可時点からのずれを縮める）。
+  live の open-order 同期は `System.submit_order/2` の認可前のみ（ここでは再同期しない）。
   認可検査自体は呼び出し側（通常は `System.submit_order/2`）で済んでいる前提。
 
   ## Options
@@ -118,17 +121,10 @@ defmodule Bitflyer.OrderExecutor do
     end
   end
 
-  defp early_submit_gates(command, trade_mode, opts, reservation) do
+  defp early_submit_gates(command, _trade_mode, _opts, reservation) do
     case validate_command(command) do
       :ok ->
-        case maybe_sync_live_fills(trade_mode, opts) do
-          :ok ->
-            :ok
-
-          {:error, _, _} = error ->
-            _ = Bitflyer.Risk.OrderRate.release(reservation)
-            error
-        end
+        :ok
 
       {:error, _, _} = error ->
         _ = Bitflyer.Risk.OrderRate.release(reservation)
@@ -386,7 +382,8 @@ defmodule Bitflyer.OrderExecutor do
         error
 
       {:error, _, _} = error ->
-        # submission_unknown / persist_failed 等: 取引所側に拘束の可能性 → 予約は残す
+        # submission_unknown / persist_failed / fill_sync_failed(order_accepted) 等:
+        # 取引所側に拘束の可能性 → 残高 hold は残す（失敗＝注文なしと誤解しないこと）
         error
     end
   end

@@ -48,9 +48,30 @@ defmodule Bitflyer.OrderExecutor.Live do
       {:ok, %{exchange_order_id: exchange_order_id}} ->
         case persist_exchange_order_id(order, exchange_order_id, opts) do
           {:ok, updated} ->
-            # 成行即時約定などを Risk が次に見る前に取り込む（失敗はログのみ。認可前同期が本命）
-            _ = sync_fills_after_place(updated, opts)
-            {:ok, updated}
+            # 成行即時約定などを取り込む。失敗は成功と分け、halt して盲目継続しない。
+            case sync_fills_after_place(updated, opts) do
+              :ok ->
+                {:ok, updated}
+
+              {:error, reason, meta} ->
+                # 取引所は受注済み。成功と分離し halt。呼び出し元は meta.order_accepted を見る。
+                _ =
+                  open_circuit_or_log!(:fill_sync_failed, %{
+                    internal_order_id: updated.internal_order_id,
+                    exchange_order_id: updated.exchange_order_id,
+                    product_code: updated.product_code,
+                    side: updated.side,
+                    sync_error: reason
+                  })
+
+                {:error, :fill_sync_failed,
+                 Map.merge(meta || %{}, %{
+                   reason: reason,
+                   internal_order_id: updated.internal_order_id,
+                   exchange_order_id: updated.exchange_order_id,
+                   order_accepted: true
+                 })}
+            end
 
           {:error, error} ->
             # 取引所では受注済みなのに ID を見失うと照合不能になる。
@@ -101,8 +122,8 @@ defmodule Bitflyer.OrderExecutor.Live do
 
       {:error, reason, meta} ->
         Bitflyer.Telemetry.log(
-          :warning,
-          "live fill sync after place_order failed: #{inspect(reason)}",
+          :error,
+          "live fill sync after place_order failed; halting",
           Map.merge(
             %{
               internal_order_id: order.internal_order_id,
