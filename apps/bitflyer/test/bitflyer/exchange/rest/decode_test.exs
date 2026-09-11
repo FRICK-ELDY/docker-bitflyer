@@ -128,6 +128,19 @@ defmodule Bitflyer.Exchange.Rest.DecodeTest do
              )
   end
 
+  test "order_info accepts atom child_order_state like side atoms" do
+    base = %{
+      child_order_acceptance_id: "JRF-1",
+      product_code: "BTC_JPY",
+      side: :buy,
+      size: "0.01",
+      executed_size: "0",
+      child_order_state: :active
+    }
+
+    assert {:ok, %{status: :active, side: :buy}} = Decode.order_info(base)
+  end
+
   test "order_info treats 0.0 and 0.00 average_price as absent" do
     base = %{
       "child_order_acceptance_id" => "JRF-1",

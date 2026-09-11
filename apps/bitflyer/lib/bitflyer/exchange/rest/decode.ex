@@ -108,6 +108,11 @@ defmodule Bitflyer.Exchange.Rest.Decode do
   def order_status("CANCELED"), do: :canceled
   def order_status("EXPIRED"), do: :expired
   def order_status("REJECTED"), do: :rejected
+  def order_status(:active), do: :active
+  def order_status(:completed), do: :completed
+  def order_status(:canceled), do: :canceled
+  def order_status(:expired), do: :expired
+  def order_status(:rejected), do: :rejected
   def order_status(_), do: nil
 
   @doc false
