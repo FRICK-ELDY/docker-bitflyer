@@ -181,6 +181,48 @@ defmodule Bitflyer.Risk.FailureRateTest do
     assert {:ok, 1} = FailureRate.count(:live, now: FailureRate.monotonic_ms(), window_ms: 60_000)
   end
 
+  test "warm skips rows without a DateTime timestamp" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert :ok =
+             FailureRate.warm_from_db(
+               now_dt: now,
+               now: FailureRate.monotonic_ms(),
+               loader: fn _window, _now ->
+                 {:ok,
+                  [
+                    %{trade_mode: :live, updated_at: now, inserted_at: now},
+                    %{trade_mode: :live, updated_at: nil, inserted_at: nil}
+                  ]}
+               end
+             )
+
+    assert {:ok, 1} = FailureRate.count(:live, now: FailureRate.monotonic_ms(), window_ms: 60_000)
+  end
+
+  test "authorize respects :failure_rate_server" do
+    name = :"failure_rate_server_#{System.unique_integer([:positive])}"
+    start_supervised!({FailureRate, name: name, loader: fn _, _ -> {:ok, []} end})
+    assert :ok = FailureRate.mark_unsynced(server: name)
+
+    assert Readiness.mark_ready() == :ok
+    assert put_fresh_ticker() == :ok
+    assert FailureRate.synced?()
+
+    assert {:error, :unsynced, %{reason: :failure_rate_unsynced}} =
+             Risk.authorize(
+               %{
+                 product_code: "BTC_JPY",
+                 side: :buy,
+                 size: Decimal.new("0.01"),
+                 market_key: {:ticker, "BTC_JPY"},
+                 intent_id: "intent-failure-rate-server"
+               },
+               positions: [],
+               failure_rate_server: name
+             )
+  end
+
   defp insert_rejected!(internal_order_id, trade_mode, at) do
     insert_order!(internal_order_id, trade_mode, at, :rejected)
   end

@@ -9,6 +9,8 @@ defmodule Bitflyer.Risk.FailureRate do
   - timeout 等の提出不明はここでは数えない（既存の即 halt を維持）
   - 起動時 / `warm_from_db/1` — 直近窓の `status == :rejected` Order で ETS を温める
     （時刻軸は拒否に近い `updated_at`。trade_mode ごとに最大 `max_errors` 件）
+  - 起動 warm は `init/1` 同期（`OrderRate` 同型）。`handle_continue` にすると
+    `start_link` 復帰直後に count/evaluate が走って競合するため採用しない
   - 起動 warm 失敗は空＋unsynced（fail-closed）。実行中 warm 失敗は既存 ETS を維持
   - 未同期時は `evaluate` / `record` / `count` を拒否し、`Risk.authorize/2` も拒否する
   - 起動 warm 失敗の自動再試行はしない（`OrderRate` 同型）。復旧はプロセス再起動か
@@ -272,10 +274,17 @@ defmodule Bitflyer.Risk.FailureRate do
         true = :ets.delete_all_objects(table)
 
         Enum.each(orders, fn order ->
-          at = Map.get(order, :updated_at) || Map.get(order, :inserted_at)
+          case Map.get(order, :updated_at) || Map.get(order, :inserted_at) do
+            %DateTime{} = at ->
+              true =
+                :ets.insert(
+                  table,
+                  {order.trade_mode, wall_to_monotonic(at, now_utc, now_mono)}
+                )
 
-          true =
-            :ets.insert(table, {order.trade_mode, wall_to_monotonic(at, now_utc, now_mono)})
+            _ ->
+              :ok
+          end
         end)
 
         :ok

@@ -51,6 +51,7 @@ defmodule Bitflyer.Risk do
   - `:positions` — 建玉リスト（未指定時は DB から当該銘柄を読む）
   - `:now` / `:server` — Cache.fresh?/3・LTP 取得へ転送
   - `:authorized_order_server` — `AuthorizedOrder` GenServer（Cache の `:server` とは別）
+  - `:failure_rate` / `:failure_rate_server` — FailureRate モジュールと GenServer 名（テスト注入）
   - `:now_utc` — 時計ずれ検査用の壁時計（既定 `DateTime.utc_now/0`）
   - `:check_persisted_circuit` — 既定 **false**（ホットパスで RiskState を読まない）。
     別 BEAM の `mix bitflyer.halt` は `Risk.CircuitSync` が DB→ETS 同期する。
@@ -247,7 +248,13 @@ defmodule Bitflyer.Risk do
     failure_rate = Keyword.get(opts, :failure_rate, FailureRate)
 
     # `:server` は MarketData.Cache 用のため転送しない（OrderRate の歴史的衝突を増やさない）
-    if failure_rate.synced?() do
+    failure_rate_opts =
+      case Keyword.fetch(opts, :failure_rate_server) do
+        {:ok, server} -> [server: server]
+        :error -> []
+      end
+
+    if failure_rate.synced?(failure_rate_opts) do
       :ok
     else
       {:error, :unsynced, %{reason: :failure_rate_unsynced}}

@@ -20,6 +20,10 @@ defmodule Bitflyer.Trading.Order do
 
       index [:strategy_parameter_revision_id],
         name: "orders_strategy_parameter_revision_id_index"
+
+      # FailureRate.warm: status/trade_mode/updated_at フィルタ + updated_at DESC
+      index [:trade_mode, :status, :updated_at],
+        name: "orders_trade_mode_status_updated_at_index"
     end
   end
 
