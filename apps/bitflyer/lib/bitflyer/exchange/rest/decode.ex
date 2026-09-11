@@ -3,13 +3,34 @@ defmodule Bitflyer.Exchange.Rest.Decode do
   Private REST 応答の正規化。
 
   数値は strict（不正・欠損・NaN/Inf は `:invalid_number`）。
-  識別子欠落（currency / side 等）の行は `:skip`（従来どおり。不正 side の見落としは
-  別途 Decode/突合のスコープ外として残る）。
+  識別子欠落・未知 side / status は snapshot/list 全体失敗
+  （`:missing_identifier` / `:unknown_side` / `:unknown_status`）。
+  `:skip` は明示 allowlist に載った無関係行のみ（現状は空。条件追加時はここに書く）。
   """
 
   alias Bitflyer.Exchange.Client
 
-  @type decode_result(t) :: {:ok, t} | :skip | {:error, :invalid_number | :invalid_datetime}
+  @type structure_error :: :missing_identifier | :unknown_side | :unknown_status
+  @type decode_error ::
+          :invalid_number | :invalid_datetime | :invalid_structure | structure_error
+  @type decode_result(t) :: {:ok, t} | :skip | {:error, decode_error}
+
+  @payload_errors [
+    :invalid_number,
+    :invalid_datetime,
+    :invalid_structure,
+    :missing_identifier,
+    :unknown_side,
+    :unknown_status
+  ]
+
+  # 無関係行を落とす必要があるときだけ足す。private snapshot の識別子欠落は載せない。
+  @allowlisted_skip_order_states MapSet.new([])
+
+  @doc false
+  @spec payload_error?(term()) :: boolean()
+  def payload_error?(reason) when reason in @payload_errors, do: true
+  def payload_error?(_), do: false
 
   @doc """
   数値を `Decimal` へ。不正・欠損・NaN/Inf は `:error`（0 に丸めない）。
@@ -81,135 +102,156 @@ defmodule Bitflyer.Exchange.Rest.Decode do
   def side(_), do: nil
 
   @doc false
-  @spec order_status(term()) :: Client.order_status()
+  @spec order_status(term()) :: Client.order_status() | nil
   def order_status("ACTIVE"), do: :active
   def order_status("COMPLETED"), do: :completed
   def order_status("CANCELED"), do: :canceled
   def order_status("EXPIRED"), do: :expired
   def order_status("REJECTED"), do: :rejected
-  def order_status(_), do: :unknown
+  def order_status(_), do: nil
 
   @doc false
   @spec balance(map()) :: decode_result(Client.balance())
   def balance(%{} = row) do
     currency = Map.get(row, "currency_code") || Map.get(row, :currency_code)
 
-    if is_binary(currency) and currency != "" do
-      with {:ok, amount} <- require_decimal(Map.get(row, "amount") || Map.get(row, :amount)),
-           {:ok, available} <-
-             require_decimal(Map.get(row, "available") || Map.get(row, :available)) do
-        {:ok, %{currency: currency, amount: amount, available: available}}
-      end
-    else
-      :skip
+    with {:ok, currency} <- require_binary(currency),
+         {:ok, amount} <- require_decimal(Map.get(row, "amount") || Map.get(row, :amount)),
+         {:ok, available} <-
+           require_decimal(Map.get(row, "available") || Map.get(row, :available)) do
+      {:ok, %{currency: currency, amount: amount, available: available}}
     end
   end
+
+  def balance(_), do: {:error, :missing_identifier}
 
   @doc false
   @spec position(map()) :: decode_result(Client.position())
   def position(%{} = row) do
     product_code = Map.get(row, "product_code") || Map.get(row, :product_code)
-    side = side(Map.get(row, "side") || Map.get(row, :side))
+    raw_side = Map.get(row, "side") || Map.get(row, :side)
 
-    if is_binary(product_code) and side do
-      with {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)),
-           {:ok, average_price} <-
-             require_decimal(Map.get(row, "price") || Map.get(row, :price)) do
-        {:ok, %{product_code: product_code, side: side, size: size, average_price: average_price}}
-      end
-    else
-      :skip
+    with {:ok, product_code} <- require_binary(product_code),
+         {:ok, side} <- require_side(raw_side),
+         {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)),
+         {:ok, average_price} <-
+           require_decimal(Map.get(row, "price") || Map.get(row, :price)) do
+      {:ok, %{product_code: product_code, side: side, size: size, average_price: average_price}}
     end
   end
+
+  def position(_), do: {:error, :missing_identifier}
 
   @doc false
   @spec open_order(map()) :: decode_result(Client.open_order())
   def open_order(%{} = row) do
-    exchange_order_id =
-      Map.get(row, "child_order_acceptance_id") || Map.get(row, :child_order_acceptance_id)
+    case maybe_skip_order_row(row) do
+      :skip ->
+        :skip
 
-    product_code = Map.get(row, "product_code") || Map.get(row, :product_code)
-    side = side(Map.get(row, "side") || Map.get(row, :side))
+      :cont ->
+        exchange_order_id =
+          Map.get(row, "child_order_acceptance_id") || Map.get(row, :child_order_acceptance_id)
 
-    if is_binary(exchange_order_id) and is_binary(product_code) and side do
-      with {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)),
-           {:ok, filled_size} <-
-             require_decimal(Map.get(row, "executed_size") || Map.get(row, :executed_size)) do
-        {:ok,
-         %{
-           exchange_order_id: exchange_order_id,
-           product_code: product_code,
-           side: side,
-           size: size,
-           filled_size: filled_size
-         }}
-      end
-    else
-      :skip
+        product_code = Map.get(row, "product_code") || Map.get(row, :product_code)
+        raw_side = Map.get(row, "side") || Map.get(row, :side)
+
+        with {:ok, exchange_order_id} <- require_binary(exchange_order_id),
+             {:ok, product_code} <- require_binary(product_code),
+             {:ok, side} <- require_side(raw_side),
+             {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)),
+             {:ok, filled_size} <-
+               require_decimal(Map.get(row, "executed_size") || Map.get(row, :executed_size)) do
+          {:ok,
+           %{
+             exchange_order_id: exchange_order_id,
+             product_code: product_code,
+             side: side,
+             size: size,
+             filled_size: filled_size
+           }}
+        end
     end
   end
+
+  def open_order(_), do: {:error, :missing_identifier}
 
   @doc false
   @spec order_info(map()) :: decode_result(Client.order_info())
   def order_info(%{} = row) do
-    exchange_order_id =
-      Map.get(row, "child_order_acceptance_id") || Map.get(row, :child_order_acceptance_id)
+    case maybe_skip_order_row(row) do
+      :skip ->
+        :skip
 
-    product_code = Map.get(row, "product_code") || Map.get(row, :product_code)
-    side = side(Map.get(row, "side") || Map.get(row, :side))
+      :cont ->
+        exchange_order_id =
+          Map.get(row, "child_order_acceptance_id") || Map.get(row, :child_order_acceptance_id)
 
-    if is_binary(exchange_order_id) and is_binary(product_code) and side do
-      avg = Map.get(row, "average_price") || Map.get(row, :average_price)
+        product_code = Map.get(row, "product_code") || Map.get(row, :product_code)
+        raw_side = Map.get(row, "side") || Map.get(row, :side)
+        avg = Map.get(row, "average_price") || Map.get(row, :average_price)
 
-      with {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)),
-           {:ok, filled_size} <-
-             require_decimal(Map.get(row, "executed_size") || Map.get(row, :executed_size)),
-           {:ok, average_price} <- optional_average_price(avg) do
-        {:ok,
-         %{
-           exchange_order_id: exchange_order_id,
-           product_code: product_code,
-           side: side,
-           size: size,
-           filled_size: filled_size,
-           average_price: average_price,
-           status:
-             order_status(Map.get(row, "child_order_state") || Map.get(row, :child_order_state))
-         }}
-      end
-    else
-      :skip
+        with {:ok, exchange_order_id} <- require_binary(exchange_order_id),
+             {:ok, product_code} <- require_binary(product_code),
+             {:ok, side} <- require_side(raw_side),
+             {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)),
+             {:ok, filled_size} <-
+               require_decimal(Map.get(row, "executed_size") || Map.get(row, :executed_size)),
+             {:ok, average_price} <- optional_average_price(avg),
+             {:ok, status} <-
+               require_order_status(
+                 Map.get(row, "child_order_state") || Map.get(row, :child_order_state)
+               ) do
+          {:ok,
+           %{
+             exchange_order_id: exchange_order_id,
+             product_code: product_code,
+             side: side,
+             size: size,
+             filled_size: filled_size,
+             average_price: average_price,
+             status: status
+           }}
+        end
     end
   end
+
+  def order_info(_), do: {:error, :missing_identifier}
 
   @doc false
   @spec execution(map(), String.t() | nil) :: decode_result(Client.execution())
-  def execution(%{} = row, default_product \\ nil) do
+  def execution(row, default_product \\ nil)
+
+  def execution(%{} = row, default_product) do
     exchange_order_id =
       Map.get(row, "child_order_acceptance_id") || Map.get(row, :child_order_acceptance_id)
 
-    side = side(Map.get(row, "side") || Map.get(row, :side))
+    raw_side = Map.get(row, "side") || Map.get(row, :side)
     id = Map.get(row, "id") || Map.get(row, :id)
 
-    if exchange_order_id && side && id do
-      with {:ok, price} <- require_decimal(Map.get(row, "price") || Map.get(row, :price)),
-           {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)) do
-        {:ok,
-         %{
-           id: id,
-           exchange_order_id: exchange_order_id,
-           product_code:
-             Map.get(row, "product_code") || Map.get(row, :product_code) || default_product,
-           side: side,
-           price: price,
-           size: size,
-           executed_at: Map.get(row, "exec_date") || Map.get(row, :exec_date)
-         }}
-      end
-    else
-      :skip
+    product_code =
+      Map.get(row, "product_code") || Map.get(row, :product_code) || default_product
+
+    with {:ok, exchange_order_id} <- require_binary(exchange_order_id),
+         {:ok, side} <- require_side(raw_side),
+         {:ok, id} <- require_present(id),
+         {:ok, product_code} <- require_binary(product_code),
+         {:ok, price} <- require_decimal(Map.get(row, "price") || Map.get(row, :price)),
+         {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)) do
+      {:ok,
+       %{
+         id: id,
+         exchange_order_id: exchange_order_id,
+         product_code: product_code,
+         side: side,
+         price: price,
+         size: size,
+         executed_at: Map.get(row, "exec_date") || Map.get(row, :exec_date)
+       }}
     end
   end
+
+  def execution(_, _), do: {:error, :missing_identifier}
 
   @doc false
   @spec child_order(map()) :: decode_result(Client.child_order())
@@ -236,6 +278,8 @@ defmodule Bitflyer.Exchange.Rest.Decode do
         other
     end
   end
+
+  def child_order(_), do: {:error, :missing_identifier}
 
   @doc false
   @spec map_error(integer(), term()) :: atom()
@@ -275,6 +319,55 @@ defmodule Bitflyer.Exchange.Rest.Decode do
   def transport_error(:nxdomain), do: :disconnected
   def transport_error(reason) when is_atom(reason), do: classify_transport(reason)
   def transport_error(_), do: :disconnected
+
+  defp maybe_skip_order_row(row) do
+    state = Map.get(row, "child_order_state") || Map.get(row, :child_order_state)
+
+    if is_binary(state) and MapSet.member?(@allowlisted_skip_order_states, state) do
+      :skip
+    else
+      :cont
+    end
+  end
+
+  defp require_binary(value) when is_binary(value) and value != "", do: {:ok, value}
+  defp require_binary(_), do: {:error, :missing_identifier}
+
+  defp require_present(nil), do: {:error, :missing_identifier}
+  defp require_present(""), do: {:error, :missing_identifier}
+  defp require_present(value), do: {:ok, value}
+
+  defp require_side(raw) do
+    case side(raw) do
+      side when side in [:buy, :sell] ->
+        {:ok, side}
+
+      nil ->
+        if blank?(raw) do
+          {:error, :missing_identifier}
+        else
+          {:error, :unknown_side}
+        end
+    end
+  end
+
+  defp require_order_status(raw) do
+    case order_status(raw) do
+      status when status in [:active, :completed, :canceled, :expired, :rejected] ->
+        {:ok, status}
+
+      nil ->
+        if blank?(raw) do
+          {:error, :missing_identifier}
+        else
+          {:error, :unknown_status}
+        end
+    end
+  end
+
+  defp blank?(nil), do: true
+  defp blank?(""), do: true
+  defp blank?(_), do: false
 
   defp require_decimal(term) do
     case to_decimal(term) do

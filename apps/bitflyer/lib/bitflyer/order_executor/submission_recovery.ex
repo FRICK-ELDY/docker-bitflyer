@@ -250,14 +250,12 @@ defmodule Bitflyer.OrderExecutor.SubmissionRecovery do
           {:ok, rows}
         end
 
-      {:error, :invalid_number} ->
-        {:error, :invalid_exchange_payload, %{kind: :invalid_number}}
-
-      {:error, :invalid_datetime} ->
-        {:error, :invalid_exchange_payload, %{kind: :invalid_datetime}}
-
-      {:error, reason} when is_atom(reason) ->
-        {:error, :exchange_unavailable, %{reason: reason}}
+      {:error, kind} when is_atom(kind) ->
+        if Bitflyer.Exchange.Rest.Decode.payload_error?(kind) do
+          {:error, :invalid_exchange_payload, %{kind: kind}}
+        else
+          {:error, :exchange_unavailable, %{reason: kind}}
+        end
 
       other ->
         {:error, :exchange_unavailable, %{reason: other}}

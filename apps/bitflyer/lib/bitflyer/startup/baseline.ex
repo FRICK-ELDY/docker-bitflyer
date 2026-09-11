@@ -184,11 +184,12 @@ defmodule Bitflyer.Startup.Baseline do
       {:ok, %{balances: balances}} when is_list(balances) ->
         pick_required_balances(balances, required)
 
-      {:error, :invalid_number} ->
-        {:error, :invalid_exchange_payload, %{kind: :invalid_number}}
-
-      {:error, reason} when is_atom(reason) ->
-        {:error, :exchange_unavailable, %{reason: reason}}
+      {:error, kind} when is_atom(kind) ->
+        if Bitflyer.Exchange.Rest.Decode.payload_error?(kind) do
+          {:error, :invalid_exchange_payload, %{kind: kind}}
+        else
+          {:error, :exchange_unavailable, %{reason: kind}}
+        end
 
       other ->
         {:error, :exchange_unavailable, %{reason: other}}

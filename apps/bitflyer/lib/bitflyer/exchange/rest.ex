@@ -223,26 +223,27 @@ defmodule Bitflyer.Exchange.Rest do
         {:ok, decoded} ->
           {:cont, {:ok, [decoded | acc]}}
 
+        # Decode の明示 allowlist のみ（現状は空）
         :skip ->
           {:cont, {:ok, acc}}
 
-        {:error, :invalid_number} = error ->
+        {:error, reason} = error when is_atom(reason) ->
           Bitflyer.Telemetry.log(
             :warning,
-            "exchange decode rejected invalid number; failing snapshot",
-            decode_error_meta(row)
+            "exchange decode rejected row; failing snapshot",
+            Map.put(decode_error_meta(row), :reason, reason)
           )
 
           {:halt, error}
 
-        {:error, :invalid_datetime} = error ->
+        other ->
           Bitflyer.Telemetry.log(
             :warning,
-            "exchange decode rejected invalid datetime; failing list",
-            decode_error_meta(row)
+            "exchange decode returned unexpected result; failing snapshot",
+            Map.put(decode_error_meta(row), :reason, inspect(other))
           )
 
-          {:halt, error}
+          {:halt, {:error, :invalid_structure}}
       end
     end)
     |> case do
