@@ -109,6 +109,8 @@ Ash は永続状態（注文、建玉、残高スナップショット、リス�
 
 `paper` の起動突合は取引所の建玉ではなく、内部の仮想状態を正とする。`dry_run` では突合で建玉を書き換えない。
 
+live の当面の対象は **spot（既定 `BTC_JPY`）**。残高正本は `getbalance`。`getpositions` は spot では呼ばず、内部 `Position` も建玉突合から外す（Risk 上限用の補助）。したがって **同一 API キーに残る手動 FX/CFD 建玉は監視外**（live 解禁前に口座を spot 専用にするか建玉を解消する）。FX 証拠金正本は backlog（`fx-collateral-adapter`）。
+
 ## データと状態
 
 永続化の対象は次を最低限とする。

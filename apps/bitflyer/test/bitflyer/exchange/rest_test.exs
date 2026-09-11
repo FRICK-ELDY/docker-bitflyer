@@ -108,6 +108,42 @@ defmodule Bitflyer.Exchange.RestTest do
     assert Decimal.eq?(filled, Decimal.new("0"))
   end
 
+  test "fetch_reconcile_snapshot for spot skips getpositions" do
+    previous_md = Application.get_env(:bitflyer, Bitflyer.MarketData)
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.MarketData,
+      Keyword.merge(previous_md || [], product_codes: ["BTC_JPY"])
+    )
+
+    Process.put(:rest_http_handler, fn method, url, headers, body ->
+      assert method == :get
+      assert body == ""
+      assert_signed_headers(headers)
+
+      cond do
+        String.contains?(url, "/v1/me/getbalance") ->
+          {:ok, response(200, fixture("getbalance.json"))}
+
+        String.contains?(url, "/v1/me/getpositions") ->
+          flunk("spot product must not call getpositions: #{url}")
+
+        String.contains?(url, "/v1/me/getchildorders") ->
+          assert String.contains?(url, "product_code=BTC_JPY")
+          {:ok, response(200, [])}
+
+        true ->
+          flunk("unexpected url: #{url}")
+      end
+    end)
+
+    assert {:ok, snapshot} = Rest.fetch_reconcile_snapshot()
+    assert snapshot.positions == []
+    assert snapshot.open_orders == []
+    assert length(snapshot.balances) == 2
+  end
+
   test "get_permissions returns permission path list" do
     Process.put(:rest_http_handler, fn method, url, headers, body ->
       assert method == :get

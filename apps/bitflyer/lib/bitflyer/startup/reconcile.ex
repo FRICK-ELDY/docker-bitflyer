@@ -20,7 +20,7 @@ defmodule Bitflyer.Startup.Reconcile do
 
   require Ash.Query
 
-  alias Bitflyer.Trading.{BalanceSnapshot, Order, Position, RiskState}
+  alias Bitflyer.Trading.{BalanceSnapshot, Order, Position, Product, RiskState}
   alias Bitflyer.Exchange.Permissions
   alias Bitflyer.MarketData
   alias Bitflyer.MarketData.Normalize
@@ -280,6 +280,12 @@ defmodule Bitflyer.Startup.Reconcile do
   end
 
   defp compare_positions(internal, external) do
+    # spot は getpositions 対象外。内部 Position は Risk 用の補助で、突合正本は getbalance。
+    # したがって product_codes が spot のみのとき、同一 API キー口座の手動 FX/CFD 建玉は
+    # 取得も比較もしない（案 B の射程外。live 解禁前提は README / overview）。
+    internal = Enum.reject(internal, &spot_position_row?/1)
+    external = Enum.reject(external, &spot_position_row?/1)
+
     # size<=0 は「建玉なし」と同等（誤検知防止）。Resource 制約でも弾くが防御的に残す。
     # 外部は両建て（同一銘柄 buy+sell）を net してから product_code キーで比較する。
     with {:ok, netted_external} <- net_positions(external) do
@@ -310,6 +316,11 @@ defmodule Bitflyer.Startup.Reconcile do
         end
       end)
     end
+  end
+
+  defp spot_position_row?(row) do
+    code = position_code(row)
+    is_binary(code) and Product.spot?(code)
   end
 
   # bitFlyer は同一銘柄の buy/sell を別行で返しうる。内部ネット建玉へ寄せる。

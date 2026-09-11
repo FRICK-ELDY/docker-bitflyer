@@ -15,7 +15,7 @@ defmodule Bitflyer.RiskTest do
   alias Bitflyer.Risk.AuthorizedOrder
   alias Bitflyer.Trading.RiskState
 
-  @market_key {:ticker, "FX_BTC_JPY"}
+  @market_key {:ticker, "BTC_JPY"}
 
   setup do
     reset_readiness()
@@ -126,7 +126,7 @@ defmodule Bitflyer.RiskTest do
     }
 
     positions = [
-      %{product_code: "FX_BTC_JPY", side: :buy, size: Decimal.new("0.04")}
+      %{product_code: "BTC_JPY", side: :buy, size: Decimal.new("0.04")}
     ]
 
     assert {:error, :limit_exceeded, %{limit: :max_position_size}} =
@@ -606,10 +606,43 @@ defmodule Bitflyer.RiskTest do
              )
   end
 
+  test "live rejects FX product before other checks" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :invalid_command, meta} =
+             Risk.authorize(
+               valid_command(%{
+                 product_code: "FX_BTC_JPY",
+                 market_key: {:ticker, "FX_BTC_JPY"}
+               }),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert meta.reason == :unsupported_product_for_live
+    assert meta.market_type == :fx
+  end
+
+  test "dry_run still allows FX product codes for paper-style fixtures" do
+    assert Readiness.mark_ready() == :ok
+    assert put_fresh_ticker({:ticker, "FX_BTC_JPY"}) == :ok
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(
+               valid_command(%{
+                 product_code: "FX_BTC_JPY",
+                 market_key: {:ticker, "FX_BTC_JPY"}
+               }),
+               positions: [],
+               trade_mode: :dry_run
+             )
+  end
+
   defp valid_command(overrides \\ %{}) do
     Map.merge(
       %{
-        product_code: "FX_BTC_JPY",
+        product_code: "BTC_JPY",
         side: :buy,
         size: Decimal.new("0.01"),
         market_key: @market_key,

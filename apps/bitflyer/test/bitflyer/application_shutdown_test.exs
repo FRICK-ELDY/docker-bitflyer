@@ -14,7 +14,7 @@ defmodule Bitflyer.ApplicationShutdownTest do
   alias Bitflyer.System
   alias Bitflyer.Trading.Order
 
-  @market_key {:ticker, "FX_BTC_JPY"}
+  @market_key {:ticker, "BTC_JPY"}
 
   defmodule HealExchange do
     @behaviour Bitflyer.Exchange.Client
@@ -34,7 +34,7 @@ defmodule Bitflyer.ApplicationShutdownTest do
       {:ok,
        %{
          exchange_order_id: id,
-         product_code: "FX_BTC_JPY",
+         product_code: "BTC_JPY",
          side: :buy,
          size: Decimal.new("0.01"),
          filled_size: Decimal.new("0"),
@@ -153,7 +153,7 @@ defmodule Bitflyer.ApplicationShutdownTest do
              Order
              |> Ash.Changeset.for_create(:create, %{
                internal_order_id: "drain-timeout-1",
-               product_code: "FX_BTC_JPY",
+               product_code: "BTC_JPY",
                side: :buy,
                size: Decimal.new("0.01"),
                order_type: :market,
@@ -199,7 +199,7 @@ defmodule Bitflyer.ApplicationShutdownTest do
              Order
              |> Ash.Changeset.for_create(:create, %{
                internal_order_id: "drain-race-1",
-               product_code: "FX_BTC_JPY",
+               product_code: "BTC_JPY",
                side: :buy,
                size: Decimal.new("0.01"),
                order_type: :market,
@@ -231,7 +231,7 @@ defmodule Bitflyer.ApplicationShutdownTest do
   defp valid_command(id) do
     %{
       internal_order_id: id,
-      product_code: "FX_BTC_JPY",
+      product_code: "BTC_JPY",
       side: :buy,
       size: Decimal.new("0.01"),
       market_key: @market_key,

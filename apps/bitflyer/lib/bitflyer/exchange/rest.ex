@@ -10,9 +10,10 @@ defmodule Bitflyer.Exchange.Rest do
 
   alias Bitflyer.Exchange.{Auth, Credentials}
   alias Bitflyer.Exchange.Rest.Decode
+  alias Bitflyer.Trading.Product
 
   @default_base_url "https://api.bitflyer.com"
-  @default_product "FX_BTC_JPY"
+  @default_product "BTC_JPY"
 
   @impl true
   def fetch_reconcile_snapshot do
@@ -155,11 +156,17 @@ defmodule Bitflyer.Exchange.Rest do
   end
 
   defp get_positions_for(product_code) do
-    with :ok <- require_credentials(),
-         {:ok, body} <-
-           request(:get, "/v1/me/getpositions", "", [{"product_code", product_code}]),
-         {:ok, positions} <- decode_rows(List.wrap(body), &Decode.position/1) do
-      {:ok, aggregate_positions(positions)}
+    # spot は getpositions 対象外。残高（getbalance）が正本。
+    # product_codes が spot のみのとき、同一キー口座の FX 建玉は取得しない（運用前提は README）。
+    if Product.spot?(product_code) do
+      {:ok, []}
+    else
+      with :ok <- require_credentials(),
+           {:ok, body} <-
+             request(:get, "/v1/me/getpositions", "", [{"product_code", product_code}]),
+           {:ok, positions} <- decode_rows(List.wrap(body), &Decode.position/1) do
+        {:ok, aggregate_positions(positions)}
+      end
     end
   end
 

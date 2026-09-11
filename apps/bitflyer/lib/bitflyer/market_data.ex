@@ -19,10 +19,10 @@ defmodule Bitflyer.MarketData do
 
   @spec product_codes() :: [String.t()]
   def product_codes do
-    case Keyword.get(config(), :product_codes, ["FX_BTC_JPY"]) do
+    case Keyword.get(config(), :product_codes, ["BTC_JPY"]) do
       codes when is_list(codes) -> Enum.map(codes, &to_string/1)
       code when is_binary(code) -> [code]
-      _ -> ["FX_BTC_JPY"]
+      _ -> ["BTC_JPY"]
     end
   end
 
