@@ -214,12 +214,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
     constraint_name_collision?(constraint)
   end
 
-  defp identity_collision?(%Postgrex.Error{postgres: %{constraint: constraint}})
-       when is_binary(constraint) do
-    constraint_name_collision?(constraint)
-  end
-
-  # Ecto/Ash が map 形で postgres 情報だけ載せる場合
+  # Ecto/Ash が map 形や Postgrex.Error で postgres 情報だけ載せる場合
   defp identity_collision?(%{postgres: %{constraint: constraint}}) when is_binary(constraint) do
     constraint_name_collision?(constraint)
   end
@@ -236,10 +231,6 @@ defmodule Bitflyer.OrderExecutor.Positions do
   defp constraint_name_collision?(text) when is_binary(text) do
     String.contains?(text, "unique_trade_mode_exchange_execution_id") or
       String.contains?(text, "fills_unique_trade_mode_exchange_execution_id")
-  end
-
-  defp error_leaves(%Ash.Error.Invalid{errors: errors}) when is_list(errors) do
-    Enum.flat_map(errors, &error_leaves/1)
   end
 
   defp error_leaves(%{errors: errors}) when is_list(errors) do
