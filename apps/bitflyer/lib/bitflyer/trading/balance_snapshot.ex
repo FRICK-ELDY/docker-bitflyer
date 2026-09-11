@@ -74,6 +74,8 @@ defmodule Bitflyer.Trading.BalanceSnapshot do
   `DISTINCT ON (currency)` + `captured_at/id DESC`。
   索引 `balance_snapshots_latest_tips_index` とソート順を一致させる。
   接続・Postgrex 障害のみ `{:error, _}` に倒し、プログラミングエラーは rescue しない。
+  クエリ／キュータイムアウトは `DBConnection.ConnectionError`（`:queue_timeout` 等）として上がる
+  （`DBConnection.TimeoutError` は現行 db_connection に存在しない）。
   """
   @spec latest_tips(atom()) :: {:ok, [struct()]} | {:error, term()}
   def latest_tips(trade_mode) when trade_mode in [:dry_run, :paper, :live] do
