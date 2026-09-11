@@ -10,6 +10,10 @@ defmodule Bitflyer.Risk do
   発注頻度予約 → 日次損失 → 残高。
   live は先に銘柄種別を検査し、spot 以外（FX/CFD）を拒否する。
 
+  鮮度は `Cache.fresh?/3` のみ。Feed 切断そのものは見ないため、切断直後〜stale までの
+  短時間は Status STOPPED / `/health/ready` 503 でも authorize が通りうる
+  （`OperationalStatus.market_feed_gate/2` との残差。観測ゲートと発注ゲートの段階差）。
+
   発注ホットパスでは RiskState・発注頻度・日次損失・残高のために DB 往復しない。
   頻度は `Risk.OrderRate.reserve/3`（authorize 時に原子的予約）、取引所エラー連続は `Risk.FailureRate`
   （起動 warm 失敗時は unsynced で認可拒否）、日次損失は `Risk.DailyLoss`、残高は `Risk.BalanceCache`（ETS）。

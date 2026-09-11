@@ -9,6 +9,7 @@ defmodule Bitflyer.Health do
     Compose の restart 判定用。WS 断や stale では落とさない（Feed が再接続する）。
   - `ready_snapshot` / `GET /health/ready` — 外形 readiness。
     DB 可 + `Readiness` が `:ready` +（MarketData 有効時は Feed 接続かつ全銘柄鮮度）。
+    Feed／鮮度は `OperationalStatus.market_feed_gate/2` と同一（Status ALLOWED と矛盾しない）。
     WS 断・stale・halt・DB 断は 503。外部監視はこちらを見る。
   - `snapshot` / `GET /health` — 従来互換。DB 断または halted で 503。
     起動中の `:not_ready` は 200（boot reconcile 完了前でも Compose が通しやすい）。
@@ -216,25 +217,13 @@ defmodule Bitflyer.Health do
   defp classify_ready(true, :not_ready, _market, _feed), do: {:not_ready, :not_ready}
 
   defp classify_ready(true, :ready, market_data, feed) do
-    cond do
-      market_data.enabled? and not feed_connected?(feed) ->
-        {:not_ready, feed_reason(feed)}
-
-      market_data.enabled? and not market_data.all_fresh? ->
-        {:not_ready, :stale_market_data}
-
-      true ->
-        {:ready, nil}
+    case OperationalStatus.market_feed_gate(market_data, feed) do
+      :ok -> {:ready, nil}
+      {:halted, reason} -> {:not_ready, reason}
     end
   end
 
   defp classify_ready(true, _other, _market, _feed), do: {:unavailable, :unknown_readiness}
-
-  defp feed_connected?(%{available?: true, connected?: true}), do: true
-  defp feed_connected?(_), do: false
-
-  defp feed_reason(%{available?: false}), do: :feed_unavailable
-  defp feed_reason(_), do: :feed_disconnected
 
   defp legacy_healthy?(:unavailable), do: false
   defp legacy_healthy?(:halted), do: false
