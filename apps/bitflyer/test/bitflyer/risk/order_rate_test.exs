@@ -63,6 +63,21 @@ defmodule Bitflyer.Risk.OrderRateTest do
     assert {:ok, 3} = OrderRate.count(:paper, server: name, window_ms: 60_000)
   end
 
+  test "warm_from_db preserves open reservations" do
+    assert {:ok, reservation} = OrderRate.reserve(:paper, 10)
+    assert {:ok, 1} = OrderRate.count(:paper)
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    _ = insert_order!("warm-keep-reserve-1", :paper, now)
+
+    assert :ok = OrderRate.warm_from_db(now_dt: now, now: OrderRate.monotonic_ms())
+
+    # DB の 1 committed + 未 commit 予約 1
+    assert {:ok, 2} = OrderRate.count(:paper)
+    assert :ok = OrderRate.release(reservation)
+    assert {:ok, 1} = OrderRate.count(:paper)
+  end
+
   test "warm_from_db replaces previous ETS entries" do
     assert :ok = OrderRate.record(:paper)
     assert {:ok, 1} = OrderRate.count(:paper)
@@ -113,6 +128,39 @@ defmodule Bitflyer.Risk.OrderRateTest do
     )
 
     assert {:error, :unsynced} = OrderRate.count(:paper, server: name)
+  end
+
+  test "reserve is atomic under concurrent callers" do
+    name = :"order_rate_reserve_#{System.unique_integer([:positive])}"
+    start_supervised!({OrderRate, name: name, loader: fn _, _ -> {:ok, []} end})
+
+    max = 5
+    task_count = 40
+
+    results =
+      1..task_count
+      |> Task.async_stream(
+        fn _ -> OrderRate.reserve(:paper, max, server: name) end,
+        max_concurrency: task_count,
+        timeout: 5_000
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    oks = Enum.filter(results, &match?({:ok, _}, &1))
+    exceeded = Enum.filter(results, &match?({:error, :limit_exceeded, _}, &1))
+
+    assert length(oks) == max
+    assert length(exceeded) == task_count - max
+    assert {:ok, ^max} = OrderRate.count(:paper, server: name)
+  end
+
+  test "release frees a reserved slot for another reserve" do
+    assert {:ok, reservation} = OrderRate.reserve(:paper, 1)
+    assert {:error, :limit_exceeded, %{count: 1, max: 1}} = OrderRate.reserve(:paper, 1)
+
+    assert :ok = OrderRate.release(reservation)
+    assert {:ok, _} = OrderRate.reserve(:paper, 1)
+    assert {:ok, 1} = OrderRate.count(:paper)
   end
 
   defp insert_order!(internal_order_id, trade_mode, inserted_at) do

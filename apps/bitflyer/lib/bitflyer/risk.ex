@@ -6,11 +6,11 @@ defmodule Bitflyer.Risk do
   上限超過・stale・未同期は必ず拒否する。
   サーキットは `open_circuit/1` / `clear_circuit/1`。
 
-  検査: 同期 → 鮮度 → 時計ずれ → 注文サイズ → 建玉 → 価格逸脱 → 発注頻度 → 日次損失 → 残高。
+  検査: 同期 → 鮮度 → 時計ずれ → 注文サイズ → 建玉 → 価格逸脱 → 発注頻度予約 → 日次損失 → 残高。
   live は先に銘柄種別を検査し、spot 以外（FX/CFD）を拒否する。
 
   発注ホットパスでは RiskState・発注頻度・日次損失・残高のために DB 往復しない。
-  頻度は `Risk.OrderRate`、取引所エラー連続は `Risk.FailureRate`、
+  頻度は `Risk.OrderRate.reserve/3`（authorize 時に原子的予約）、取引所エラー連続は `Risk.FailureRate`、
   日次損失は `Risk.DailyLoss`、残高は `Risk.BalanceCache`（ETS）。
   """
 
@@ -44,7 +44,7 @@ defmodule Bitflyer.Risk do
   - `:check_persisted_circuit` — 既定 **false**（ホットパスで RiskState を読まない）。
     別 BEAM の `mix bitflyer.halt` は `Risk.CircuitSync` が DB→ETS 同期する。
     テストや即時検査で DB を直接見るときだけ `true`
-  - `:recent_order_count` — 直近 1 分の発注件数（テスト注入。未指定時は OrderRate ETS）
+  - `:recent_order_count` — 直近 1 分の発注件数（テスト注入。`allow_test_injections: true` のときのみ。未指定時は OrderRate.reserve）
   - `:daily_loss` — 当日損失額（テスト注入。`allow_test_injections: true` のときのみ。未指定時は DailyLoss ETS）
   - `:balances` — 残高マップまたはリスト（テスト注入。未指定時は BalanceCache ETS。paper/live 必須）
   - `:now` — Cache / OrderRate 用 monotonic ms（テスト注入）
@@ -65,15 +65,14 @@ defmodule Bitflyer.Risk do
            :ok <- check_order_size(command, limits),
            :ok <- check_position_size(command, limits, opts),
            :ok <- check_price_deviation(command, limits, opts),
-           :ok <- check_order_rate(limits, opts),
-           :ok <- check_daily_loss(limits, opts),
-           :ok <- check_available_balance(command, opts) do
-        :ok
+           {:ok, reservation} <- reserve_order_rate(limits, opts),
+           :ok <- finish_authorize_after_rate(command, limits, opts, reservation) do
+        {:ok, mint_authorized_order(command, reservation, opts)}
       end
 
     case result do
-      :ok ->
-        {:ok, mint_authorized_order(command, opts)}
+      {:ok, authorized} ->
+        {:ok, authorized}
 
       {:error, code, meta} = error ->
         emit_rejected(command, code, meta)
@@ -81,10 +80,28 @@ defmodule Bitflyer.Risk do
     end
   end
 
-  defp mint_authorized_order(command, opts) do
+  defp finish_authorize_after_rate(command, limits, opts, reservation) do
+    case check_daily_loss(limits, opts) do
+      :ok ->
+        case check_available_balance(command, opts) do
+          :ok ->
+            :ok
+
+          {:error, _, _} = error ->
+            _ = OrderRate.release(reservation)
+            error
+        end
+
+      {:error, _, _} = error ->
+        _ = OrderRate.release(reservation)
+        error
+    end
+  end
+
+  defp mint_authorized_order(command, reservation, opts) do
     server = Keyword.get(opts, :authorized_order_server, AuthorizedOrder)
     mint_opts = Keyword.take(opts, [:now_ms])
-    GenServer.call(server, {:mint, command, mint_opts})
+    GenServer.call(server, {:mint, command, reservation, mint_opts})
   end
 
   @doc """
@@ -349,21 +366,43 @@ defmodule Bitflyer.Risk do
     end
   end
 
-  defp check_order_rate(limits, opts) do
-    case resolve_recent_order_count(opts) do
-      {:ok, count} when count >= limits.max_orders_per_minute ->
-        {:error, :limit_exceeded,
-         %{
-           limit: :max_orders_per_minute,
-           count: count,
-           max: limits.max_orders_per_minute
-         }}
+  defp reserve_order_rate(limits, opts) do
+    max = limits.max_orders_per_minute
 
-      {:ok, _count} ->
-        :ok
+    case Keyword.fetch(opts, :recent_order_count) do
+      {:ok, count} when is_integer(count) and count >= 0 ->
+        if test_injections_allowed?() do
+          if count >= max do
+            {:error, :limit_exceeded, %{limit: :max_orders_per_minute, count: count, max: max}}
+          else
+            {:ok, :skip}
+          end
+        else
+          # 本番経路では注入を無視し実予約する（原子性迂回を防ぐ）
+          reserve_order_rate(limits, Keyword.delete(opts, :recent_order_count))
+        end
 
-      {:error, _} ->
-        {:error, :unsynced, %{reason: :order_rate_unsynced}}
+      {:ok, _} ->
+        if test_injections_allowed?() do
+          {:error, :unsynced, %{reason: :invalid_recent_order_count}}
+        else
+          reserve_order_rate(limits, Keyword.delete(opts, :recent_order_count))
+        end
+
+      :error ->
+        trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+        reserve_opts = Keyword.take(opts, [:now, :server, :window_ms])
+
+        case OrderRate.reserve(trade_mode, max, reserve_opts) do
+          {:ok, reservation} ->
+            {:ok, reservation}
+
+          {:error, :limit_exceeded, %{count: count, max: ^max}} ->
+            {:error, :limit_exceeded, %{limit: :max_orders_per_minute, count: count, max: max}}
+
+          {:error, :unsynced} ->
+            {:error, :unsynced, %{reason: :order_rate_unsynced}}
+        end
     end
   end
 
@@ -530,25 +569,6 @@ defmodule Bitflyer.Risk do
     |> Decimal.abs()
     |> Decimal.div(ltp)
     |> Decimal.mult(Decimal.new(100))
-  end
-
-  defp resolve_recent_order_count(opts) do
-    case Keyword.fetch(opts, :recent_order_count) do
-      {:ok, count} when is_integer(count) and count >= 0 ->
-        {:ok, count}
-
-      {:ok, _} ->
-        {:error, :invalid_recent_order_count}
-
-      :error ->
-        trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
-        count_opts = Keyword.take(opts, [:now, :server, :window_ms])
-
-        case OrderRate.count(trade_mode, count_opts) do
-          {:ok, count} -> {:ok, count}
-          {:error, :unsynced} -> {:error, :order_rate_unsynced}
-        end
-    end
   end
 
   defp resolve_daily_loss(opts) do

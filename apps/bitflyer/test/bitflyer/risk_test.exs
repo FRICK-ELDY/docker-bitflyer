@@ -509,6 +509,63 @@ defmodule Bitflyer.RiskTest do
              )
   end
 
+  test "concurrent authorize cannot exceed max_orders_per_minute" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    max = 5
+    task_count = 30
+
+    results =
+      1..task_count
+      |> Task.async_stream(
+        fn i ->
+          Risk.authorize(
+            valid_command(%{internal_order_id: "rate-concurrent-#{i}"}),
+            positions: [],
+            trade_mode: :dry_run,
+            limits: %{max_orders_per_minute: max}
+          )
+        end,
+        max_concurrency: task_count,
+        timeout: 5_000
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    oks = Enum.filter(results, &match?({:ok, _}, &1))
+    limited = Enum.filter(results, &match?({:error, :limit_exceeded, _}, &1))
+
+    assert length(oks) == max
+    assert length(limited) == task_count - max
+    assert {:ok, ^max} = Bitflyer.Risk.OrderRate.count(:dry_run)
+  end
+
+  test "authorize ignores recent_order_count injection when test injections disabled" do
+    previous = Application.get_env(:bitflyer, Bitflyer.Risk, [])
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.Risk,
+      Keyword.put(previous, :allow_test_injections, false)
+    )
+
+    on_exit(fn -> Application.put_env(:bitflyer, Bitflyer.Risk, previous) end)
+
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert :ok = Bitflyer.Risk.OrderRate.record(:dry_run)
+
+    # 注入 count=0 でも実 ETS（1）を見て拒否する
+    assert {:error, :limit_exceeded, %{limit: :max_orders_per_minute, count: 1, max: 1}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               trade_mode: :dry_run,
+               recent_order_count: 0,
+               limits: %{max_orders_per_minute: 1}
+             )
+  end
+
   test "authorize rejects buy when available quote balance is insufficient" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
