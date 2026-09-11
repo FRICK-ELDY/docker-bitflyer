@@ -355,6 +355,8 @@ defmodule Bitflyer.System do
   raw map はここで必ず `Risk.authorize/2` を通る。Executor は `AuthorizedOrder` のみ受け付ける。
   `prep_stop` 後（InFlight closed）は認可前に `:shutting_down` を返す。
   live では認可前に未反映約定を同期する（建玉検査が遅れないようにする）。
+  認可前 sync 失敗は当該 submit 拒否のみ（halt しない）。受注後の sync 失敗は
+  `:fill_sync_failed` で halt（未発注 vs 受注済みの差）。
   """
   def submit_order(command, opts \\ []) when is_map(command) do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)

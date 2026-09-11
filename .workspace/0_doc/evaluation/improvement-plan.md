@@ -1,6 +1,6 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-10_2  
+最終更新: 2026-09-11
 根拠: [evaluation-2026-09-10_2.md](./evaluation-2026-09-10_2.md) / [specific-weaknesses-2026-09-10_2.md](./specific-weaknesses-2026-09-10_2.md)
 
 方針: **利益機能より資金保全・復帰・観測を先に直す。** live 実発注は下記 P0 の完了まで禁止。戦略の高度化は縦貫通の安全化の後。
@@ -23,7 +23,7 @@
 | 2 | FX 証拠金 or spot 限定 | **今回は B:** live を spot（`BTC_JPY`）に限定し README/config を一致。**A（getcollateral）は backlog へ** → [.workspace/1_backlog/fx-collateral-adapter.md](../../1_backlog/fx-collateral-adapter.md) | spot 限定なら既定プロダクトが spot（B 完了条件） |
 | 3 | Decode 構造 fail-closed | **完了:** 未知 side/status・識別子欠落は payload error → snapshot 失敗 → reconcile halt。`:skip` は allowlist のみ。`decode_rows` は未知戻りも fail-closed | 未知 side fixture（FX positions / spot open_orders）で Ready にならず halt |
 | 4 | OrderRate 原子的予約 | **完了:** authorize 時 `OrderRate.reserve`、成功 `commit` / 失敗・未使用 `release`。並行認可で per-minute 超過不可 | 並行 N 認可でも per-minute を超えない |
-| 5 | live fill 同期の整理 | 認可前 sync と `do_submit` 内 sync を一方に統一。post-place sync 失敗は not_ready/halt または「同期待ち」を成功と分離。最小間隔/クライアント側レート制限 | 1発注あたりの private REST が過剰にならず、同期失敗で盲目継続しない |
+| 5 | live fill 同期の整理 | **完了:** 認可前 sync のみ（`do_submit` 再同期削除）。post-place sync 失敗は `:fill_sync_failed` で halt（成功と分離）。`sync_open_orders` 最小間隔＋突合は `:force` | 1発注あたりの private REST が過剰にならず、同期失敗で盲目継続しない |
 
 ---
 

@@ -18,6 +18,7 @@ defmodule Bitflyer.Risk.HaltReason do
            :submission_unknown,
            :manual_halt,
            :persist_failed,
+           :fill_sync_failed,
            :daily_loss_exceeded,
            :fill_price_unavailable
          ])
