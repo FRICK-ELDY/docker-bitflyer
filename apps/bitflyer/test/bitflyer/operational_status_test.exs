@@ -205,6 +205,19 @@ defmodule Bitflyer.OperationalStatusTest do
     assert health.status == :ready
   end
 
+  test "market_feed_gate treats missing keys as fail-closed" do
+    # enabled? 欠落 → 有効扱い → Feed を見る
+    assert OperationalStatus.market_feed_gate(%{all_fresh?: true}, @disconnected_feed) ==
+             {:halted, :feed_disconnected}
+
+    # all_fresh? 欠落 → stale
+    assert OperationalStatus.market_feed_gate(%{enabled?: true}, @connected_feed) ==
+             {:halted, :stale_market_data}
+
+    # 明示 disabled のみスキップ
+    assert OperationalStatus.market_feed_gate(%{enabled?: false}, @disconnected_feed) == :ok
+  end
+
   test "snapshot forwards now/max_age_ms into market_data freshness" do
     assert Readiness.mark_ready() == :ok
     now = Cache.monotonic_ms()

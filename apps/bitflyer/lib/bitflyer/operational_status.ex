@@ -107,17 +107,24 @@ defmodule Bitflyer.OperationalStatus do
   MarketData 有効時の Feed 接続＋鮮度ゲート。
 
   `/health/ready` と Status orders gate が共有する。無効時は `:ok`（スキップ）。
+
+  キー欠落は fail-closed: `enabled?` 欠落は有効扱い（検査する）、
+  `all_fresh?` 欠落は stale 扱い（拒否）。`enabled?: false` 既定にするとゲート丸ごと
+  スキップになり危険なので使わない。
   """
   @spec market_feed_gate(market(), feed()) :: :ok | {:halted, reason()}
   def market_feed_gate(market_data, feed) when is_map(market_data) and is_map(feed) do
+    enabled? = Map.get(market_data, :enabled?, true)
+    all_fresh? = Map.get(market_data, :all_fresh?, false)
+
     cond do
-      not market_data.enabled? ->
+      not enabled? ->
         :ok
 
       not feed_connected?(feed) ->
         {:halted, feed_reason(feed)}
 
-      not market_data.all_fresh? ->
+      not all_fresh? ->
         {:halted, :stale_market_data}
 
       true ->
