@@ -58,6 +58,15 @@ defmodule Bitflyer.System do
   end
 
   @doc """
+  運用画面向け exposure（建玉・未約定・当日損益・残高・halt 復帰手順）。
+
+  `Equity.snapshot(record_peak: false)` のみ。HWM は更新せず、`enforce/1` もしない。
+  """
+  def exposure(opts \\ []) do
+    Bitflyer.Observe.Exposure.snapshot(opts)
+  end
+
+  @doc """
   Ready 状態の正本（`:not_ready` / `:ready` / `{:halted, reason}`）。
   """
   def readiness do

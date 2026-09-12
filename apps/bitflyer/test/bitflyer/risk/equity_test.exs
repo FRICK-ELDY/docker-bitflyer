@@ -41,6 +41,25 @@ defmodule Bitflyer.Risk.EquityTest do
     assert Decimal.eq?(snap.drawdown, Decimal.new("20000"))
   end
 
+  test "snapshot with record_peak false does not raise HWM" do
+    assert :ok = DailyLoss.seed_net(:dry_run, Decimal.new("100000"))
+    assert put_fresh_ticker({:ticker, "BTC_JPY"}, Decimal.new("5000000")) == :ok
+
+    assert {:ok, snap} =
+             Equity.snapshot(
+               trade_mode: :dry_run,
+               positions: [],
+               record_peak: false,
+               limits: %{max_daily_drawdown: "50000"}
+             )
+
+    assert Decimal.eq?(snap.equity_pnl, Decimal.new("100000"))
+    assert Decimal.eq?(snap.peak, Decimal.new(0))
+    assert Decimal.eq?(snap.drawdown, Decimal.new(0))
+    assert {:ok, %{peak: peak}} = DailyLoss.snapshot(:dry_run)
+    assert Decimal.eq?(peak, Decimal.new(0))
+  end
+
   test "snapshot is stale when open position has no fresh mark" do
     {:ok, position} = create_long("0.01", "5000000")
 

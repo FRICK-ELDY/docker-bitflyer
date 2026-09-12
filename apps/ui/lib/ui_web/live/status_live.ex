@@ -1,6 +1,7 @@
 defmodule UiWeb.StatusLive do
   @moduledoc """
-  稼働確認ページ。発注可否・取引モード・Ready・Feed・市場データ鮮度・DB を表示する。
+  稼働確認ページ。発注可否・建玉・未約定・当日損益・halt 復帰手順・
+  取引モード・Ready・Feed・市場データ鮮度・DB を表示する。
   認証済み操作: kill switch（即 halt）、halt 中の resume / reconcile_now。
   """
   use UiWeb, :live_view
@@ -15,13 +16,23 @@ defmodule UiWeb.StatusLive do
      socket
      |> assign_new(:ops_operator, fn -> "anonymous" end)
      |> assign(:ops_busy, false)
+     |> assign(:status_refreshing, false)
      |> assign_status()}
   end
 
   @impl true
+  def handle_info(:refresh, %{assigns: %{status_refreshing: true}} = socket) do
+    schedule_refresh()
+    {:noreply, socket}
+  end
+
   def handle_info(:refresh, socket) do
     schedule_refresh()
-    {:noreply, assign_status(socket)}
+
+    {:noreply,
+     socket
+     |> assign(:status_refreshing, true)
+     |> start_async(:status_refresh, &status_payload/0)}
   end
 
   @impl true
@@ -93,6 +104,18 @@ defmodule UiWeb.StatusLive do
 
   def handle_async(:ops_reconcile, {:exit, reason}, socket) do
     {:noreply, finish_ops_exit(socket, reason)}
+  end
+
+  def handle_async(:status_refresh, {:ok, payload}, socket) do
+    {:noreply,
+     socket
+     |> assign(:status_refreshing, false)
+     |> apply_status(payload)}
+  end
+
+  def handle_async(:status_refresh, {:exit, reason}, socket) do
+    Bitflyer.Telemetry.log(:warning, "status refresh failed", %{reason: inspect(reason)})
+    {:noreply, assign(socket, :status_refreshing, false)}
   end
 
   @impl true
@@ -224,6 +247,243 @@ defmodule UiWeb.StatusLive do
             >
               {gettext("Reconcile now")}
             </button>
+          </div>
+        </section>
+
+        <section
+          :if={@halted?}
+          id="halt-recovery"
+          class="rounded-lg border border-error/40 bg-error/10 px-4 py-4 sm:px-5"
+        >
+          <p class="text-sm font-medium text-base-content/70">{gettext("Recovery steps")}</p>
+
+          <p id="halt-recovery-reason" class="mt-1 font-mono text-sm text-error">
+            {gettext("Halt reason")}: <span class="font-mono">{@halt_reason}</span>
+          </p>
+
+          <ol
+            :if={@halt_steps != []}
+            id="halt-recovery-steps"
+            class="mt-3 list-decimal space-y-2 pl-5 text-sm text-base-content/80"
+          >
+            <li
+              :for={{step, index} <- Enum.with_index(@halt_steps, 1)}
+              id={"halt-recovery-step-#{index}"}
+            >
+              {halt_step_label(step)}
+            </li>
+          </ol>
+        </section>
+
+        <section id="exposure" class="space-y-4">
+          <div class="grid gap-4 lg:grid-cols-2">
+            <div
+              id="exposure-positions"
+              class="rounded-lg border border-base-300 bg-base-200/30 px-4 py-4 sm:px-5"
+            >
+              <p class="text-sm font-medium text-base-content/70">{gettext("Positions")}</p>
+
+              <p
+                :if={@positions_error}
+                id="exposure-positions-error"
+                class="mt-2 text-sm text-error"
+              >
+                {gettext("Failed to load positions.")}
+              </p>
+
+              <p
+                :if={@positions_error == nil and @positions_empty?}
+                id="exposure-positions-empty"
+                class="mt-2 text-sm text-base-content/60"
+              >
+                {gettext("No open positions")}
+              </p>
+
+              <div :if={not @positions_empty?} class="mt-3 overflow-x-auto">
+                <table class="w-full text-left text-sm">
+                  <thead class="text-base-content/50">
+                    <tr>
+                      <th class="pb-2 pr-3 font-medium">{gettext("Product")}</th>
+                      <th class="pb-2 pr-3 font-medium">{gettext("Side")}</th>
+                      <th class="pb-2 pr-3 font-medium">{gettext("Size")}</th>
+                      <th class="pb-2 pr-3 font-medium">{gettext("Average")}</th>
+                      <th class="pb-2 pr-3 font-medium">{gettext("Mark")}</th>
+                      <th class="pb-2 font-medium">{gettext("Unrealized")}</th>
+                    </tr>
+                  </thead>
+                  <tbody id="exposure-positions-rows" phx-update="stream" class="font-mono">
+                    <tr :for={{id, position} <- @streams.positions} id={id}>
+                      <td class="py-1 pr-3">{position.product_code}</td>
+                      <td class="py-1 pr-3">{position.side}</td>
+                      <td class="py-1 pr-3">{format_decimal(position.size)}</td>
+                      <td class="py-1 pr-3">{format_decimal(position.average_price)}</td>
+                      <td class="py-1 pr-3">{format_decimal(position.mark)}</td>
+                      <td class="py-1">{format_decimal(position.unrealized)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div
+              id="exposure-open-orders"
+              class="rounded-lg border border-base-300 bg-base-200/30 px-4 py-4 sm:px-5"
+            >
+              <p class="text-sm font-medium text-base-content/70">{gettext("Open orders")}</p>
+
+              <p id="exposure-open-orders-count" class="mt-1 font-mono text-sm text-base-content/70">
+                {gettext("%{count} open", count: @open_order_count)}
+                <span :if={@oldest_open_age_ms} class="text-base-content/50">
+                  ({gettext("oldest")}: {format_age_ms(@oldest_open_age_ms)})
+                </span>
+              </p>
+
+              <p
+                :if={@open_orders_error}
+                id="exposure-open-orders-error"
+                class="mt-2 text-sm text-error"
+              >
+                {gettext("Failed to load open orders.")}
+              </p>
+
+              <p
+                :if={@open_orders_error == nil and @open_orders_empty?}
+                id="exposure-open-orders-empty"
+                class="mt-2 text-sm text-base-content/60"
+              >
+                {gettext("No open orders")}
+              </p>
+
+              <p
+                :if={@open_order_count > @open_orders_shown}
+                id="exposure-open-orders-truncated"
+                class="mt-2 text-sm text-base-content/50"
+              >
+                {gettext("Showing %{shown} of %{count}",
+                  shown: @open_orders_shown,
+                  count: @open_order_count
+                )}
+              </p>
+
+              <div :if={not @open_orders_empty?} class="mt-3 overflow-x-auto">
+                <table class="w-full text-left text-sm">
+                  <thead class="text-base-content/50">
+                    <tr>
+                      <th class="pb-2 pr-3 font-medium">{gettext("Id")}</th>
+                      <th class="pb-2 pr-3 font-medium">{gettext("Exchange ID")}</th>
+                      <th class="pb-2 pr-3 font-medium">{gettext("Product")}</th>
+                      <th class="pb-2 pr-3 font-medium">{gettext("Side")}</th>
+                      <th class="pb-2 pr-3 font-medium">{gettext("Status")}</th>
+                      <th class="pb-2 pr-3 font-medium">{gettext("Price")}</th>
+                      <th class="pb-2 pr-3 font-medium">{gettext("Remaining")}</th>
+                      <th class="pb-2 font-medium">{gettext("Age")}</th>
+                    </tr>
+                  </thead>
+                  <tbody id="exposure-open-orders-rows" phx-update="stream" class="font-mono">
+                    <tr
+                      :for={{id, order} <- @streams.open_orders}
+                      id={id}
+                      class={[
+                        order.status == :submission_unknown && "text-warning"
+                      ]}
+                    >
+                      <td class="py-1 pr-3">{order.internal_order_id}</td>
+                      <td class="py-1 pr-3">{order.exchange_order_id || gettext("unavailable")}</td>
+                      <td class="py-1 pr-3">{order.product_code}</td>
+                      <td class="py-1 pr-3">{order.side}</td>
+                      <td class="py-1 pr-3">{order.status}</td>
+                      <td class="py-1 pr-3">{format_decimal(order.price)}</td>
+                      <td class="py-1 pr-3">{format_decimal(order.remaining_size)}</td>
+                      <td class="py-1">{format_age_ms(order.age_ms)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div
+            id="exposure-balances"
+            class="rounded-lg border border-base-300 bg-base-200/30 px-4 py-4 sm:px-5"
+          >
+            <p class="text-sm font-medium text-base-content/70">{gettext("Balances")}</p>
+
+            <p
+              :if={@balances_error}
+              id="exposure-balances-error"
+              class="mt-2 text-sm text-error"
+            >
+              {balance_error_label(@balances_error)}
+            </p>
+
+            <dl id="exposure-balances-rows" phx-update="stream" class="mt-3 grid gap-3 sm:grid-cols-2">
+              <div :for={{id, balance} <- @streams.balances} id={id}>
+                <dt class="text-xs text-base-content/50">{balance.currency}</dt>
+                <dd class="font-mono text-sm">{format_decimal(balance.amount)}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div
+            id="daily-pnl"
+            class={[
+              "rounded-lg border px-4 py-4 sm:px-5",
+              @pnl.status == :ok && "border-success/30 bg-success/5",
+              @pnl.status == :stale && "border-warning/40 bg-warning/5",
+              @pnl.status == :unsynced && "border-error/40 bg-error/10"
+            ]}
+          >
+            <p class="text-sm font-medium text-base-content/70">{gettext("Daily PnL")}</p>
+
+            <p id="daily-pnl-status" class="mt-1 font-mono text-sm text-base-content/70">
+              {pnl_status_label(@pnl.status)}
+            </p>
+
+            <dl class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <div>
+                <dt class="text-xs text-base-content/50">{gettext("Realized")}</dt>
+                <dd id="daily-pnl-realized" class="font-mono text-sm">
+                  {format_decimal(@pnl.realized_net)}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs text-base-content/50">{gettext("Unrealized")}</dt>
+                <dd id="daily-pnl-unrealized" class="font-mono text-sm">
+                  {format_decimal(@pnl.unrealized)}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs text-base-content/50">{gettext("Equity")}</dt>
+                <dd id="daily-pnl-equity" class="font-mono text-sm">
+                  {format_decimal(@pnl.equity_pnl)}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs text-base-content/50">{gettext("Drawdown")}</dt>
+                <dd id="daily-pnl-drawdown" class="font-mono text-sm">
+                  {format_decimal(@pnl.drawdown)}
+                  <span class="text-base-content/50">
+                    / {format_decimal(@pnl.max_daily_drawdown)}
+                  </span>
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs text-base-content/50">{gettext("Daily loss")}</dt>
+                <dd id="daily-pnl-loss" class="font-mono text-sm">
+                  {format_decimal(@pnl.realized_loss)}
+                  <span class="text-base-content/50">/ {format_decimal(@pnl.max_daily_loss)}</span>
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs text-base-content/50">{gettext("Headroom")}</dt>
+                <dd id="daily-pnl-headroom" class="font-mono text-sm">
+                  {gettext("loss")}: {format_decimal(@pnl.loss_headroom)}
+                  <span class="block text-base-content/50">
+                    {gettext("drawdown")}: {format_decimal(@pnl.drawdown_headroom)}
+                  </span>
+                </dd>
+              </div>
+            </dl>
           </div>
         </section>
 
@@ -369,15 +629,24 @@ defmodule UiWeb.StatusLive do
     """
   end
 
-  defp assign_status(socket) do
+  defp assign_status(socket), do: apply_status(socket, status_payload())
+
+  defp status_payload do
     {db_ok?, db_error} =
       case Bitflyer.System.check_database() do
         :ok -> {true, nil}
         {:error, message} -> {false, message}
       end
 
-    status = Bitflyer.System.operational_status()
+    %{
+      db_ok?: db_ok?,
+      db_error: db_error,
+      status: Bitflyer.System.operational_status(),
+      exposure: Bitflyer.System.exposure()
+    }
+  end
 
+  defp apply_status(socket, %{status: status, exposure: exposure} = payload) do
     socket
     |> assign(:app_name, "docker_bitflyer")
     |> assign(:trade_mode, status.trade_mode)
@@ -385,16 +654,29 @@ defmodule UiWeb.StatusLive do
     |> assign(:readiness_label, status.readiness_label)
     |> assign(:halted?, match?({:halted, _}, status.readiness))
     |> assign(:halt_reason, reason_label(status.halt_reason))
+    |> assign(:halt_steps, exposure.halt_steps)
     |> assign(:orders_allowed?, status.orders_allowed?)
     |> assign(:orders_reason, reason_label(status.orders_reason))
     |> assign(:orders_gate_label, orders_gate_label(status.orders_allowed?))
+    |> assign(:positions_empty?, exposure.positions == [])
+    |> assign(:positions_error, exposure.positions_error)
+    |> assign(:open_orders_empty?, exposure.open_orders == [])
+    |> assign(:open_orders_shown, length(exposure.open_orders))
+    |> assign(:open_order_count, exposure.open_order_count)
+    |> assign(:oldest_open_age_ms, exposure.oldest_open_age_ms)
+    |> assign(:open_orders_error, exposure.open_orders_error)
+    |> assign(:balances_error, exposure.balances_error)
+    |> assign(:pnl, exposure.pnl)
     |> assign(:feed, status.feed)
     |> assign(:feed_label, feed_label(status.feed))
     |> assign(:market_all_fresh?, status.market_data.all_fresh?)
     |> assign(:market_freshness_label, market_freshness_label(status.market_data))
     |> assign(:market_entries, status.market_data.entries)
-    |> assign(:db_ok?, db_ok?)
-    |> assign(:db_error, db_error)
+    |> assign(:db_ok?, payload.db_ok?)
+    |> assign(:db_error, payload.db_error)
+    |> stream(:positions, exposure.positions, reset: true, dom_id: & &1.id)
+    |> stream(:open_orders, exposure.open_orders, reset: true, dom_id: & &1.id)
+    |> stream(:balances, exposure.balances, reset: true, dom_id: & &1.id)
   end
 
   defp finish_ops(socket, kind, result) do
@@ -476,6 +758,105 @@ defmodule UiWeb.StatusLive do
   defp format_age_ms(:miss), do: gettext("miss")
   defp format_age_ms(age) when is_integer(age) and age < 1_000, do: "#{age}ms"
   defp format_age_ms(age) when is_integer(age), do: "#{Float.round(age / 1_000, 1)}s"
+
+  defp format_decimal(nil), do: gettext("unavailable")
+  defp format_decimal(%Decimal{} = value), do: Decimal.to_string(value)
+
+  defp pnl_status_label(:ok), do: gettext("available")
+  defp pnl_status_label(:stale), do: gettext("stale")
+  defp pnl_status_label(:unsynced), do: gettext("unsynced")
+
+  defp balance_error_label(:unsynced), do: gettext("unsynced")
+  defp balance_error_label(_), do: gettext("Failed to load balances.")
+
+  defp halt_step_label(:confirm_safe),
+    do: gettext("Confirm the book is safe to resume.")
+
+  defp halt_step_label(:resume_on_status),
+    do: gettext("Use Resume on this page after you confirm.")
+
+  defp halt_step_label(:read_mismatch_logs),
+    do: gettext("Read mismatch logs (balances / positions / orders).")
+
+  defp halt_step_label(:reconcile_now),
+    do: gettext("Run Reconcile now on this page (does not clear halt).")
+
+  defp halt_step_label(:fix_drift),
+    do: gettext("Fix the drift, then Resume.")
+
+  defp halt_step_label(:inspect_unknown_orders),
+    do: gettext("Inspect submission_unknown orders on this page.")
+
+  defp halt_step_label(:recover_submission),
+    do: gettext("Recover with mix bitflyer.recover (do not Resume blindly).")
+
+  defp halt_step_label(:do_not_resume_while_over_limit),
+    do: gettext("Do not Resume while daily loss is over the limit. Resume will refuse.")
+
+  defp halt_step_label(:wait_jst_or_flatten),
+    do: gettext("Wait for the JST day to reset, or flatten and confirm loss is under the limit.")
+
+  defp halt_step_label(:resume_after_limit_clears),
+    do: gettext("Resume only after the limit is clear.")
+
+  defp halt_step_label(:do_not_resume_while_over_drawdown),
+    do: gettext("Do not Resume while drawdown is over the limit. Resume will refuse.")
+
+  defp halt_step_label(:wait_marks_or_flatten),
+    do: gettext("Wait for marks to recover, or flatten so drawdown is under the limit.")
+
+  defp halt_step_label(:resume_after_drawdown_clears),
+    do: gettext("Resume only after drawdown is under the limit.")
+
+  defp halt_step_label(:check_risk_state_persist),
+    do: gettext("Check RiskState persist / DB.")
+
+  defp halt_step_label(:repersist_then_resume),
+    do: gettext("Kill switch again to re-persist the halt, then Resume.")
+
+  defp halt_step_label(:check_fill_sync_logs),
+    do: gettext("Check recent fills and fill sync logs.")
+
+  defp halt_step_label(:check_fill_pricing),
+    do: gettext("Check fill pricing / last executions.")
+
+  defp halt_step_label(:check_risk_state_restore),
+    do: gettext("Check RiskState restore on boot.")
+
+  defp halt_step_label(:fix_db_restart_resume),
+    do: gettext("Fix the database, then restart and Resume.")
+
+  defp halt_step_label(:check_exchange_connectivity),
+    do: gettext("Check exchange connectivity and credentials.")
+
+  defp halt_step_label(:inspect_payload_logs),
+    do: gettext("Inspect invalid payload logs.")
+
+  defp halt_step_label(:do_not_resume_until_decode_ok),
+    do: gettext("Do not Resume until exchange payloads decode cleanly.")
+
+  defp halt_step_label(:identify_underlying_reason),
+    do: gettext("Identify the underlying halt reason from logs.")
+
+  defp halt_step_label(:fix_api_permissions),
+    do: gettext("Fix API key permissions (withdraw must stay disabled).")
+
+  defp halt_step_label(:restart_then_resume),
+    do: gettext("Restart, then Resume.")
+
+  defp halt_step_label(:fix_host_clock),
+    do: gettext("Fix the host clock (NTP), then Resume.")
+
+  defp halt_step_label(:check_api_credentials),
+    do: gettext("Check API credentials / 401, then Resume.")
+
+  defp halt_step_label(:check_exchange_error_logs),
+    do: gettext("Check consecutive exchange error logs.")
+
+  defp halt_step_label(:reload_or_restart),
+    do: gettext("Reload DailyLoss / FailureRate or restart the node, then Resume.")
+
+  defp halt_step_label(step) when is_atom(step), do: Atom.to_string(step)
 
   defp trade_mode_card_class(:dry_run), do: "border-base-300 bg-base-200/40"
   defp trade_mode_card_class(:paper), do: "border-info/40 bg-info/10"
