@@ -203,6 +203,70 @@ defmodule Bitflyer.Observe.DiscordTest do
     refute_receive {:discord_post, _, _}, 100
   end
 
+  test "heartbeat posts immediately when webhook is set" do
+    start_supervised!(
+      {Discord,
+       name: :"discord-hb-#{System.unique_integer([:positive])}",
+       webhook_url: "https://discord.example/hook",
+       cooldown_ms: 60_000,
+       heartbeat_interval_ms: 60_000,
+       http_client: CapturingHTTP}
+    )
+
+    assert_receive {:discord_post, _, %{content: content}}, 200
+    assert content =~ "HEARTBEAT"
+    assert content =~ "probe=notify"
+    refute content =~ "https://discord.example"
+  end
+
+  test "redact_reason strips webhook urls without quoting binaries" do
+    leaked = {:error, "request to https://discord.com/api/webhooks/test-secret-token failed"}
+    text = Discord.redact_reason(leaked)
+    assert text =~ "[redacted-url]"
+    refute text =~ "test-secret-token"
+    refute text =~ "discord.com"
+
+    already = "request to https://discord.com/api/webhooks/test-secret-token failed"
+    redacted = Discord.redact_reason(already)
+    assert redacted == "request to [redacted-url] failed"
+    assert Discord.redact_reason(redacted) == redacted
+  end
+
+  test "heartbeat is not blocked by event cooldown" do
+    pid =
+      start_supervised!(
+        {Discord,
+         name: :"discord-hb-cd-#{System.unique_integer([:positive])}",
+         webhook_url: "https://discord.example/hook",
+         cooldown_ms: 60_000,
+         heartbeat_interval_ms: :infinity,
+         http_client: CapturingHTTP}
+      )
+
+    assert :ok = Discord.notify(pid, :halt, %{reason: :manual_halt, trade_mode: :dry_run})
+    assert_receive {:discord_post, _, %{content: halt_content}}, 200
+    assert halt_content =~ "HALTED"
+
+    send(pid, :heartbeat)
+    assert_receive {:discord_post, _, %{content: again}}, 200
+    assert again =~ "HEARTBEAT"
+  end
+
+  test "heartbeat is skipped when webhook is unset" do
+    unset =
+      start_supervised!(
+        {Discord,
+         name: :"discord-hb-unset-#{System.unique_integer([:positive])}",
+         webhook_url: nil,
+         heartbeat_interval_ms: 20,
+         http_client: CapturingHTTP}
+      )
+
+    send(unset, :heartbeat)
+    refute_receive {:discord_post, _, _}, 80
+    assert Process.alive?(unset)
+  end
+
   test "install_telemetry is idempotent for the static production handler id" do
     assert :ok = Discord.install_telemetry()
     assert :ok = Discord.install_telemetry()

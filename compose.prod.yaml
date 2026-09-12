@@ -10,6 +10,7 @@
 #
 # TRADE_MODE の本番検証既定は dry_run。live は別判断（prod.md）。
 # 秘密情報はホストの env_file のみ。イメージに焼かない。
+# ホスト exporter は compose.observe.yaml（別ホストから scrape。同一ホストではホスト死を検知できない）。
 
 name: docker-bitflyer-prod
 

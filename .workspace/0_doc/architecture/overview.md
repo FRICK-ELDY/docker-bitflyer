@@ -162,7 +162,8 @@ strategy から API を直接叩かない。market-data の遅延や欠損があ
 - メタデータは allowlist のみ。秘密らしきキーは落とす
 - LiveDashboard（`/ops/dashboard`）の metrics に bitflyer カウンタを載せる。Status と同じ BasicAuth。prod でも有効。Ecto / RequestLogger / OS env / 破壊操作はオフ。Processes・ETS・Applications は残る
 - 本番では `Telemetry.Metrics.ConsoleReporter` を既定起動（`UI_METRICS_CONSOLE` で制御）。イベント毎に stdout へ出すが tick / Phoenix / VM は除外
-- Discord 通知は observe のアダプタ（`Bitflyer.Observe.Discord`）。`DISCORD_WEBHOOK_URL`（Incoming Webhook）が有るときだけ、halt / reconcile_mismatch / disconnect を送る。未設定・送信失敗でも発注経路は止めない。Webhook URL はログ・メッセージ本文に出さない
+- Discord 通知は observe のアダプタ（`Bitflyer.Observe.Discord`）。`DISCORD_WEBHOOK_URL`（Incoming Webhook）が有るときだけ、halt / reconcile_mismatch / disconnect と起動直後＋定期 HEARTBEAT を送る。HTTP は Task。未設定・送信失敗でも発注経路は止めない。Webhook URL はログ・メッセージ本文に出さない
+- 同一ホスト死の検知は取引ホストの外。別ホストが `GET /health/ready` を pull し、ホスト exporter を scrape する（`architecture/env/prod.md`）
 
 - コンテナは `restart: unless-stopped` 相当で自動再起動する
 - ヘルスチェックは「プロセス生存」だけでなく「データ鮮度」と「取引所との同期」を見る

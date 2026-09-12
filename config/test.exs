@@ -63,7 +63,9 @@ config :bitflyer, Bitflyer.Risk.OpenOrderPolicy,
   halt_cancel_retry_backoff_ms: 30_000
 
 # 実 Webhook を叩かない。個別テストは start_supervised で注入する。
-config :bitflyer, Bitflyer.Observe.Discord, webhook_url: nil
+config :bitflyer, Bitflyer.Observe.Discord,
+  webhook_url: nil,
+  heartbeat_interval_ms: :infinity
 
 # 既存 paper 期待値（LTP/指値ちょうど）を壊さない。fee/slip は専用テストで明示する。
 config :bitflyer, Bitflyer.OrderExecutor.Paper,

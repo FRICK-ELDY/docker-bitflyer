@@ -7,6 +7,11 @@ defmodule Bitflyer.Observe.Discord do
 
   発注経路には接続しない。Webhook 未設定・送信失敗でも取引を止めない。
   Bot は使わない。`DISCORD_WEBHOOK_URL` に Incoming Webhook URL を置く。
+
+  Webhook があるとき、起動直後に HEARTBEAT を 1 通送り、以降は
+  `heartbeat_interval_ms`（既定 15 分）ごと。通知経路の死はイベント欠落では
+  分からない。イベント cooldown は heartbeat に掛けない。
+  HTTP は Task に逃がし、halt の cast を待たせない。失敗ログから URL を落とす。
   """
 
   use GenServer
@@ -18,6 +23,7 @@ defmodule Bitflyer.Observe.Discord do
   @name __MODULE__
   @handler_id "bitflyer-observe-discord"
   @default_cooldown_ms 60_000
+  @default_heartbeat_interval_ms 15 * 60 * 1000
   # Discord Incoming Webhook の content 上限
   @max_content_length 2000
   @truncate_suffix "...(trunc)"
@@ -102,18 +108,33 @@ defmodule Bitflyer.Observe.Discord do
 
     http_client = Keyword.get(opts, :http_client, Keyword.get(cfg, :http_client, HTTP))
 
-    {:ok,
-     %{
-       webhook_url: normalize_url(webhook_url),
-       cooldown_ms: cooldown_ms,
-       http_client: http_client,
-       last_sent_at: %{}
-     }}
+    heartbeat_interval_ms =
+      opts
+      |> Keyword.get(
+        :heartbeat_interval_ms,
+        Keyword.get(cfg, :heartbeat_interval_ms, @default_heartbeat_interval_ms)
+      )
+      |> normalize_interval()
+
+    state = %{
+      webhook_url: normalize_url(webhook_url),
+      cooldown_ms: cooldown_ms,
+      heartbeat_interval_ms: heartbeat_interval_ms,
+      http_client: http_client,
+      last_sent_at: %{}
+    }
+
+    {:ok, schedule_heartbeat(state, :initial)}
   end
 
   @impl true
   def handle_cast({:notify, kind, metadata}, state) do
     {:noreply, maybe_send(state, kind, metadata)}
+  end
+
+  @impl true
+  def handle_info(:heartbeat, state) do
+    {:noreply, state |> deliver_now(:heartbeat, %{}) |> schedule_heartbeat(:interval)}
   end
 
   defp maybe_send(%{webhook_url: nil} = state, kind, _metadata) do
@@ -129,38 +150,71 @@ defmodule Bitflyer.Observe.Discord do
       Telemetry.log(:debug, "discord notify suppressed (cooldown)", %{reason: kind})
       state
     else
-      try do
-        content = format_message(kind, metadata)
-
-        case deliver(state.http_client, state.webhook_url, content) do
-          :ok ->
-            mark_sent(state, kind, now)
-
-          {:error, reason} ->
-            # URL はログに出さない。失敗時も cooldown して連打で GenServer を埋めない。
-            Telemetry.log(:error, "discord notify failed: #{inspect(reason)}", %{reason: kind})
-            mark_sent(state, kind, now)
-        end
-      rescue
-        error ->
-          Telemetry.log(
-            :error,
-            "discord notify failed during formatting: #{Exception.message(error)}",
-            %{reason: kind}
-          )
-
-          mark_sent(state, kind, now)
-      catch
-        kind_caught, reason ->
-          Telemetry.log(
-            :error,
-            "discord notify failed during formatting: #{inspect({kind_caught, reason})}",
-            %{reason: kind}
-          )
-
-          mark_sent(state, kind, now)
-      end
+      deliver_now(state, kind, metadata)
     end
+  end
+
+  # heartbeat は間隔タイマーがレート制限。イベント cooldown は掛けない。
+  defp deliver_now(%{webhook_url: nil} = state, kind, _metadata) do
+    Telemetry.log(:debug, "discord notify skipped (webhook unset)", %{reason: kind})
+    state
+  end
+
+  defp deliver_now(state, kind, metadata) do
+    now = System.monotonic_time(:millisecond)
+
+    try do
+      content = format_message(kind, metadata)
+      client = state.http_client
+      url = state.webhook_url
+
+      # HTTP は Task。失敗時も先に cooldown して連打で GenServer を埋めない。
+      _ =
+        Task.start(fn ->
+          case deliver(client, url, content) do
+            :ok ->
+              :ok
+
+            {:error, reason} ->
+              Telemetry.log(
+                :error,
+                "discord notify failed: #{redact_reason(reason)}",
+                %{reason: kind}
+              )
+          end
+        end)
+
+      mark_sent(state, kind, now)
+    rescue
+      error ->
+        Telemetry.log(
+          :error,
+          "discord notify failed during formatting: #{redact_reason(Exception.message(error))}",
+          %{reason: kind}
+        )
+
+        mark_sent(state, kind, now)
+    catch
+      kind_caught, reason ->
+        Telemetry.log(
+          :error,
+          "discord notify failed during formatting: #{redact_reason({kind_caught, reason})}",
+          %{reason: kind}
+        )
+
+        mark_sent(state, kind, now)
+    end
+  end
+
+  @doc false
+  def redact_reason(reason) when is_binary(reason) do
+    String.replace(reason, ~r{https?://[^\s"'\\]+}i, "[redacted-url]")
+  end
+
+  def redact_reason(reason) do
+    reason
+    |> inspect()
+    |> redact_reason()
   end
 
   defp mark_sent(state, kind, now) do
@@ -171,9 +225,9 @@ defmodule Bitflyer.Observe.Discord do
     try do
       client.post_json(url, %{content: content})
     rescue
-      error -> {:error, Exception.message(error)}
+      error -> {:error, redact_reason(Exception.message(error))}
     catch
-      kind, reason -> {:error, {kind, reason}}
+      kind, reason -> {:error, redact_reason({kind, reason})}
     end
   end
 
@@ -205,6 +259,7 @@ defmodule Bitflyer.Observe.Discord do
   defp kind_label(:halt), do: "HALTED"
   defp kind_label(:reconcile_mismatch), do: "RECONCILE_MISMATCH"
   defp kind_label(:disconnect), do: "MARKET_DATA_DISCONNECTED"
+  defp kind_label(:heartbeat), do: "HEARTBEAT"
   defp kind_label(other), do: other |> to_string() |> String.upcase()
 
   defp detail_line(:halt, metadata) do
@@ -225,6 +280,8 @@ defmodule Bitflyer.Observe.Discord do
   defp detail_line(:disconnect, metadata) do
     "reason=#{stringify(metadata[:reason] || metadata[:status] || :disconnected)}"
   end
+
+  defp detail_line(:heartbeat, _metadata), do: "probe=notify"
 
   defp detail_line(_kind, metadata) do
     "reason=#{stringify(metadata[:reason])}"
@@ -251,6 +308,30 @@ defmodule Bitflyer.Observe.Discord do
   end
 
   defp normalize_url(_), do: nil
+
+  defp normalize_interval(:infinity), do: :infinity
+  defp normalize_interval(ms) when is_integer(ms) and ms > 0, do: ms
+  defp normalize_interval(_), do: :infinity
+
+  defp schedule_heartbeat(
+         %{heartbeat_interval_ms: ms, webhook_url: url} = state,
+         :initial
+       )
+       when is_integer(ms) and ms > 0 and is_binary(url) do
+    Process.send_after(self(), :heartbeat, 0)
+    state
+  end
+
+  defp schedule_heartbeat(
+         %{heartbeat_interval_ms: ms, webhook_url: url} = state,
+         :interval
+       )
+       when is_integer(ms) and ms > 0 and is_binary(url) do
+    Process.send_after(self(), :heartbeat, ms)
+    state
+  end
+
+  defp schedule_heartbeat(state, _when), do: state
 
   @doc false
   def handle_event([:bitflyer, :reconcile, :mismatch], _measurements, metadata, config) do
