@@ -219,12 +219,17 @@ defmodule Bitflyer.Observe.DiscordTest do
     refute content =~ "https://discord.example"
   end
 
-  test "redact_reason strips webhook urls from inspect output" do
+  test "redact_reason strips webhook urls without quoting binaries" do
     leaked = {:error, "request to https://discord.com/api/webhooks/test-secret-token failed"}
     text = Discord.redact_reason(leaked)
     assert text =~ "[redacted-url]"
     refute text =~ "test-secret-token"
     refute text =~ "discord.com"
+
+    already = "request to https://discord.com/api/webhooks/test-secret-token failed"
+    redacted = Discord.redact_reason(already)
+    assert redacted == "request to [redacted-url] failed"
+    assert Discord.redact_reason(redacted) == redacted
   end
 
   test "heartbeat is not blocked by event cooldown" do

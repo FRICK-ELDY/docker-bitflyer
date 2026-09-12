@@ -207,10 +207,14 @@ defmodule Bitflyer.Observe.Discord do
   end
 
   @doc false
+  def redact_reason(reason) when is_binary(reason) do
+    String.replace(reason, ~r{https?://[^\s"'\\]+}i, "[redacted-url]")
+  end
+
   def redact_reason(reason) do
     reason
     |> inspect()
-    |> String.replace(~r{https?://[^\s"'\\]+}i, "[redacted-url]")
+    |> redact_reason()
   end
 
   defp mark_sent(state, kind, now) do
