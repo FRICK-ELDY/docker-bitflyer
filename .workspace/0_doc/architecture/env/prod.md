@@ -64,7 +64,13 @@
 
 ## 安全装置
 
-- 注文サイズ、建玉、日次損失、発注回数にハードリミットを置く
+- 注文サイズ、建玉、日次損失、日次ドローダウン（realized+含み）、発注回数にハードリミットを置く
+- 含み損ゲート（`Risk.Equity` / `max_daily_drawdown` / live は `BITFLYER_MAX_DAILY_DRAWDOWN_JPY`）:
+  `drawdown = 当日 equity ピーク（HWM） − 現在 equity`（日始ピーク 0）。
+  建玉の mark が stale / 欠落なら **認可と resume は fail-closed**。周期 enforce
+  （boot / `run_now` / periodic / Fill 後）は **halt しない**（切断だけで永続停止にしない）。
+  超過時は `daily_drawdown_exceeded` で halt。新規注文は未実現に投影しない
+  （同一 LTP なら増分はほぼ 0。超過は約定後 enforce か周期で拾う）
 - 価格が直近相場から乖離した注文は出さない
 - 連続障害、署名エラー、想定外残高変動でサーキットブレーカを開く
 - サーキットが開いたら、新規注文を止め、**理由別に未約定 live の全取消（cancel-all）を選べる**
@@ -79,7 +85,7 @@
 | 自前 TIF | **未実装。** 取引所既定（実質 GTC）。注文ごとの `expires_at` は持たない |
 | open age | `max_open_age_ms`（既定 `:infinity`）。定期突合 tick で `inserted_at` 超過の live open を `cancel/2` |
 | halt cancel-all | 理由ごと boolean。`true` のとき halt 成功後に live open を best-effort 逐次取消（失敗しても halt 維持） |
-| 取消する理由（既定 true） | `manual_halt`, `daily_loss_exceeded`, `consecutive_exchange_errors`, `auth_failed`, `fill_sync_failed`, `fill_price_unavailable` |
+| 取消する理由（既定 true） | `manual_halt`, `daily_loss_exceeded`, `daily_drawdown_exceeded`, `consecutive_exchange_errors`, `auth_failed`, `fill_sync_failed`, `fill_price_unavailable` |
 | 取消しない理由（既定 false） | `reconcile_mismatch`, `submission_unknown`, `persist_failed`, `restore_failed`, `exchange_unavailable`, `invalid_exchange_payload`, `unsafe_api_permissions`, `clock_skew`, `risk_halted`, `failure_rate_unsynced`（証拠保全・recover 優先） |
 | 再起動／CircuitSync | 永続 halt を ETS に載せたとき、および既に halted の同期 tick でも `ensure_halt_cancels` を再実行（一回限りではない）。目的は未完了 cancel の再試行 |
 | cancel 背圧 | in-flight 中はスキップ。失敗／open 残留後は `halt_cancel_retry_backoff_ms`（既定 30s）。状態は `HaltCancelGate` GenServer 所有 ETS（LV 等の呼び出し元終了でも消えない）。非同期 Task は Gate が monitor し、`finish` 前の死でロック解除＋backoff。`:cleared` 後は resume / `:force` まで open list を省略。`Circuit.open`／初回 ETS 適用は `:force`。in-flight 失効は `halt_cancel_in_flight_stale_ms`（既定 600s、monitor の保険） |

@@ -25,7 +25,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | --- | --- | --- |
 | market-data（Feed / Cache / 再接続 / gap-fill） | implemented | ETS 鮮度＋取引所 `source_timestamp`。stale / skew は risk。無通信は鮮度窓×3（`stall_timeout_ms` 上書き可）で切断→再接続 |
 | strategy（Behaviour / Runner / FixedOnce） | implemented | dry_run/paper の骨。live は既定オフ・FixedOnce 禁止・Risk 上限は env 必須。適用履歴は `StrategyParameterRevision` + Order 由来 |
-| risk-manager（limits / circuit / 鮮度） | partial | サイズ・建玉・頻度（再起動時 Order 温存）・価格逸脱・時計ずれは実効。日次損失は Fill/DailyLoss。残高は BalanceCache（**live は spot `getbalance` のみ。FX/CFD 証拠金は未実装**）。成功時はワンショット `AuthorizedOrder`（偽造・再利用不可）。401/403 即 halt・窓内連続拒否は FailureRate。含み損は未計上 |
+| risk-manager（limits / circuit / 鮮度） | partial | サイズ・建玉・頻度（再起動時 Order 温存）・価格逸脱・時計ずれは実効。日次損失は Fill/DailyLoss。日次ドローダウンは realized+unrealized の当日ピーク（HWM）からの下落（`Equity`。mark stale は認可・resume fail-closed・周期は halt しない）。残高は BalanceCache（**live は spot `getbalance` のみ。FX/CFD 証拠金は未実装**）。成功時はワンショット `AuthorizedOrder`（偽造・再利用不可）。401/403 即 halt・窓内連続拒否は FailureRate |
 | order-executor（dry_run / paper / live 出口） | implemented | `AuthorizedOrder.consume` 必須（`System.submit_order` 経由）。冪等キーあり。paper は成行 LTP±bps（slip+fee）/ 指値は fee のみ。認可拘束も同価格。live はゲート通過時のみ REST |
 | datastore（Ash: Order / Position / Fill / Balance / RiskState） | implemented | `Bitflyer.Repo` に閉じる |
 | cache（ETS） | implemented | 単一ノード前提。Redis なし |

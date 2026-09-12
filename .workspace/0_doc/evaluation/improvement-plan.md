@@ -43,7 +43,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 11 | 含み損 / equity ゲート | realized+unrealized（または collateral 評価）の第2閾値。stale 時方針を明示 | 建玉持ち越しでもドローダウンで止まる |
+| 11 | 含み損 / equity ゲート | **完了:** `Risk.Equity`（realized net + Position×LTP）。`drawdown = HWM − equity`（peak は DailyLoss ETS）。第2閾値 `max_daily_drawdown`。stale は認可・resume fail-closed・周期は halt しない。authorize は全建玉を 1 回だけ読む。boot / `run_now` / periodic / Fill 後に enforce | 建玉持ち越し・実現益後の含み損でもドローダウンで止まる |
 | 12 | 外部監視 | 別ホストからの `/health/ready`、ホスト exporter、通知 heartbeat。prod.md に具体構成 | 同一ホスト死を外部が検知できる |
 | 13 | Status 情報密度 | 建玉・未約定・当日損益・halt 解消手順を StatusLive に | 運用画面だけで exposure が分かる |
 | 14 | 実 API contract / Game Day | read-only 契約ジョブ、匿名レスポンス corpus、最小ロット段階解禁の記録 | fixture 以外の意味論検証がある |

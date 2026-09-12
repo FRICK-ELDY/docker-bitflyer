@@ -3,11 +3,13 @@ defmodule Bitflyer.Startup.ResumeTest do
 
   require Ash.Query
 
+  import Bitflyer.TestSupport.DailyLossHelper
+  import Bitflyer.TestSupport.MarketDataCacheHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
   alias Bitflyer.Readiness
   alias Bitflyer.Startup.{Reconcile, Resume}
-  alias Bitflyer.Trading.RiskState
+  alias Bitflyer.Trading.{Position, RiskState}
 
   defmodule EmptyExchange do
     @behaviour Bitflyer.Exchange.Client
@@ -35,6 +37,8 @@ defmodule Bitflyer.Startup.ResumeTest do
 
   setup do
     reset_readiness()
+    reset_daily_loss()
+    reset_market_data_cache()
     clear_default_risk_state()
 
     previous_mode = Application.get_env(:bitflyer, :trade_mode, :dry_run)
@@ -42,6 +46,8 @@ defmodule Bitflyer.Startup.ResumeTest do
 
     on_exit(fn ->
       reset_readiness()
+      reset_daily_loss()
+      reset_market_data_cache()
       clear_default_risk_state()
       Application.put_env(:bitflyer, :trade_mode, previous_mode)
     end)
@@ -98,6 +104,54 @@ defmodule Bitflyer.Startup.ResumeTest do
     assert Readiness.mark_ready() == :ok
     assert {:error, :not_halted} = Resume.run(trade_mode: :dry_run, exchange: EmptyExchange)
     assert Readiness.get() == :ready
+  end
+
+  test "resume rejects when unrealized drawdown still exceeds max" do
+    assert :ok = Bitflyer.Risk.Circuit.open(:manual_halt)
+
+    {:ok, _} =
+      Position
+      |> Ash.Changeset.for_create(:create, %{
+        product_code: "BTC_JPY",
+        side: :buy,
+        size: Decimal.new("0.05"),
+        average_price: Decimal.new("5000000"),
+        trade_mode: :dry_run
+      })
+      |> Ash.create()
+
+    assert put_fresh_ticker({:ticker, "BTC_JPY"}, Decimal.new("1000000")) == :ok
+
+    assert {:error, :daily_drawdown_exceeded, %{drawdown: drawdown}} =
+             Resume.run(trade_mode: :dry_run, exchange: EmptyExchange)
+
+    assert Decimal.gt?(drawdown, Decimal.new("100000"))
+    assert Readiness.get() == {:halted, :manual_halt}
+
+    assert {:ok, %RiskState{halted: true}} =
+             RiskState
+             |> Ash.Query.filter(name == "default")
+             |> Ash.read_one()
+  end
+
+  test "resume rejects when carried position mark is stale" do
+    assert :ok = Bitflyer.Risk.Circuit.open(:manual_halt)
+
+    {:ok, _} =
+      Position
+      |> Ash.Changeset.for_create(:create, %{
+        product_code: "BTC_JPY",
+        side: :buy,
+        size: Decimal.new("0.01"),
+        average_price: Decimal.new("5000000"),
+        trade_mode: :dry_run
+      })
+      |> Ash.create()
+
+    assert {:error, :mark_price_unavailable, %{reason: :mark_price_unavailable}} =
+             Resume.run(trade_mode: :dry_run, exchange: EmptyExchange)
+
+    assert Readiness.get() == {:halted, :manual_halt}
   end
 
   test "System.resume delegates to Startup.Resume" do

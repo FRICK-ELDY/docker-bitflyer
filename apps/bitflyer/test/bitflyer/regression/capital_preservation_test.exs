@@ -648,12 +648,14 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
       put_fresh_market(Decimal.new("3999000"))
 
+      # 決済自体は含み損ゲートを避けて通す（実現損の DailyLoss を見るため）
       assert {:ok, %Order{status: :filled}} =
                System.submit_order(
                  command("paper-loss-close", %{side: :sell, size: Decimal.new("0.1")}),
                  trade_mode: :paper,
                  limits: %{
                    max_daily_loss: Decimal.new("100000"),
+                   max_daily_drawdown: Decimal.new("1000000000"),
                    max_order_size: Decimal.new("1")
                  }
                )
@@ -663,14 +665,58 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
 
       put_fresh_market(Decimal.new("5000000"))
 
-      assert {:error, :limit_exceeded, %{limit: :max_daily_loss}} =
-               System.submit_order(command("paper-loss-next"),
+      # Fill 後 Equity.enforce が realized 込みで先に halt することがある
+      case Readiness.get() do
+        {:halted, :daily_drawdown_exceeded} ->
+          assert {:error, :circuit_open, _} =
+                   System.submit_order(command("paper-loss-next"),
+                     trade_mode: :paper,
+                     limits: %{max_daily_loss: Decimal.new("100000")}
+                   )
+
+        _ ->
+          assert {:error, :limit_exceeded, %{limit: :max_daily_loss}} =
+                   System.submit_order(command("paper-loss-next"),
+                     trade_mode: :paper,
+                     limits: %{max_daily_loss: Decimal.new("100000")}
+                   )
+
+          assert Readiness.get() == {:halted, :daily_loss_exceeded}
+      end
+
+      assert SpyExchange.place_count() == 0
+    end
+
+    test "carried paper position mark-to-market drawdown halts without close" do
+      Application.put_env(:bitflyer, :trade_mode, :paper)
+      assert Readiness.mark_ready() == :ok
+      put_fresh_market(Decimal.new("5000000"))
+      seed_paper_balances!()
+
+      assert {:ok, %Order{status: :filled}} =
+               System.submit_order(
+                 command("paper-dd-open", %{size: Decimal.new("0.02")}),
                  trade_mode: :paper,
-                 limits: %{max_daily_loss: Decimal.new("100000")}
+                 limits: %{
+                   max_daily_loss: Decimal.new("1000000"),
+                   max_daily_drawdown: Decimal.new("1000000"),
+                   max_order_size: Decimal.new("1")
+                 }
+               )
+
+      put_fresh_market(Decimal.new("1000000"))
+
+      assert {:error, :limit_exceeded, %{limit: :max_daily_drawdown}} =
+               System.submit_order(command("paper-dd-next"),
+                 trade_mode: :paper,
+                 limits: %{
+                   max_daily_loss: Decimal.new("1000000"),
+                   max_daily_drawdown: Decimal.new("50000")
+                 }
                )
 
       assert SpyExchange.place_count() == 0
-      assert Readiness.get() == {:halted, :daily_loss_exceeded}
+      assert Readiness.get() == {:halted, :daily_drawdown_exceeded}
     end
 
     test "live fill→DailyLoss→halt without daily_loss injection" do
@@ -740,16 +786,29 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert {:ok, loss} = Bitflyer.Risk.DailyLoss.get(:live)
       assert Decimal.gt?(loss, Decimal.new("100000"))
 
-      assert {:error, :limit_exceeded, %{limit: :max_daily_loss}} =
-               System.submit_order(command("live-loss-next"),
-                 trade_mode: :live,
-                 positions: [],
-                 exchange: LossFillExchange,
-                 limits: %{max_daily_loss: Decimal.new("100000")}
-               )
+      case Readiness.get() do
+        {:halted, :daily_drawdown_exceeded} ->
+          assert {:error, :circuit_open, _} =
+                   System.submit_order(command("live-loss-next"),
+                     trade_mode: :live,
+                     positions: [],
+                     exchange: LossFillExchange,
+                     limits: %{max_daily_loss: Decimal.new("100000")}
+                   )
+
+        _ ->
+          assert {:error, :limit_exceeded, %{limit: :max_daily_loss}} =
+                   System.submit_order(command("live-loss-next"),
+                     trade_mode: :live,
+                     positions: [],
+                     exchange: LossFillExchange,
+                     limits: %{max_daily_loss: Decimal.new("100000")}
+                   )
+
+          assert Readiness.get() == {:halted, :daily_loss_exceeded}
+      end
 
       assert SpyExchange.place_count() == 0
-      assert Readiness.get() == {:halted, :daily_loss_exceeded}
     end
 
     test "insufficient balance rejects submit without persistence" do

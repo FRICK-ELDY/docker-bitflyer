@@ -2,17 +2,20 @@ defmodule Bitflyer.Startup.Resume do
   @moduledoc """
   halted からの手動復帰。
 
-  再突合が成功したときだけサーキットを閉じ、Ready にする。
+  再突合が成功し、Equity が閾値内で mark 可能なときだけサーキットを閉じ、Ready にする。
   定期突合（`Reconciler`）は halted を自動解除しない。こちらが唯一の復帰入口。
   """
 
-  alias Bitflyer.Risk.Circuit
+  alias Bitflyer.Risk.{Circuit, Equity}
   alias Bitflyer.Startup.Reconcile
 
   @type result :: :ok | {:error, atom()} | {:error, atom(), map()}
 
   @doc """
-  再突合 → 成功時のみ `Circuit.close` → `mark_ready`。
+  再突合 → DailyLoss/残高同期 → Equity 判定 → 成功時のみ `Circuit.close` → `mark_ready`。
+
+  含み損が閾値超、または建玉ありで mark stale / DailyLoss unsynced のときは
+  サーキットを閉じず `{:error, reason, meta}`。
 
   ## Options
   - `:trade_mode` / `:exchange` / `:required_balance_currencies` — `Reconcile.run/1` へ転送
@@ -141,23 +144,63 @@ defmodule Bitflyer.Startup.Resume do
     readiness = Keyword.get(opts, :readiness, Bitflyer.Readiness)
     circuit_opts = Keyword.take(opts, [:readiness])
 
-    with :ok <- Circuit.close(circuit_opts),
-         :ok <- mark_ready(readiness) do
-      Bitflyer.Telemetry.log(:info, "resume succeeded", %{
-        reason: halt_reason,
-        readiness: "ready",
-        trade_mode: trade_mode
-      })
+    case ensure_equity_resumable(trade_mode, opts) do
+      :ok ->
+        with :ok <- Circuit.close(circuit_opts),
+             :ok <- mark_ready(readiness) do
+          Bitflyer.Telemetry.log(:info, "resume succeeded", %{
+            reason: halt_reason,
+            readiness: "ready",
+            trade_mode: trade_mode
+          })
 
-      :ok
-    else
-      {:error, error} ->
-        Bitflyer.Telemetry.log(:error, "resume close/ready failed", %{
-          reason: :resume_finalize_failed,
-          trade_mode: trade_mode
+          :ok
+        else
+          {:error, error} ->
+            Bitflyer.Telemetry.log(:error, "resume close/ready failed", %{
+              reason: :resume_finalize_failed,
+              trade_mode: trade_mode
+            })
+
+            {:error, :resume_finalize_failed, %{detail: error}}
+        end
+
+      {:error, reason, meta} = error ->
+        Bitflyer.Telemetry.log(:warning, "resume blocked: equity not resumable", %{
+          reason: reason,
+          trade_mode: trade_mode,
+          meta: meta
         })
 
-        {:error, :resume_finalize_failed, %{detail: error}}
+        error
+    end
+  end
+
+  defp ensure_equity_resumable(trade_mode, opts) do
+    equity_opts =
+      opts
+      |> Keyword.take([:limits, :now, :server, :now_dt, :daily_loss_server])
+      |> Keyword.put(:trade_mode, trade_mode)
+
+    case Equity.snapshot(equity_opts) do
+      {:ok, %{drawdown: drawdown, max: max} = snap} ->
+        if Decimal.gt?(drawdown, max) do
+          {:error, :daily_drawdown_exceeded,
+           %{
+             drawdown: drawdown,
+             max: max,
+             realized_net: snap.realized_net,
+             unrealized: snap.unrealized
+           }}
+        else
+          :ok
+        end
+
+      {:error, :stale, meta} ->
+        {:error, :mark_price_unavailable, meta}
+
+      {:error, :unsynced, meta} ->
+        {:error, :equity_unsynced, meta}
     end
   end
 

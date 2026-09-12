@@ -7,7 +7,7 @@ defmodule Bitflyer.Risk do
   サーキットは `open_circuit/1` / `clear_circuit/1`。
 
   検査: 同期 → FailureRate 同期 → 鮮度 → 時計ずれ → 注文サイズ → 建玉 → 価格逸脱 →
-  発注頻度予約 → 日次損失 → 残高。
+  発注頻度予約 → 日次損失 → 日次ドローダウン（realized+unrealized） → 残高。
   live は先に銘柄種別を検査し、spot 以外（FX/CFD）を拒否する。
 
   鮮度は `Cache.fresh?/3` のみ。Feed 切断そのものは見ないため、切断直後〜stale までの
@@ -28,6 +28,7 @@ defmodule Bitflyer.Risk do
     BalanceCache,
     Circuit,
     DailyLoss,
+    Equity,
     FailureRate,
     Limits,
     OrderRate
@@ -52,7 +53,8 @@ defmodule Bitflyer.Risk do
   ## Options
   - `:readiness` — 既定 `Bitflyer.Readiness`
   - `:limits` — 上限上書き（`Limits.normalize/1` される）
-  - `:positions` — 建玉リスト（未指定時は DB から当該銘柄を読む）
+  - `:positions` — 建玉リスト（テスト注入。`allow_test_injections: true` のときのみ。
+    未指定／本番は trade_mode 全建玉を **1 回** 読み、建玉上限と Equity で共有する）
   - `:now` / `:server` — Cache.fresh?/3・LTP 取得へ転送
   - `:authorized_order_server` — `AuthorizedOrder` GenServer（Cache の `:server` とは別）
   - `:failure_rate` / `:failure_rate_server` — FailureRate モジュールと GenServer 名（テスト注入）
@@ -74,6 +76,7 @@ defmodule Bitflyer.Risk do
 
     result =
       with :ok <- validate_command(command),
+           {:ok, opts} <- attach_positions(opts),
            :ok <- check_live_product(command, opts),
            :ok <- check_sync(opts),
            :ok <- check_failure_rate(opts),
@@ -100,9 +103,16 @@ defmodule Bitflyer.Risk do
   defp finish_authorize_after_rate(command, limits, opts, reservation) do
     case check_daily_loss(limits, opts) do
       :ok ->
-        case check_available_balance(command, opts) do
+        case check_daily_drawdown(limits, opts) do
           :ok ->
-            :ok
+            case check_available_balance(command, opts) do
+              :ok ->
+                :ok
+
+              {:error, _, _} = error ->
+                _ = OrderRate.release(reservation)
+                error
+            end
 
           {:error, _, _} = error ->
             _ = OrderRate.release(reservation)
@@ -461,6 +471,29 @@ defmodule Bitflyer.Risk do
     end
   end
 
+  defp check_daily_drawdown(limits, opts) do
+    case Equity.enforce(Keyword.put(opts, :limits, limits)) do
+      {:ok, _} ->
+        :ok
+
+      {:halted, snap} ->
+        {:error, :limit_exceeded,
+         %{
+           limit: :max_daily_drawdown,
+           drawdown: snap.drawdown,
+           max: snap.max,
+           realized_net: snap.realized_net,
+           unrealized: snap.unrealized
+         }}
+
+      {:error, :stale, meta} ->
+        {:error, :stale, meta}
+
+      {:error, :unsynced, meta} ->
+        {:error, :unsynced, meta}
+    end
+  end
+
   defp check_available_balance(command, opts) do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
 
@@ -718,18 +751,42 @@ defmodule Bitflyer.Risk do
   defp quote_currency(product_code), do: Product.quote_currency(product_code)
   defp base_currency(product_code), do: Product.base_currency(product_code)
 
-  defp fetch_positions(product_code, opts) do
-    case Keyword.fetch(opts, :positions) do
-      {:ok, positions} -> {:ok, positions || []}
-      :error -> load_positions(product_code, opts)
+  defp attach_positions(opts) do
+    case resolve_positions(opts) do
+      {:ok, positions} ->
+        {:ok, Keyword.put(opts, :positions, positions)}
+
+      {:error, error} ->
+        {:error, :unsynced, %{reason: :position_load_failed, error: inspect(error)}}
     end
   end
 
-  defp load_positions(product_code, opts) do
+  defp resolve_positions(opts) do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
 
+    case Keyword.fetch(opts, :positions) do
+      {:ok, positions} ->
+        if test_injections_allowed?() do
+          {:ok, positions || []}
+        else
+          load_all_positions(trade_mode)
+        end
+
+      :error ->
+        load_all_positions(trade_mode)
+    end
+  end
+
+  defp fetch_positions(_product_code, opts) do
+    case Keyword.fetch(opts, :positions) do
+      {:ok, positions} -> {:ok, positions || []}
+      :error -> resolve_positions(opts)
+    end
+  end
+
+  defp load_all_positions(trade_mode) do
     Position
-    |> Ash.Query.filter(product_code == ^product_code and trade_mode == ^trade_mode)
+    |> Ash.Query.filter(trade_mode == ^trade_mode)
     |> Ash.read()
   end
 

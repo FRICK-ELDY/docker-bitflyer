@@ -13,7 +13,7 @@ defmodule Bitflyer.RiskTest do
   alias Bitflyer.Readiness
   alias Bitflyer.Risk
   alias Bitflyer.Risk.AuthorizedOrder
-  alias Bitflyer.Trading.RiskState
+  alias Bitflyer.Trading.{Position, RiskState}
 
   @market_key {:ticker, "BTC_JPY"}
 
@@ -444,6 +444,89 @@ defmodule Bitflyer.RiskTest do
              )
 
     assert Readiness.get() == {:halted, :daily_loss_exceeded}
+  end
+
+  test "authorize rejects unrealized drawdown and opens circuit" do
+    assert Readiness.mark_ready() == :ok
+    assert put_fresh_ticker(@market_key, Decimal.new("1000000")) == :ok
+
+    losing = %{
+      product_code: "BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      average_price: Decimal.new("5000000")
+    }
+
+    assert {:error, :limit_exceeded, %{limit: :max_daily_drawdown, drawdown: drawdown}} =
+             Risk.authorize(valid_command(),
+               positions: [losing],
+               trade_mode: :dry_run,
+               limits: %{
+                 max_daily_loss: Decimal.new("1000000"),
+                 max_daily_drawdown: Decimal.new("50000")
+               }
+             )
+
+    assert Decimal.gt?(drawdown, Decimal.new("50000"))
+    assert Readiness.get() == {:halted, :daily_drawdown_exceeded}
+  end
+
+  test "authorize ignores injected empty positions without test injections" do
+    previous = Application.get_env(:bitflyer, Bitflyer.Risk, [])
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.Risk,
+      Keyword.put(previous, :allow_test_injections, false)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, Bitflyer.Risk, previous)
+    end)
+
+    assert Readiness.mark_ready() == :ok
+    assert put_fresh_ticker(@market_key, Decimal.new("1000000")) == :ok
+
+    {:ok, _} =
+      Position
+      |> Ash.Changeset.for_create(:create, %{
+        product_code: "BTC_JPY",
+        side: :buy,
+        size: Decimal.new("0.02"),
+        average_price: Decimal.new("5000000"),
+        trade_mode: :dry_run
+      })
+      |> Ash.create()
+
+    assert {:error, :limit_exceeded, %{limit: :max_daily_drawdown}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               trade_mode: :dry_run,
+               limits: %{
+                 max_daily_loss: Decimal.new("1000000"),
+                 max_daily_drawdown: Decimal.new("50000")
+               }
+             )
+  end
+
+  test "authorize rejects when carried position mark is stale" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    losing = %{
+      product_code: "ETH_JPY",
+      side: :buy,
+      size: Decimal.new("1"),
+      average_price: Decimal.new("500000")
+    }
+
+    assert {:error, :stale, %{reason: :mark_price_unavailable, product_code: "ETH_JPY"}} =
+             Risk.authorize(valid_command(),
+               positions: [losing],
+               trade_mode: :dry_run
+             )
+
+    refute match?({:halted, _}, Readiness.get())
   end
 
   test "authorize treats non-positive LTP as miss and rejects string daily_loss over limit" do
