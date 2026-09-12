@@ -216,6 +216,9 @@ defmodule Bitflyer.System do
                   trade_mode: trade_mode
                 })
 
+                _ =
+                  Bitflyer.Risk.OpenOrderPolicy.ensure_halt_cancels(existing, force: true)
+
                 :ok
 
               other ->
@@ -242,7 +245,7 @@ defmodule Bitflyer.System do
   end
 
   # ETS は halted だが DB が clear（または読取不能）なら既存 reason で再永続化。
-  # 両方 halted なら reason 上書きせずスキップ。
+  # 両方 halted なら reason 上書きせず、cancel-all だけ再試行する。
   defp heal_persisted_halt(existing, operator, trade_mode) do
     case Bitflyer.Risk.Circuit.persisted_halt_reason() do
       {:halted, _} ->
@@ -252,6 +255,7 @@ defmodule Bitflyer.System do
           trade_mode: trade_mode
         })
 
+        _ = Bitflyer.Risk.OpenOrderPolicy.ensure_halt_cancels(existing)
         :ok
 
       :clear ->

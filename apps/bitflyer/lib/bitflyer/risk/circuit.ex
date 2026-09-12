@@ -5,6 +5,8 @@ defmodule Bitflyer.Risk.Circuit do
   開くときはメモリ（Readiness）を先に halt し、RiskState に永続化する。
   閉じるときは RiskState を先に解除し、その後 Readiness.clear_halt する。
   再起動後も Boot reconcile が永続 halt を見て Ready にしない。
+
+  halt 成功後は `OpenOrderPolicy.after_halt/2` で理由別の未約定 cancel を best-effort 実行する。
   """
 
   require Ash.Query
@@ -68,6 +70,8 @@ defmodule Bitflyer.Risk.Circuit do
 
     case persist_halt(reason) do
       :ok ->
+        # 理由別ポリシーで未約定 live を best-effort 取消（失敗しても halt は維持）
+        _ = Bitflyer.Risk.OpenOrderPolicy.after_halt(reason, opts)
         :ok
 
       {:error, error} ->

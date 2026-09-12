@@ -35,7 +35,7 @@
 | 7 | FailureRate 再起動復元 | **完了:** rejected Order 窓から warm。起動失敗は unsynced（authorize / evaluate fail-closed） | クラッシュループで連続障害カウントが消えない |
 | 8 | Fill 証跡 | **完了:** live は execution 単位 Fill。`(trade_mode, exchange_execution_id)` unique、`filled_at` は取引所時刻優先、`order_id` FK | 同一 execution の二重 Fill を DB が拒否 |
 | 9 | Status / ready 統一 | **完了:** Feed 接続を `OperationalStatus.market_feed_gate/2` に含め、Health `/ready` と同一 classifier。残差: `Risk.authorize` は Cache 鮮度のみ（切断直後の短時間は観測 STOPPED でも認可しうる） | 切断直後に ALLOWED と ready が矛盾しない |
-| 10 | 未約定期限 / halt cancel-all | open age・TIF・理由別全取消ポリシーを文書化のうえ実装 | halt 後に放置 open が残らない運用が可能 |
+| 10 | 未約定期限 / halt cancel-all | **完了:** `OpenOrderPolicy` + `HaltCancelGate`（GenServer 所有 ETS で in-flight／backoff）。再開経路でも `ensure_halt_cancels`。prod.md に方針表 | halt 後に放置 open が残らない運用が可能 |
 
 ---
 

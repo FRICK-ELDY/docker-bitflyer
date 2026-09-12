@@ -168,6 +168,62 @@ defmodule Bitflyer.OrderExecutor do
     end
   end
 
+  @doc """
+  ポリシーに従い未約定注文を逐次取消する（halt cancel-all / open age）。
+
+  ## Options
+  - `:trade_modes` — 既定 `[:live]`
+  - `:older_than` — `%DateTime{}` のとき `inserted_at` 以前のみ
+  - `:exchange` — live cancel へ転送
+  - `:cause` / `:halt_reason` — ログ用
+  """
+  @spec cancel_open_orders(keyword()) :: {:ok, [{String.t(), result()}]} | {:error, atom(), map()}
+  def cancel_open_orders(opts \\ []) do
+    case Risk.OpenOrderPolicy.list_open_orders(opts) do
+      {:ok, orders} ->
+        cause = Keyword.get(opts, :cause)
+        halt_reason = Keyword.get(opts, :halt_reason)
+
+        Bitflyer.Telemetry.log(
+          :info,
+          "cancel_open_orders starting",
+          %{
+            count: length(orders),
+            cause: cause,
+            halt_reason: halt_reason,
+            trade_mode: TradeMode.current()
+          }
+        )
+
+        cancel_opts = Keyword.take(opts, [:exchange])
+
+        results =
+          Enum.map(orders, fn order ->
+            {order.internal_order_id, cancel(order, cancel_opts)}
+          end)
+
+        failed =
+          Enum.count(results, fn
+            {_, {:ok, _}} -> false
+            {_, {:ok, _, :idempotent}} -> false
+            _ -> true
+          end)
+
+        if failed > 0 do
+          Bitflyer.Telemetry.log(
+            :warning,
+            "cancel_open_orders completed with failures",
+            %{failed: failed, total: length(results), cause: cause, halt_reason: halt_reason}
+          )
+        end
+
+        {:ok, results}
+
+      {:error, error} ->
+        {:error, :persist_failed, %{error: error}}
+    end
+  end
+
   defp do_cancel(%Order{} = order, opts) do
     # opts の :trade_mode は無視。live 注文を dry_run 取消にして取引所に残骸を残さない。
     trade_mode = order.trade_mode

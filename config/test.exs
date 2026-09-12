@@ -52,6 +52,16 @@ config :bitflyer, Bitflyer.Strategy, enabled: false
 # Risk のテスト注入（:daily_loss 等）を許可。本番 config では無効のまま。
 config :bitflyer, Bitflyer.Risk, allow_test_injections: true
 
+# テスト既定では halt cancel-all を無効化（Exchange スタブ解体後の非同期 cancel を避ける）。
+# 有効化は OpenOrderPolicyTest が個別に put_env する。
+config :bitflyer, Bitflyer.Risk.OpenOrderPolicy,
+  max_open_age_ms: :infinity,
+  cancel_on_halt: %{},
+  # テストは同期 cancel（Exchange スタブ解体後の孤児 Task を避ける）
+  async_default: false,
+  # stampede テストで即再試行できるよう短くする（個別 put_env でも上書き可）
+  halt_cancel_retry_backoff_ms: 30_000
+
 # 実 Webhook を叩かない。個別テストは start_supervised で注入する。
 config :bitflyer, Bitflyer.Observe.Discord, webhook_url: nil
 

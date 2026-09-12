@@ -67,9 +67,25 @@
 - 注文サイズ、建玉、日次損失、発注回数にハードリミットを置く
 - 価格が直近相場から乖離した注文は出さない
 - 連続障害、署名エラー、想定外残高変動でサーキットブレーカを開く
-- サーキットが開いたら、新規注文を止め、必要なら全取消方針を設定で選べるようにする
+- サーキットが開いたら、新規注文を止め、**理由別に未約定 live の全取消（cancel-all）を選べる**
+  （`Bitflyer.Risk.OpenOrderPolicy` / `config :bitflyer, Bitflyer.Risk.OpenOrderPolicy`）
 - API キーは取引に必要な権限のみ。出金は付けない
 - デプロイ後は、まず参照系と dry-run 相当の確認を経てから実弾を解禁する
+
+### 未約定ポリシー（open age / TIF / halt cancel-all）
+
+| 項目 | 方針 |
+| --- | --- |
+| 自前 TIF | **未実装。** 取引所既定（実質 GTC）。注文ごとの `expires_at` は持たない |
+| open age | `max_open_age_ms`（既定 `:infinity`）。定期突合 tick で `inserted_at` 超過の live open を `cancel/2` |
+| halt cancel-all | 理由ごと boolean。`true` のとき halt 成功後に live open を best-effort 逐次取消（失敗しても halt 維持） |
+| 取消する理由（既定 true） | `manual_halt`, `daily_loss_exceeded`, `consecutive_exchange_errors`, `auth_failed`, `fill_sync_failed`, `fill_price_unavailable` |
+| 取消しない理由（既定 false） | `reconcile_mismatch`, `submission_unknown`, `persist_failed`, `restore_failed`, `exchange_unavailable`, `invalid_exchange_payload`, `unsafe_api_permissions`, `clock_skew`, `risk_halted`, `failure_rate_unsynced`（証拠保全・recover 優先） |
+| 再起動／CircuitSync | 永続 halt を ETS に載せたとき、および既に halted の同期 tick でも `ensure_halt_cancels` を再実行（一回限りではない）。目的は未完了 cancel の再試行 |
+| cancel 背圧 | in-flight 中はスキップ。失敗／open 残留後は `halt_cancel_retry_backoff_ms`（既定 30s）。状態は `HaltCancelGate` GenServer 所有 ETS（LV 等の呼び出し元終了でも消えない）。`Circuit.open`／初回 ETS 適用は `:force` でバックオフ解除。in-flight 失効は `halt_cancel_in_flight_stale_ms`（既定 600s） |
+| ID 無し / ACTIVE 残 | 既存 `cancel/2` と同じ（ローカル終端 or fill 同期後に終端。取引所 ACTIVE なら pending 維持） |
+
+運用で TTL を有効にする例: `max_open_age_ms: 3_600_000`（1 時間）。live 解禁前に理由マップを環境に合わせて見直す。
 
 ## 監視とアラート
 
