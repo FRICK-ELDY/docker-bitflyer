@@ -148,14 +148,13 @@ defmodule Bitflyer.Risk.Equity do
     end
   end
 
+  # `:positions` があればそのまま使う（authorize は attach_positions 済み、
+  # テストは注入）。未指定の周期 / resume / Fill 後だけ DB を読む。
+  # 注入の無視は Risk.authorize 側。ここで再ゲートするとホットパスが二重読になる。
   defp load_positions(trade_mode, opts) do
     case Keyword.fetch(opts, :positions) do
       {:ok, positions} ->
-        if test_injections_allowed?() do
-          {:ok, positions || []}
-        else
-          read_positions(trade_mode)
-        end
+        {:ok, positions || []}
 
       :error ->
         read_positions(trade_mode)
@@ -172,12 +171,6 @@ defmodule Bitflyer.Risk.Equity do
       {:error, error} ->
         {:error, :unsynced, %{reason: :position_load_failed, error: inspect(error)}}
     end
-  end
-
-  defp test_injections_allowed? do
-    :bitflyer
-    |> Application.get_env(Bitflyer.Risk, [])
-    |> Keyword.get(:allow_test_injections, false) == true
   end
 
   defp record_peak(trade_mode, equity_pnl, opts) do
