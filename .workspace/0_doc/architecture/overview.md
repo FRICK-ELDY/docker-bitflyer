@@ -149,7 +149,7 @@ Status UI（`:browser`）は発注可否・建玉・未約定・当日損益・h
 ## 発注経路
 
 1. strategy が「買いたい / 売りたい / 閉じたい」を内部コマンドとして出す
-2. risk-manager が上限と市場データの鮮度を確認する
+2. risk-manager が上限・Feed 接続・市場データの鮮度を確認する
 3. 通過したコマンドだけが order-executor に届く
 4. executor は内部注文 ID で冪等に送る。`dry_run` なら送らず記録のみ、`paper` なら擬似約定、`live` なら bitFlyer REST
 5. 約定・拒否・取消は datastore に書き、strategy と risk に返す

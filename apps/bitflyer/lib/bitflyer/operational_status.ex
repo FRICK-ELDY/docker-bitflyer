@@ -6,13 +6,9 @@ defmodule Bitflyer.OperationalStatus do
   readiness / live 解禁 / 市場データ鮮度 / Feed 接続を合成する。
 
   MarketData 有効時の Feed＋鮮度は `market_feed_gate/2` が正本で、
-  `Health` の `/health/ready` も同じ判定を使う（切断直後に ALLOWED と ready が矛盾しない）。
-
-  ## 残差（P1 #9 完了条件外）
-
-  実発注の `Risk.authorize/2` は Cache 鮮度のみを見る。Feed 切断直後〜stale までの
-  短時間は Status が STOPPED・`/health/ready` が 503 でも authorize が通りうる。
-  発注経路への Feed 接続ゲートは別途（Risk / TradeMode）の課題。
+  `Health` の `/health/ready` と `Risk.authorize/2` も同じ判定を使う
+  （切断直後に ALLOWED / ready / 認可が矛盾しない）。
+  接続の正本は `Feed.connection_snapshot/0`。`status/0` は購読回数など表示用。
   """
 
   alias Bitflyer.MarketData
@@ -106,7 +102,8 @@ defmodule Bitflyer.OperationalStatus do
   @doc """
   MarketData 有効時の Feed 接続＋鮮度ゲート。
 
-  `/health/ready` と Status orders gate が共有する。無効時は `:ok`（スキップ）。
+  `/health/ready`・Status orders gate・`Risk.authorize/2` が共有する。
+  無効時は `:ok`（スキップ）。
 
   キー欠落は fail-closed: `enabled?` 欠落は有効扱い（検査する）、
   `all_fresh?` 欠落は stale 扱い（拒否）。`enabled?: false` 既定にするとゲート丸ごと
@@ -181,19 +178,33 @@ defmodule Bitflyer.OperationalStatus do
 
   @doc """
   Feed 接続状態のスナップショット。
+
+  ゲート（`available?` / `connected?`）は `Feed.connection_snapshot/0`。
+  `feed_status` 注入時だけその値を使う。`status/0` は表示カウンタ用。
   """
   @spec feed_snapshot(keyword()) :: feed()
   def feed_snapshot(opts \\ []) do
     enabled? = Keyword.get_lazy(opts, :feed_enabled?, &MarketData.enabled?/0)
 
-    status =
-      if enabled? do
-        Keyword.get_lazy(opts, :feed_status, &safe_feed_status/0)
-      else
-        :unavailable
-      end
+    cond do
+      not enabled? ->
+        normalize_feed(:unavailable, enabled?)
 
-    normalize_feed(status, enabled?)
+      Keyword.has_key?(opts, :feed_status) ->
+        normalize_feed(Keyword.fetch!(opts, :feed_status), enabled?)
+
+      true ->
+        conn = Feed.connection_snapshot()
+        counters = display_feed_status()
+
+        %{
+          enabled?: enabled?,
+          available?: conn.available?,
+          connected?: conn.connected?,
+          subscribe_count: feed_counter(counters, :subscribe_count),
+          reconnect_attempt: feed_counter(counters, :reconnect_attempt)
+        }
+    end
   end
 
   defp classify(readiness, trade_mode, market_data, live_confirmed?, feed) do
@@ -227,12 +238,18 @@ defmodule Bitflyer.OperationalStatus do
   defp halt_reason({:halted, reason}) when is_atom(reason), do: reason
   defp halt_reason(_), do: nil
 
-  defp safe_feed_status do
+  defp display_feed_status do
     try do
       Feed.status()
     catch
       :exit, _ -> :unavailable
     end
+  end
+
+  defp feed_counter(:unavailable, _key), do: 0
+
+  defp feed_counter(status, key) when is_map(status) do
+    non_neg_int(Map.get(status, key, 0))
   end
 
   defp normalize_feed(:unavailable, enabled?) do

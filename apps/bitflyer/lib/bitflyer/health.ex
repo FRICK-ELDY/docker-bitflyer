@@ -9,7 +9,8 @@ defmodule Bitflyer.Health do
     Compose の restart 判定用。WS 断や stale では落とさない（Feed が再接続する）。
   - `ready_snapshot` / `GET /health/ready` — 外形 readiness。
     DB 可 + `Readiness` が `:ready` +（MarketData 有効時は Feed 接続かつ全銘柄鮮度）。
-    Feed／鮮度は `OperationalStatus.market_feed_gate/2` と同一（Status ALLOWED と矛盾しない）。
+    Feed／鮮度は `OperationalStatus.market_feed_gate/2` と同一（Status ALLOWED・
+    `Risk.authorize` と矛盾しない。接続は `Feed.connection_snapshot/0`）。
     WS 断・stale・halt・DB 断は 503。外部監視はこちらを見る。
   - `snapshot` / `GET /health` — 従来互換。DB 断または halted で 503。
     起動中の `:not_ready` は 200（boot reconcile 完了前でも Compose が通しやすい）。

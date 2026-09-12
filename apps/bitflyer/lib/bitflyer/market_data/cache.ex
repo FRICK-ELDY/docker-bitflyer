@@ -6,7 +6,7 @@ defmodule Bitflyer.MarketData.Cache do
   読み取りは ETS 直読（`read_concurrency`）。書き込みは GenServer のみ。
 
   `fresh?/2` は miss / 期限切れ / テーブル消失をすべて false（fail-closed）。
-  risk-manager（`Bitflyer.Risk.authorize/2`）はここを見て stale を拒否する。
+  risk-manager（`Bitflyer.Risk.authorize/2`）は Feed 接続のあとここを見て stale を拒否する。
   """
 
   use GenServer

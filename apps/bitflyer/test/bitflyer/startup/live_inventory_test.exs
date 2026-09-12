@@ -129,8 +129,7 @@ defmodule Bitflyer.Startup.LiveInventoryTest do
   end
 
   test "non-decimal amount is position_mismatch" do
-    assert {:error, :reconcile_mismatch,
-            %{reason: :invalid_balance_amount, currency: "BTC"}} =
+    assert {:error, :reconcile_mismatch, %{reason: :invalid_balance_amount, currency: "BTC"}} =
              LiveInventory.compare(
                [buy("BTC_JPY", "0.01")],
                [],

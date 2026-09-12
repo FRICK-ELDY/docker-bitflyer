@@ -4,6 +4,7 @@ defmodule Bitflyer.MarketData.FeedTest do
   import Bitflyer.TestSupport.MarketDataCacheHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
+  alias Bitflyer.Health
   alias Bitflyer.MarketData
   alias Bitflyer.MarketData.{Cache, Feed, Socket}
   alias Bitflyer.Readiness
@@ -366,5 +367,159 @@ defmodule Bitflyer.MarketData.FeedTest do
                    50
 
     assert Feed.status(feed).connected?
+  end
+
+  test "connection_snapshot is unavailable when default feed is down" do
+    refute is_pid(Process.whereis(Feed))
+    assert Feed.connection_snapshot() == %{available?: false, connected?: false}
+  end
+
+  test "connection_snapshot treats another pid's flag as disconnected" do
+    feed =
+      start_supervised!(
+        {Feed,
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         gap_fill_on_connect?: false,
+         reconnect_base_ms: 30_000,
+         reconnect_max_ms: 30_000}
+      )
+
+    _ = :sys.get_state(feed)
+    :persistent_term.put(Feed.connection_key(), {self(), true})
+
+    assert Feed.connection_snapshot() == %{available?: true, connected?: false}
+  end
+
+  test "authorize and ready share feed_unavailable when default feed is down" do
+    refute is_pid(Process.whereis(Feed))
+    previous_md = Application.get_env(:bitflyer, Bitflyer.MarketData, [])
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, Bitflyer.MarketData, previous_md)
+    end)
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.MarketData,
+      Keyword.put(previous_md, :enabled, true)
+    )
+
+    now = Cache.monotonic_ms()
+    assert put_fresh_ticker(@market_key, Decimal.new("5000000"), received_at: now) == :ok
+    assert Readiness.mark_ready() == :ok
+
+    assert {:error, :stale, %{reason: :feed_unavailable}} =
+             Risk.authorize(
+               %{
+                 product_code: @product,
+                 side: :buy,
+                 size: Decimal.new("0.01"),
+                 market_key: @market_key
+               },
+               positions: [],
+               now: now,
+               check_persisted_circuit: false
+             )
+
+    health =
+      Health.ready_snapshot(
+        database: fn -> :ok end,
+        readiness: fn -> :ready end
+      )
+
+    assert health.status == :not_ready
+    assert health.reason == :feed_unavailable
+    refute health.feed.available?
+  end
+
+  test "connection_snapshot flips on disconnect while cache stays fresh" do
+    parent = self()
+    disc_id = "md-snap-disc-#{System.unique_integer([:positive])}"
+    tick_id = "md-snap-tick-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        disc_id,
+        [:bitflyer, :market_data, :disconnected],
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    :ok =
+      :telemetry.attach(
+        tick_id,
+        [:bitflyer, :market_data, :tick],
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn ->
+      :telemetry.detach(disc_id)
+      :telemetry.detach(tick_id)
+    end)
+
+    feed =
+      start_supervised!(
+        {Feed,
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         gap_fill_on_connect?: true,
+         reconnect_base_ms: 30_000,
+         reconnect_max_ms: 30_000}
+      )
+
+    assert_receive {:telemetry, [:bitflyer, :market_data, :tick], %{count: 1},
+                    %{product_code: @product}},
+                   500
+
+    _ = :sys.get_state(feed)
+    assert Feed.connection_snapshot() == %{available?: true, connected?: true}
+
+    now = Cache.monotonic_ms()
+    assert put_fresh_ticker(@market_key, Decimal.new("5000000"), received_at: now) == :ok
+    assert Cache.fresh?(@market_key, 5_000, now: now)
+
+    socket = Feed.status(feed).socket
+    Socket.Local.notify_disconnected(socket, :test_closed)
+
+    assert_receive {:telemetry, [:bitflyer, :market_data, :disconnected], %{count: 1}, _}, 500
+
+    _ = :sys.get_state(feed)
+    assert Feed.connection_snapshot() == %{available?: true, connected?: false}
+    assert Cache.fresh?(@market_key, 5_000, now: now)
+
+    previous_md = Application.get_env(:bitflyer, Bitflyer.MarketData, [])
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, Bitflyer.MarketData, previous_md)
+    end)
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.MarketData,
+      Keyword.put(previous_md, :enabled, true)
+    )
+
+    assert Readiness.mark_ready() == :ok
+
+    assert {:error, :stale, %{reason: :feed_disconnected}} =
+             Risk.authorize(
+               %{
+                 product_code: @product,
+                 side: :buy,
+                 size: Decimal.new("0.01"),
+                 market_key: @market_key
+               },
+               positions: [],
+               now: now,
+               check_persisted_circuit: false
+             )
   end
 end
