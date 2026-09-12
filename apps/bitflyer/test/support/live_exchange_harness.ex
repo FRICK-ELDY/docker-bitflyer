@@ -1,8 +1,9 @@
 defmodule Bitflyer.TestSupport.LiveExchangeHarness do
   @moduledoc false
 
-  # P0 #2 用の擬似取引所。Agent に注文・約定・残高を持ち、
+  # P0 #2 / P1 #4 用の擬似取引所。Agent に注文・約定・残高を持ち、
   # テストプロセスと Reconciler の両方から同じ正本を読む。
+  # 約定の `commission` は quote 通貨の amount / available から引く（拘束に含めない）。
 
   @behaviour Bitflyer.Exchange.Client
   use Bitflyer.TestSupport.ExchangeClientStubs
@@ -160,6 +161,7 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
       side: order.side,
       price: Map.fetch!(attrs, :price),
       size: Map.fetch!(attrs, :size),
+      commission: Map.get(attrs, :commission, Decimal.new(0)),
       executed_at: Map.get(attrs, :executed_at, now)
     }
   end
@@ -190,14 +192,16 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
 
   # 拘束は place 時に available から引く。約定では amount だけ動かし、
   # 他注文の残拘束を available=amount で消さない。
+  # commission は拘束外なので quote の amount と available の両方から引く。
   defp apply_execution_balances(state, %{side: :buy} = order, exec) do
     quote = Decimal.mult(exec.size, exec.price)
+    fee = execution_fee(exec)
     quote_ccy = Bitflyer.Trading.Product.quote_currency(order.product_code)
     base = Bitflyer.Trading.Product.base_currency(order.product_code)
 
     balances =
       state.balances
-      |> adjust_balance(quote_ccy, Decimal.negate(quote), Decimal.new(0))
+      |> adjust_balance(quote_ccy, Decimal.negate(Decimal.add(quote, fee)), Decimal.negate(fee))
       |> adjust_balance(base, exec.size, exec.size)
 
     %{state | balances: balances}
@@ -205,16 +209,21 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
 
   defp apply_execution_balances(state, %{side: :sell} = order, exec) do
     quote = Decimal.mult(exec.size, exec.price)
+    fee = execution_fee(exec)
     quote_ccy = Bitflyer.Trading.Product.quote_currency(order.product_code)
     base = Bitflyer.Trading.Product.base_currency(order.product_code)
+    credited = Decimal.sub(quote, fee)
 
     balances =
       state.balances
-      |> adjust_balance(quote_ccy, quote, quote)
+      |> adjust_balance(quote_ccy, credited, credited)
       |> adjust_balance(base, Decimal.negate(exec.size), Decimal.new(0))
 
     %{state | balances: balances}
   end
+
+  defp execution_fee(%{commission: %Decimal{} = fee}), do: fee
+  defp execution_fee(_exec), do: Decimal.new(0)
 
   defp adjust_balance(balances, currency, amount_delta, available_delta) do
     {updated, found?} =

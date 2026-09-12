@@ -11,8 +11,8 @@ defmodule Bitflyer.Startup.LiveBalance do
 
   手数料許容は **支払超過（actual < expected）だけ**。増加は入金として即
   `balance_mismatch`（20bps 以内でも前進しない）。Fill が無い通貨の絶対床は 0。
-  減る側の床は Fill があるときの丸め専用。20bps は実手数料の上限見積りであり、
-  大口直後の帯域内出金は実手数料と区別できない（P1 #4 で execution fee を記帳するまで）。
+  減る側の床は Fill があるときの丸め専用。`Fill.fee` が揃っていれば quote 側に
+  実手数料を織り込み、許容は絶対床だけ。fee 未記録（NULL）の Fill だけ 20bps を残す。
   取引所 amount が tip のままで Fill が減額を予測しているときは `balance_exchange_lag`
   （突合側が getbalance を 1 回再取得する）。
 
@@ -270,31 +270,55 @@ defmodule Bitflyer.Startup.LiveBalance do
     notional = Decimal.mult(size, fill.price)
 
     case fill.side do
-      :buy when currency == quote -> Decimal.negate(notional)
-      :buy when currency == base -> size
-      :sell when currency == base -> Decimal.negate(size)
-      :sell when currency == quote -> notional
+      :buy when currency == quote ->
+        Decimal.negate(Decimal.add(notional, recorded_fee(fill, currency, quote)))
+
+      :buy when currency == base ->
+        size
+
+      :sell when currency == base ->
+        Decimal.negate(size)
+
+      :sell when currency == quote ->
+        Decimal.sub(notional, recorded_fee(fill, currency, quote))
+
+      _ ->
+        Decimal.new(0)
+    end
+  end
+
+  defp recorded_fee(fill, currency, quote) when currency == quote do
+    case Map.get(fill, :fee) do
+      %Decimal{} = fee -> fee
       _ -> Decimal.new(0)
     end
   end
 
-  # 減る側のみ。from_bps は実手数料の見積り上限（P1 #4 まで出金と区別できない）。
+  defp recorded_fee(_fill, _currency, _quote), do: Decimal.new(0)
+
+  # 減る側のみ。fee 未記録 Fill だけ bps 見積り。記録済みは絶対床（丸め）。
   defp fee_allowance(currency, fills, opts) do
     if fills == [] do
       Decimal.new(0)
     else
       abs_floor = tolerance_abs(currency, opts)
-      bps = tolerance_bps(opts)
-      notionals = quote_notional_abs(fills, currency)
-      sizes = base_size_abs(fills, currency)
+      unknown = Enum.filter(fills, &is_nil(Map.get(&1, :fee)))
 
-      # 同一通貨が quote（ETH_BTC の BTC）と base（BTC_JPY の BTC）の両方になりうる。
-      # どちらも当該通貨建なので、bps を掛けたあと合算する（notional と size を足さない）。
-      from_quote = Decimal.div(Decimal.mult(notionals, bps), Decimal.new(10_000))
-      from_base = Decimal.div(Decimal.mult(sizes, bps), Decimal.new(10_000))
-      from_bps = Decimal.add(from_quote, from_base)
+      if unknown == [] do
+        abs_floor
+      else
+        bps = tolerance_bps(opts)
+        notionals = quote_notional_abs(unknown, currency)
+        sizes = base_size_abs(unknown, currency)
 
-      if Decimal.compare(from_bps, abs_floor) == :gt, do: from_bps, else: abs_floor
+        # 同一通貨が quote（ETH_BTC の BTC）と base（BTC_JPY の BTC）の両方になりうる。
+        # どちらも当該通貨建なので、bps を掛けたあと合算する（notional と size を足さない）。
+        from_quote = Decimal.div(Decimal.mult(notionals, bps), Decimal.new(10_000))
+        from_base = Decimal.div(Decimal.mult(sizes, bps), Decimal.new(10_000))
+        from_bps = Decimal.add(from_quote, from_base)
+
+        if Decimal.compare(from_bps, abs_floor) == :gt, do: from_bps, else: abs_floor
+      end
     end
   end
 

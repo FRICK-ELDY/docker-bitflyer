@@ -45,6 +45,7 @@ defmodule Bitflyer.TestSupport.FillExecutions do
             side: side,
             price: price,
             size: filled,
+            commission: Decimal.new(0),
             executed_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
           }
         ]

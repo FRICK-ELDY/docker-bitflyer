@@ -158,6 +158,8 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
     assert fill.exchange_execution_id == "1001"
     assert fill.order_id == order.id
     assert match?(%DateTime{}, fill.filled_at)
+    assert Decimal.eq?(fill.fee, Decimal.new(0))
+    assert Decimal.eq?(fill.realized_pnl, Decimal.new(0))
 
     {:ok, [%{side: :buy, size: size}]} =
       Position
@@ -514,6 +516,80 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
 
     {:ok, [fill]} = fills_for(order.internal_order_id)
     assert DateTime.compare(fill.filled_at, at) == :eq
+  end
+
+  test "execution commission is stored as Fill.fee and subtracted from realized_pnl" do
+    {:ok, order} = create_live_order("live-fee-1", "JRF-fee-1")
+
+    Process.put({:fill_order, "JRF-fee-1"}, %{
+      exchange_order_id: "JRF-fee-1",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.01"),
+      filled_size: Decimal.new("0.01"),
+      average_price: Decimal.new("5000000"),
+      status: :completed
+    })
+
+    put_fill_execs("JRF-fee-1", [
+      exec("JRF-fee-1", "8001", "0.01", "5000000", commission: Decimal.new("80"))
+    ])
+
+    assert :ok = LiveFills.sync_open_orders(exchange: FillExchange)
+
+    {:ok, [fill]} = fills_for(order.internal_order_id)
+    assert Decimal.eq?(fill.fee, Decimal.new("80"))
+    assert Decimal.eq?(fill.realized_pnl, Decimal.new("-80"))
+
+    assert :ok = DailyLoss.reload(trade_mode: :live)
+    assert {:ok, loss} = DailyLoss.get(:live)
+    assert Decimal.eq?(loss, Decimal.new("80"))
+  end
+
+  test "missing execution commission is fail-closed" do
+    {:ok, order} = create_live_order("live-fee-missing", "JRF-fee-missing")
+
+    Process.put({:fill_order, "JRF-fee-missing"}, %{
+      exchange_order_id: "JRF-fee-missing",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.01"),
+      filled_size: Decimal.new("0.01"),
+      average_price: Decimal.new("5000000"),
+      status: :completed
+    })
+
+    put_fill_execs("JRF-fee-missing", [
+      Map.delete(exec("JRF-fee-missing", "8002", "0.01", "5000000"), :commission)
+    ])
+
+    assert {:error, :invalid_exchange_payload, %{reason: :missing_commission}} =
+             LiveFills.sync_order(order, exchange: FillExchange)
+
+    assert {:ok, []} = fills_for(order.internal_order_id)
+  end
+
+  test "negative execution commission is fail-closed" do
+    {:ok, order} = create_live_order("live-fee-neg", "JRF-fee-neg")
+
+    Process.put({:fill_order, "JRF-fee-neg"}, %{
+      exchange_order_id: "JRF-fee-neg",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.01"),
+      filled_size: Decimal.new("0.01"),
+      average_price: Decimal.new("5000000"),
+      status: :completed
+    })
+
+    put_fill_execs("JRF-fee-neg", [
+      exec("JRF-fee-neg", "8003", "0.01", "5000000", commission: Decimal.new("-1"))
+    ])
+
+    assert {:error, :invalid_exchange_payload, %{reason: :negative_commission}} =
+             LiveFills.sync_order(order, exchange: FillExchange)
+
+    assert {:ok, []} = fills_for(order.internal_order_id)
   end
 
   test "partial open then partial close keeps realized_pnl and DailyLoss consistent" do
@@ -1003,6 +1079,7 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
       side: Keyword.get(opts, :side, :buy),
       price: Decimal.new(price),
       size: Decimal.new(size),
+      commission: Keyword.get(opts, :commission, Decimal.new(0)),
       # DailyLoss 窓に入るよう壁時計「今」を既定にする（取引所時刻優先の回帰は別テスト）
       executed_at:
         Keyword.get_lazy(opts, :executed_at, fn ->

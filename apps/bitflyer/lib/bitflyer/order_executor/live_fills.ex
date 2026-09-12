@@ -3,6 +3,7 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
   live 注文の約定を取引所照会から内部建玉へ反映する。
 
   - 建玉: `Positions.apply_fill` で **execution 単位**に反映（`exchange_execution_id` 付き）
+  - 手数料: getexecutions の `commission` を `Fill.fee` に残し `realized_pnl` から引く。欠落・負は記帳しない
   - 残高: **触らない**。live の残高正本は突合成功時の `getbalance` → `LiveBalance` 前進
     （紙の `Balances.apply_fill` は FX と矛盾する）
   - 発注認可前（`System.submit_order`）・発注後・取消後・定期突合前に呼ぶ
@@ -478,7 +479,8 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
     status = status_after_fill(order.size, new_filled, info.status)
     delta_order = %{order | size: size, filled_size: size}
 
-    with {:ok, updated, order_notifications} <-
+    with {:ok, fee} <- execution_fee(exec),
+         {:ok, updated, order_notifications} <-
            update_order(order, %{
              status: status,
              filled_size: new_filled,
@@ -488,7 +490,8 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
            Positions.apply_fill(delta_order, fill_price,
              exchange_execution_id: exec_id,
              filled_at: filled_at,
-             order_id: order.id
+             order_id: order.id,
+             fee: fee
            ) do
       {:ok, updated, order_notifications ++ position_notifications}
     end
@@ -496,6 +499,18 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
 
   defp execution_filled_at(%{executed_at: %DateTime{} = dt}), do: dt
   defp execution_filled_at(_), do: DateTime.utc_now()
+
+  defp execution_fee(%{commission: %Decimal{} = fee}) do
+    if Decimal.compare(fee, 0) == :lt do
+      {:error, :invalid_exchange_payload, %{reason: :negative_commission}}
+    else
+      {:ok, fee}
+    end
+  end
+
+  defp execution_fee(_) do
+    {:error, :invalid_exchange_payload, %{reason: :missing_commission}}
+  end
 
   # オープン注文の列挙・sync 入口で検査する。delta=0 でも黙って通さない。
   defp ensure_consistent_filled_baseline(%Order{} = order) do

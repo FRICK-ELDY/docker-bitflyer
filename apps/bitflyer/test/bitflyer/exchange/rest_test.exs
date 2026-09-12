@@ -302,7 +302,9 @@ defmodule Bitflyer.Exchange.RestTest do
 
     assert e1.exchange_order_id == "JRF20150707-060559-396699"
     assert Decimal.eq?(e1.price, Decimal.new("33470"))
+    assert Decimal.eq?(e1.commission, Decimal.new(0))
     assert Decimal.eq?(e2.size, Decimal.new("0.01"))
+    assert Decimal.eq?(e2.commission, Decimal.new(0))
   end
 
   test "fetch_executions defaults count=500" do

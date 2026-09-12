@@ -1,10 +1,11 @@
 defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
   @moduledoc """
-  P0 #2 縦貫通回帰。
+  P0 #2 / P1 #4 縦貫通回帰。
 
   Fill を Ash で直接作らず、`Exchange.Client` ハーネスだけで
   発注 → 部分約定 2 回 → 残高変動 → 定期突合 → Ready → 再起動 → Ready
   を固定する。tip が前進しないと再突合で基準が古いまま残る。
+  非 0 `commission` は取引所残高から引き、Fill / DailyLoss / Equity と同じ net になる。
   """
 
   use Bitflyer.DataCase, async: false
@@ -20,6 +21,7 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
 
   alias Bitflyer.OrderExecutor.LiveFills
   alias Bitflyer.Readiness
+  alias Bitflyer.Risk.{DailyLoss, Equity}
   alias Bitflyer.Startup.Reconciler
   alias Bitflyer.System
   alias Bitflyer.TestSupport.LiveExchangeHarness
@@ -36,6 +38,11 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
   @after_first_btc Decimal.new("0.505")
   @after_buy_jpy Decimal.new("950000")
   @after_buy_btc Decimal.new("0.51")
+  @fee_partial Decimal.new("40")
+  @fee_total Decimal.new("80")
+  @after_first_buy_fee_jpy Decimal.new("974960")
+  @after_buy_fee_jpy Decimal.new("949920")
+  @after_roundtrip_fee_jpy Decimal.new("999840")
 
   setup do
     reset_readiness()
@@ -51,6 +58,7 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
     previous_client = Application.get_env(:bitflyer, :exchange_client)
     previous_confirm = Application.get_env(:bitflyer, :live_confirmed)
     previous_fills_cfg = Application.get_env(:bitflyer, LiveFills, [])
+    previous_reconcile = Application.get_env(:bitflyer, Bitflyer.Startup.Reconcile, [])
 
     Application.put_env(:bitflyer, :trade_mode, :live)
     Application.put_env(:bitflyer, :live_confirmed, true)
@@ -60,6 +68,13 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
       :bitflyer,
       LiveFills,
       Keyword.put(previous_fills_cfg, :min_sync_interval_ms, 0)
+    )
+
+    # 記録済み fee は 20bps に頼らない。未記録 Fill が混ざるとこのファイルは halt する。
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.Startup.Reconcile,
+      Keyword.put(previous_reconcile, :balance_fee_tolerance_bps, "0")
     )
 
     start_supervised!(LiveExchangeHarness)
@@ -77,6 +92,7 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
       Application.put_env(:bitflyer, :exchange_client, previous_client)
       Application.put_env(:bitflyer, :live_confirmed, previous_confirm)
       Application.put_env(:bitflyer, LiveFills, previous_fills_cfg)
+      Application.put_env(:bitflyer, Bitflyer.Startup.Reconcile, previous_reconcile)
     end)
 
     :ok
@@ -185,6 +201,75 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
     assert Enum.map(snapshot.open_orders, & &1.exchange_order_id) == [second]
   end
 
+  test "apply_fill deducts commission from quote amount and available" do
+    {:ok, %{exchange_order_id: id}} = place_on_harness("fee-quote")
+
+    assert :ok =
+             LiveExchangeHarness.apply_fill(id, %{
+               id: "exec-fee-quote",
+               size: @size,
+               price: @price,
+               commission: @fee_total
+             })
+
+    jpy = Enum.find(LiveExchangeHarness.balances(), &(&1.currency == "JPY"))
+    assert Decimal.eq?(jpy.amount, @after_buy_fee_jpy)
+    assert Decimal.eq?(jpy.available, @after_buy_fee_jpy)
+  end
+
+  test "non-zero commission keeps ready and DailyLoss / Equity net after restart" do
+    seed_live_balance_baseline!()
+    assert Readiness.mark_ready() == :ok
+    put_fresh_ticker(@market_key, @price)
+    seed_balance_cache!(:live, %{"JPY" => @jpy, "BTC" => @btc})
+
+    buy = submit_live!("p1-4-fee-buy")
+    apply_partial!(buy, "exec-p1-4-b1", @fee_partial)
+
+    assert {:ok, %Order{status: :partially_filled}} =
+             LiveFills.sync_order(buy, exchange: LiveExchangeHarness)
+
+    assert Reconciler.run_now() == :ok
+    assert Readiness.get() == :ready
+    assert_tips!(@after_first_buy_fee_jpy, @after_first_btc)
+    assert_net!(Decimal.new("-40"), Decimal.new("40"))
+
+    apply_partial!(buy, "exec-p1-4-b2", @fee_partial)
+    assert Reconciler.run_now() == :ok
+    assert Readiness.get() == :ready
+    assert_fills!("p1-4-fee-buy", ["exec-p1-4-b1", "exec-p1-4-b2"], @size)
+    assert_fill_fees!("p1-4-fee-buy", @fee_total)
+    assert_spot_position!(@size)
+    assert_tips!(@after_buy_fee_jpy, @after_buy_btc)
+    assert_exchange_balances!(@after_buy_fee_jpy, @after_buy_btc)
+    assert_net!(Decimal.negate(@fee_total), @fee_total)
+
+    simulate_process_restart!()
+    assert Reconciler.run_now() == :ok
+    assert Readiness.get() == :ready
+    assert_tips!(@after_buy_fee_jpy, @after_buy_btc)
+    assert_net!(Decimal.negate(@fee_total), @fee_total)
+
+    sell = submit_live!("p1-4-fee-sell", %{side: :sell})
+    apply_partial!(sell, "exec-p1-4-s1", @fee_partial)
+
+    assert {:ok, %Order{status: :partially_filled}} =
+             LiveFills.sync_order(sell, exchange: LiveExchangeHarness)
+
+    assert Reconciler.run_now() == :ok
+    assert Readiness.get() == :ready
+
+    apply_partial!(sell, "exec-p1-4-s2", @fee_partial)
+    assert Reconciler.run_now() == :ok
+    assert Readiness.get() == :ready
+    assert_fills!("p1-4-fee-sell", ["exec-p1-4-s1", "exec-p1-4-s2"], @size)
+    assert_fill_fees!("p1-4-fee-sell", @fee_total)
+    assert_no_spot_position!()
+    assert_tips!(@after_roundtrip_fee_jpy, @btc)
+    assert_exchange_balances!(@after_roundtrip_fee_jpy, @btc)
+    assert_net!(Decimal.new("-160"), Decimal.new("160"))
+  end
+
   defp submit_live!(internal_order_id, overrides \\ %{}) do
     assert {:ok, %Order{status: :pending} = order} =
              System.submit_order(command(internal_order_id, overrides), trade_mode: :live)
@@ -192,12 +277,13 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
     order
   end
 
-  defp apply_partial!(%Order{exchange_order_id: ex_id}, exec_id) do
+  defp apply_partial!(%Order{exchange_order_id: ex_id}, exec_id, commission \\ Decimal.new(0)) do
     assert :ok =
              LiveExchangeHarness.apply_fill(ex_id, %{
                id: exec_id,
                size: @partial,
-               price: @price
+               price: @price,
+               commission: commission
              })
   end
 
@@ -270,6 +356,31 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
     balances = LiveExchangeHarness.balances()
     assert Decimal.eq?(Enum.find(balances, &(&1.currency == "JPY")).amount, jpy)
     assert Decimal.eq?(Enum.find(balances, &(&1.currency == "BTC")).amount, btc)
+  end
+
+  defp assert_net!(realized_net, loss) do
+    assert {:ok, actual_loss} = DailyLoss.get(:live)
+    assert Decimal.eq?(actual_loss, loss)
+
+    assert {:ok, eq} = Equity.snapshot(trade_mode: :live)
+    assert Decimal.eq?(eq.realized_net, realized_net)
+    assert Decimal.eq?(eq.unrealized, Decimal.new(0))
+    assert Decimal.eq?(eq.equity_pnl, realized_net)
+  end
+
+  defp assert_fill_fees!(internal_order_id, total_fee) do
+    assert {:ok, fills} = fills_for(internal_order_id)
+
+    summed =
+      Enum.reduce(fills, Decimal.new(0), fn fill, acc ->
+        Decimal.add(acc, fill.fee || Decimal.new(0))
+      end)
+
+    assert Decimal.eq?(summed, total_fee)
+
+    Enum.each(fills, fn fill ->
+      assert Decimal.eq?(fill.realized_pnl, Decimal.negate(fill.fee))
+    end)
   end
 
   defp assert_fills!(internal_order_id, exec_ids, total_size) do

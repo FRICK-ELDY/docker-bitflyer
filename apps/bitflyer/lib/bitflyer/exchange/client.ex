@@ -118,6 +118,7 @@ defmodule Bitflyer.Exchange.Client do
           side: :buy | :sell,
           price: Decimal.t(),
           size: Decimal.t(),
+          commission: Decimal.t(),
           executed_at: DateTime.t() | nil
         }
 
