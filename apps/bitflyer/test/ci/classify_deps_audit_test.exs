@@ -65,6 +65,35 @@ defmodule ClassifyDepsAuditTest do
     assert out =~ "outcome=audit_tool_or_fetch_failed"
   end
 
+  test "missing file is tool failure and does not abort" do
+    dir = Path.join(System.tmp_dir!(), "deps-audit-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    missing = Path.join(dir, "missing.json")
+    meta = Path.join(dir, "meta.txt")
+
+    {out, status} =
+      System.cmd("bash", [@script, missing, "0", meta], stderr_to_stdout: true)
+
+    assert status == 0
+    assert out =~ "outcome=audit_tool_or_fetch_failed"
+  end
+
+  test "pass after other keys still fails the gate" do
+    {out, status} =
+      classify(~s({"vulnerabilities":[{"note":"mentions pass"}],"pass":false}), 0)
+
+    assert status == 1
+    assert out =~ "outcome=vulnerabilities_found"
+  end
+
+  test "pass false only inside a string is not an advisory" do
+    {out, status} = classify(~s({"note":"{\\"pass\\":false}"}), 0)
+    assert status == 0
+    assert out =~ "outcome=audit_tool_or_fetch_failed"
+  end
+
   test "tool or fetch failure does not fail the gate" do
     {out, status} = classify("not-json", 2)
     assert status == 0
@@ -80,13 +109,13 @@ defmodule ClassifyDepsAuditTest do
   defp classify(body, json_exit) do
     dir = Path.join(System.tmp_dir!(), "deps-audit-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf(dir) end)
+
     json_path = Path.join(dir, "deps-audit.json")
     meta_path = Path.join(dir, "deps-audit-meta.txt")
 
     bin = if is_binary(body), do: body, else: Jason.encode!(body)
     File.write!(json_path, bin)
-
-    on_exit(fn -> File.rm_rf(dir) end)
 
     System.cmd(
       "bash",

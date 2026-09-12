@@ -26,13 +26,20 @@ if [[ ! "${json_exit}" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
-# pretty / 空白入りでも "pass" を読む。jq はコンテナに無い前提。
+# pretty / 空白入りでもルート相当の "pass" を読む。jq はコンテナに無い前提。
+# Jason はキー順を保証しないので先頭一致にはしない（pass が後ろだとゲートをすり抜ける）。
+# オブジェクトキー（{ または , の直後）だけ見る。本文中の "pass":false は拾わない。
 json_pass() {
+  if [[ ! -f "$1" ]]; then
+    echo unknown
+    return
+  fi
+
   local compact
   compact="$(tr -d '[:space:]' <"$1" 2>/dev/null || true)"
   case "${compact}" in
-    *'"pass":false'*) echo false ;;
-    *'"pass":true'*) echo true ;;
+    '{"pass":false'*|*,'"pass":false'*) echo false ;;
+    '{"pass":true'*|*,'"pass":true'*) echo true ;;
     *) echo unknown ;;
   esac
 }
