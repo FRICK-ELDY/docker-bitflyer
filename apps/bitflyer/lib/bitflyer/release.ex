@@ -93,6 +93,7 @@ defmodule Bitflyer.Release do
 
   - `dry_run: true` — preview のみ
   - `confirm: true` — 書き込み（Ready にはしない）
+  - `rebaseline: true` — 既存 tip を取引所残高で上書き append
   - `operator:` — 必須
   - `expected_hash:` — confirm 必須（dry-run の snapshot_hash）
 
@@ -103,8 +104,12 @@ defmodule Bitflyer.Release do
       opts
       |> Keyword.put(:dry_run?, Keyword.get(opts, :dry_run, Keyword.get(opts, :dry_run?, false)))
       |> Keyword.put(:confirm?, Keyword.get(opts, :confirm, Keyword.get(opts, :confirm?, false)))
+      |> Keyword.put(
+        :rebaseline?,
+        Keyword.get(opts, :rebaseline, Keyword.get(opts, :rebaseline?, false))
+      )
       |> Keyword.put_new(:expected_hash, Keyword.get(opts, :hash))
-      |> Keyword.drop([:dry_run, :confirm, :hash])
+      |> Keyword.drop([:dry_run, :confirm, :hash, :rebaseline])
 
     case Bitflyer.System.import_baseline(normalized) do
       {:ok, result} ->

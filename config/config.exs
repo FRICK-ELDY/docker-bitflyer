@@ -50,7 +50,13 @@ config :bitflyer, Bitflyer.Risk.OpenOrderPolicy,
   }
 
 # live 突合で必須の残高 baseline（内部 BalanceSnapshot が無いと Ready にしない）
-config :bitflyer, Bitflyer.Startup.Reconcile, required_balance_currencies: ["JPY", "BTC"]
+# amount 差分は Fill 合計 + 支払超過側の手数料許容だけで前進。増加は入金として halt。
+# 絶対床は Fill があるときの丸め専用。Fill が無い通貨では 0（1 JPY の入出金も halt）。
+# 20bps は実手数料の見積り上限。大口直後の帯域内出金は P1 #4（fee 記帳）まで区別できない。
+config :bitflyer, Bitflyer.Startup.Reconcile,
+  required_balance_currencies: ["JPY", "BTC"],
+  balance_fee_tolerance_bps: "20",
+  balance_fee_tolerance_abs: %{"JPY" => "1", "BTC" => "0.00000001"}
 
 config :bitflyer, Bitflyer.MarketData.Cache, default_max_age_ms: 5_000
 
@@ -177,6 +183,11 @@ config :logger, :default_formatter,
     :healthy,
     :kind,
     :currency,
+    :currencies,
+    :expected,
+    :actual,
+    :unexplained,
+    :allowance,
     :limit,
     :operator,
     :snapshot_hash,

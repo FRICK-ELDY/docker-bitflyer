@@ -343,6 +343,8 @@ defmodule Bitflyer.System do
 
   @doc """
   live 初回 BalanceSnapshot baseline の承認付き import（Ready にはしない）。
+
+  `rebaseline?: true` は既存 tip を取引所残高で上書き append する別経路。
   """
   def import_baseline(opts \\ []) do
     Bitflyer.Startup.Baseline.import(opts)

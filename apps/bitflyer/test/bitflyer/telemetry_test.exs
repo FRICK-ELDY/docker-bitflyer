@@ -70,6 +70,11 @@ defmodule Bitflyer.TelemetryTest do
     for key <- [
           :kind,
           :currency,
+          :currencies,
+          :expected,
+          :actual,
+          :unexplained,
+          :allowance,
           :limit,
           :operator,
           :snapshot_hash,
@@ -105,6 +110,10 @@ defmodule Bitflyer.TelemetryTest do
                kind: :position_mismatch,
                currency: "BTC",
                product_code: "FX_BTC_JPY",
+               expected: "950000",
+               actual: "950080",
+               unexplained: "80",
+               allowance: "100",
                api_key: "nope"
              })
 
@@ -112,6 +121,10 @@ defmodule Bitflyer.TelemetryTest do
     assert metadata.kind == :position_mismatch
     assert metadata.currency == "BTC"
     assert metadata.product_code == "FX_BTC_JPY"
+    assert metadata.expected == "950000"
+    assert metadata.actual == "950080"
+    assert metadata.unexplained == "80"
+    assert metadata.allowance == "100"
     refute Map.has_key?(metadata, :api_key)
   end
 end

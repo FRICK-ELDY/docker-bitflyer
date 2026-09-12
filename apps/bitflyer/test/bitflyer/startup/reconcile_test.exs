@@ -7,7 +7,7 @@ defmodule Bitflyer.Startup.ReconcileTest do
 
   alias Bitflyer.Readiness
   alias Bitflyer.Startup.{Reconcile, Reconciler}
-  alias Bitflyer.Trading.{BalanceSnapshot, Position, RiskState}
+  alias Bitflyer.Trading.{BalanceSnapshot, Fill, Position, RiskState}
 
   @jpy_amount Decimal.new("1000000")
   @btc_amount Decimal.new("0.5")
@@ -218,6 +218,36 @@ defmodule Bitflyer.Startup.ReconcileTest do
          ],
          open_orders: []
        }}
+    end
+
+    @impl true
+    def place_order(_request), do: {:error, :not_used_in_reconcile}
+  end
+
+  defmodule LiveBalancesExchange do
+    @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
+
+    @impl true
+    def fetch_reconcile_snapshot do
+      balances =
+        case Application.get_env(:bitflyer, :test_live_balance_queue) do
+          [head | tail] ->
+            Application.put_env(:bitflyer, :test_live_balance_queue, tail)
+            head
+
+          _ ->
+            Application.get_env(:bitflyer, :test_live_balances, [
+              %{
+                currency: "JPY",
+                amount: Decimal.new("1000000"),
+                available: Decimal.new("1000000")
+              },
+              %{currency: "BTC", amount: Decimal.new("0.5"), available: Decimal.new("0.5")}
+            ])
+        end
+
+      {:ok, %{positions: [], balances: balances, open_orders: []}}
     end
 
     @impl true
@@ -779,6 +809,188 @@ defmodule Bitflyer.Startup.ReconcileTest do
     assert Readiness.get() == :ready
   end
 
+  test "live fill then periodic reconcile and restart keep ready and advance tip" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, LiveBalancesExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_live_balances)
+      Application.delete_env(:bitflyer, :test_live_balance_queue)
+    end)
+
+    seed_live_balance_baseline!()
+    seed_live_spot_buy_fill!()
+
+    filled = [
+      %{currency: "JPY", amount: Decimal.new("950000"), available: Decimal.new("950000")},
+      %{currency: "BTC", amount: Decimal.new("0.51"), available: Decimal.new("0.51")}
+    ]
+
+    Application.put_env(:bitflyer, :test_live_balances, filled)
+
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: LiveBalancesExchange)
+    assert Reconciler.run_now() == :ok
+    assert Readiness.get() == :ready
+
+    assert {:ok, tips} = BalanceSnapshot.latest_tips(:live)
+    assert Decimal.eq?(Enum.find(tips, &(&1.currency == "JPY")).amount, Decimal.new("950000"))
+    assert Decimal.eq?(Enum.find(tips, &(&1.currency == "BTC")).amount, Decimal.new("0.51"))
+
+    # 再起動相当: 同じ取引所残高でもう一度突合しても Ready を維持
+    assert Readiness.mark_not_ready() == :ok
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: LiveBalancesExchange)
+    assert Reconciler.run_now() == :ok
+    assert Readiness.get() == :ready
+  end
+
+  test "live unexplained deposit after fill advances then halt" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, LiveBalancesExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_live_balances)
+      Application.delete_env(:bitflyer, :test_live_balance_queue)
+    end)
+
+    seed_live_balance_baseline!()
+    seed_live_spot_buy_fill!()
+
+    Application.put_env(:bitflyer, :test_live_balances, [
+      %{currency: "JPY", amount: Decimal.new("950000"), available: Decimal.new("950000")},
+      %{currency: "BTC", amount: Decimal.new("0.51"), available: Decimal.new("0.51")}
+    ])
+
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: LiveBalancesExchange)
+
+    Application.put_env(:bitflyer, :test_live_balances, [
+      %{currency: "JPY", amount: Decimal.new("1050000"), available: Decimal.new("1050000")},
+      %{currency: "BTC", amount: Decimal.new("0.51"), available: Decimal.new("0.51")}
+    ])
+
+    assert {:error, :reconcile_mismatch, %{kind: :balance_mismatch, currency: "JPY"}} =
+             Reconcile.run(trade_mode: :live, exchange: LiveBalancesExchange)
+  end
+
+  test "live in-band deposit after fill is balance_mismatch" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, LiveBalancesExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_live_balances)
+      Application.delete_env(:bitflyer, :test_live_balance_queue)
+    end)
+
+    seed_live_balance_baseline!()
+    seed_live_spot_buy_fill!()
+
+    # expected JPY 950_000. +80 is inside 20bps but is an increase.
+    Application.put_env(:bitflyer, :test_live_balances, [
+      %{currency: "JPY", amount: Decimal.new("950080"), available: Decimal.new("950080")},
+      %{currency: "BTC", amount: Decimal.new("0.51"), available: Decimal.new("0.51")}
+    ])
+
+    assert {:error, :reconcile_mismatch,
+            %{kind: :balance_mismatch, currency: "JPY", unexplained: "80"}} =
+             Reconcile.run(trade_mode: :live, exchange: LiveBalancesExchange)
+  end
+
+  test "live getbalance lag after fill refetches and advances" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, LiveBalancesExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_live_balances)
+      Application.delete_env(:bitflyer, :test_live_balance_queue)
+    end)
+
+    seed_live_balance_baseline!()
+    seed_live_spot_buy_fill!()
+
+    stale = [
+      %{currency: "JPY", amount: Decimal.new("1000000"), available: Decimal.new("1000000")},
+      %{currency: "BTC", amount: Decimal.new("0.5"), available: Decimal.new("0.5")}
+    ]
+
+    filled = [
+      %{currency: "JPY", amount: Decimal.new("950000"), available: Decimal.new("950000")},
+      %{currency: "BTC", amount: Decimal.new("0.51"), available: Decimal.new("0.51")}
+    ]
+
+    Application.put_env(:bitflyer, :test_live_balance_queue, [stale, filled])
+
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: LiveBalancesExchange)
+    assert {:ok, tips} = BalanceSnapshot.latest_tips(:live)
+    assert Decimal.eq?(Enum.find(tips, &(&1.currency == "JPY")).amount, Decimal.new("950000"))
+  end
+
+  test "live getbalance still stale after refetch is balance_mismatch" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, LiveBalancesExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_live_balances)
+      Application.delete_env(:bitflyer, :test_live_balance_queue)
+    end)
+
+    seed_live_balance_baseline!()
+    seed_live_spot_buy_fill!()
+
+    stale = [
+      %{currency: "JPY", amount: Decimal.new("1000000"), available: Decimal.new("1000000")},
+      %{currency: "BTC", amount: Decimal.new("0.5"), available: Decimal.new("0.5")}
+    ]
+
+    Application.put_env(:bitflyer, :test_live_balance_queue, [stale, stale])
+
+    assert {:error, :reconcile_mismatch,
+            %{kind: :balance_mismatch, reason: :balance_exchange_lag, currency: currency}} =
+             Reconcile.run(trade_mode: :live, exchange: LiveBalancesExchange)
+
+    assert currency in ["JPY", "BTC"]
+  end
+
+  test "live available hold without amount change still reconciles" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+    Application.put_env(:bitflyer, :trade_mode, :live)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.delete_env(:bitflyer, :test_live_balances)
+      Application.delete_env(:bitflyer, :test_live_balance_queue)
+    end)
+
+    seed_live_balance_baseline!()
+
+    Application.put_env(:bitflyer, :test_live_balances, [
+      %{currency: "JPY", amount: Decimal.new("1000000"), available: Decimal.new("950000")},
+      %{currency: "BTC", amount: Decimal.new("0.5"), available: Decimal.new("0.5")}
+    ])
+
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: LiveBalancesExchange)
+    assert {:ok, tips} = BalanceSnapshot.latest_tips(:live)
+    assert Decimal.eq?(Enum.find(tips, &(&1.currency == "JPY")).available, Decimal.new("950000"))
+  end
+
   test "halted readiness is not auto-cleared on successful reconcile" do
     assert Readiness.halt(:reconcile_mismatch) == :ok
     assert {:ok, _} = Reconcile.run(trade_mode: :dry_run)
@@ -835,8 +1047,32 @@ defmodule Bitflyer.Startup.ReconcileTest do
     assert Readiness.get() == {:halted, :clock_skew}
   end
 
+  defp seed_live_spot_buy_fill! do
+    filled_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, _} =
+             Fill
+             |> Ash.Changeset.for_create(:create, %{
+               internal_order_id: "live-bal-fill-1",
+               exchange_execution_id: "exec-live-bal-1",
+               product_code: "BTC_JPY",
+               side: :buy,
+               size: Decimal.new("0.01"),
+               price: Decimal.new("5000000"),
+               realized_pnl: Decimal.new(0),
+               trade_mode: :live,
+               filled_at: filled_at
+             })
+             |> Ash.create()
+
+    :ok
+  end
+
   defp seed_live_balance_baseline! do
-    captured_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    captured_at =
+      DateTime.utc_now()
+      |> DateTime.add(-60, :second)
+      |> DateTime.truncate(:microsecond)
 
     for {currency, amount} <- [{"JPY", @jpy_amount}, {"BTC", @btc_amount}] do
       assert {:ok, _} =

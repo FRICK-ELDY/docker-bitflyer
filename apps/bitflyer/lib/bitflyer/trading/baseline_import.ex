@@ -1,8 +1,9 @@
 defmodule Bitflyer.Trading.BaselineImport do
   @moduledoc """
-  live 初回 BalanceSnapshot baseline の承認付き import 監査行。
+  live 初回 BalanceSnapshot baseline と承認付き rebaseline の監査行。
 
   snapshot hash・操作者・取り込み時点の残高 payload を残す。
+  payload["kind"] は `"import"` または `"rebaseline"`。
   Ready にはしない（通常突合成功時のみ Ready）。
   """
   use Ash.Resource,

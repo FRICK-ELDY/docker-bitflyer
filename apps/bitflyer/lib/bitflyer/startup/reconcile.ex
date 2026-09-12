@@ -10,6 +10,11 @@ defmodule Bitflyer.Startup.Reconcile do
   BalanceSnapshot が無ければ `balance_baseline_missing` で失敗する。
   空の内部残高リストだけでは compare 成功にしない。
 
+  残高 amount は tip との厳密一致ではなく、直近 tip 以降の spot Fill 合計と
+  **支払超過側** の手数料許容だけで説明できる差分を許す。増加（入金）は幅内でも
+  `balance_mismatch`。説明できたら取引所 `getbalance` から新しい tip を append する
+  （`LiveBalance`）。Fill 記帳直後に `getbalance` が未反映なら 1 回だけ再取得する。
+
   取引所建玉は `{product_code, side}` で両建て並存しうるが、内部 Position は
   銘柄×モードのネット1行。突合前に外部を net（buy−sell）へ正規化する。
   不正な side / 平均単価は mismatch。両建て net 時は side+size を必須比較し、
@@ -20,6 +25,7 @@ defmodule Bitflyer.Startup.Reconcile do
 
   require Ash.Query
 
+  alias Bitflyer.Startup.LiveBalance
   alias Bitflyer.Trading.{BalanceSnapshot, Order, Position, Product, RiskState}
   alias Bitflyer.Exchange.Permissions
   alias Bitflyer.MarketData
@@ -146,13 +152,14 @@ defmodule Bitflyer.Startup.Reconcile do
   end
 
   defp reconcile_mode(%{trade_mode: :live} = _internal, exchange, required, opts) do
-    # 突合前に権限・時計 → 約定を建玉へ反映（残高は getbalance 突合の正本。fill では書き換えない）
+    # 突合前に権限・時計 → 約定を建玉へ反映（残高 tip は explain 成功後に getbalance から前進）
     with :ok <- assert_safe_permissions(exchange, opts),
          :ok <- assert_clock_skew(opts),
          :ok <- sync_live_fills(exchange),
          {:ok, internal} <- restore(:live),
          {:ok, snapshot} <- fetch_live_snapshot(exchange),
-         :ok <- compare_with_exchange(internal, snapshot, required) do
+         {:ok, snapshot} <-
+           compare_or_refetch_lag(internal, snapshot, required, opts, exchange) do
       {:ok, Map.put(internal, :exchange_balances, exchange_balance_map(snapshot))}
     end
   end
@@ -271,17 +278,67 @@ defmodule Bitflyer.Startup.Reconcile do
     end
   end
 
-  defp compare_with_exchange(internal, snapshot, required) do
+  defp compare_or_refetch_lag(internal, snapshot, required, opts, exchange) do
+    retries = Keyword.get(opts, :balance_lag_retries, 1)
+
+    case compare_with_exchange(internal, snapshot, required, opts) do
+      :ok ->
+        {:ok, snapshot}
+
+      {:error, :reconcile_mismatch, %{kind: :balance_exchange_lag} = meta} when retries > 0 ->
+        Bitflyer.Telemetry.log(
+          :info,
+          "live getbalance lagged fills; refetching once",
+          Map.merge(%{trade_mode: :live}, Map.take(meta, [:currency, :kind, :expected, :actual]))
+        )
+
+        with {:ok, snapshot2} <- fetch_live_snapshot(exchange) do
+          compare_or_refetch_lag(
+            internal,
+            snapshot2,
+            required,
+            Keyword.put(opts, :balance_lag_retries, retries - 1),
+            exchange
+          )
+        end
+
+      {:error, :reconcile_mismatch, %{kind: :balance_exchange_lag} = meta} ->
+        {:error, :reconcile_mismatch,
+         meta
+         |> Map.put(:kind, :balance_mismatch)
+         |> Map.put(:reason, :balance_exchange_lag)}
+
+      other ->
+        other
+    end
+  end
+
+  defp compare_with_exchange(internal, snapshot, required, opts) do
+    balances = Map.get(snapshot, :balances, [])
+
     with :ok <- compare_positions(internal.positions, Map.get(snapshot, :positions, [])),
-         :ok <-
-           compare_balances(
+         {:ok, plan} <-
+           LiveBalance.explain(
              internal.balance_snapshots,
-             Map.get(snapshot, :balances, []),
-             required
+             balances,
+             required,
+             live_balance_opts(opts)
            ),
-         :ok <- compare_open_orders(internal.open_orders, Map.get(snapshot, :open_orders, [])) do
+         :ok <- compare_open_orders(internal.open_orders, Map.get(snapshot, :open_orders, [])),
+         :ok <- LiveBalance.advance(plan, opts) do
       :ok
     end
+  end
+
+  defp live_balance_opts(opts) do
+    opts
+    |> Keyword.take([
+      :fills,
+      :now,
+      :fee_tolerance_bps,
+      :fee_tolerance_abs
+    ])
+    |> Keyword.put(:trade_mode, :live)
   end
 
   defp compare_positions(internal, external) do
@@ -484,43 +541,6 @@ defmodule Bitflyer.Startup.Reconcile do
     end
   end
 
-  defp compare_balances(internal_snaps, external, required) do
-    # 追跡中の通貨だけ突合する（取引所側のダスト通貨で誤停止しない）。
-    # ただし必須通貨の内部 baseline が無ければ空リストでも成功にしない。
-    internal_map = Map.new(internal_snaps, &{balance_currency(&1), &1})
-    external_map = Map.new(external, &{balance_currency(&1), &1})
-
-    with :ok <- ensure_balance_baseline(internal_map, required) do
-      Enum.reduce_while(Map.keys(internal_map), :ok, fn currency, :ok ->
-        case Map.fetch(external_map, currency) do
-          :error ->
-            {:halt,
-             {:error, :reconcile_mismatch, %{kind: :balance_missing_exchange, currency: currency}}}
-
-          {:ok, right} ->
-            left = Map.fetch!(internal_map, currency)
-
-            if balance_match?(left, right) do
-              {:cont, :ok}
-            else
-              {:halt,
-               {:error, :reconcile_mismatch, %{kind: :balance_mismatch, currency: currency}}}
-            end
-        end
-      end)
-    end
-  end
-
-  defp ensure_balance_baseline(internal_map, required) when is_list(required) do
-    case Enum.find(required, fn currency -> not Map.has_key?(internal_map, currency) end) do
-      nil ->
-        :ok
-
-      currency ->
-        {:error, :reconcile_mismatch, %{kind: :balance_baseline_missing, currency: currency}}
-    end
-  end
-
   defp balance_currency(balance), do: Map.fetch!(balance, :currency)
 
   defp exchange_balance_map(%{balances: balances}) when is_list(balances) do
@@ -532,20 +552,6 @@ defmodule Bitflyer.Startup.Reconcile do
   end
 
   defp exchange_balance_map(_), do: %{}
-
-  defp balance_match?(left, right) do
-    left_amount = Map.get(left, :amount)
-    right_amount = Map.get(right, :amount)
-    left_available = Map.get(left, :available)
-    right_available = Map.get(right, :available)
-
-    match?(%Decimal{}, left_amount) and
-      match?(%Decimal{}, right_amount) and
-      match?(%Decimal{}, left_available) and
-      match?(%Decimal{}, right_available) and
-      Decimal.eq?(left_amount, right_amount) and
-      Decimal.eq?(left_available, right_available)
-  end
 
   defp compare_open_orders(internal, external) do
     internal_without_id = Enum.filter(internal, &is_nil(order_exchange_id(&1)))

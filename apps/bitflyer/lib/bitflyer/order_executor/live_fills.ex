@@ -3,7 +3,8 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
   live 注文の約定を取引所照会から内部建玉へ反映する。
 
   - 建玉: `Positions.apply_fill` で **execution 単位**に反映（`exchange_execution_id` 付き）
-  - 残高: **触らない**。live の残高正本は `getbalance` 突合（紙の `Balances.apply_fill` は FX と矛盾する）
+  - 残高: **触らない**。live の残高正本は突合成功時の `getbalance` → `LiveBalance` 前進
+    （紙の `Balances.apply_fill` は FX と矛盾する）
   - 発注認可前（`System.submit_order`）・発注後・取消後・定期突合前に呼ぶ
   - `sync_open_orders/1` は `LiveFills.Gate` で最小間隔＋単一ノード直列化（認可前の連打抑制）。
     突合は `:force`
