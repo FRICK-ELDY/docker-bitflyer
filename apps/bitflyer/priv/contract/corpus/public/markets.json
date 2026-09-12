@@ -1,0 +1,11 @@
+[
+  {"product_code": "BTC_JPY", "market_type": "Spot"},
+  {"product_code": "XRP_JPY", "market_type": "Spot"},
+  {"product_code": "ETH_JPY", "market_type": "Spot"},
+  {"product_code": "XLM_JPY", "market_type": "Spot"},
+  {"product_code": "MONA_JPY", "market_type": "Spot"},
+  {"product_code": "ELF_JPY", "market_type": "Spot"},
+  {"product_code": "ETH_BTC", "market_type": "Spot"},
+  {"product_code": "BCH_BTC", "market_type": "Spot"},
+  {"product_code": "FX_BTC_JPY", "market_type": "FX"}
+]

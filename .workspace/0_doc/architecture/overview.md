@@ -92,6 +92,7 @@ flowchart LR
 | observe（ログ・メトリクス） | `apps/bitflyer` |
 | observe（画面） | `apps/ui` |
 | observe（Discord 通知） | `apps/bitflyer` 内アダプタ（`Bitflyer.Observe.Discord`）。Incoming Webhook。Bot / 第3アプリは作らない |
+| observe（API contract） | `Bitflyer.Observe.Contract`。公開 GET と匿名 corpus。UI は触らない。Mix は `System.contract_probe/1` |
 
 Ash は永続状態（注文、建玉、残高スナップショット、リスク停止状態、パラメータ履歴）にだけ使う。板・Ticker・判定ループは ETS または GenServer に置き、ホットパスから Resource を呼ばない。価格と数量は Decimal にする。
 
@@ -164,6 +165,7 @@ strategy から API を直接叩かない。market-data の遅延や欠損があ
 - 本番では `Telemetry.Metrics.ConsoleReporter` を既定起動（`UI_METRICS_CONSOLE` で制御）。イベント毎に stdout へ出すが tick / Phoenix / VM は除外
 - Discord 通知は observe のアダプタ（`Bitflyer.Observe.Discord`）。`DISCORD_WEBHOOK_URL`（Incoming Webhook）が有るときだけ、halt / reconcile_mismatch / disconnect と起動直後＋定期 HEARTBEAT を送る。HTTP は Task。未設定・送信失敗でも発注経路は止めない。Webhook URL はログ・メッセージ本文に出さない
 - 同一ホスト死の検知は取引ホストの外。別ホストが `GET /health/ready` を pull し、ホスト exporter を scrape する（`architecture/env/prod.md`）
+- 公開 API の意味論は匿名 corpus（`priv/contract/corpus`）と人手の `mix bitflyer.contract`。CI は実ホストを叩かない。手順は `architecture/env/game-day.md`
 
 - コンテナは `restart: unless-stopped` 相当で自動再起動する
 - ヘルスチェックは「プロセス生存」だけでなく「データ鮮度」と「取引所との同期」を見る

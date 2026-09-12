@@ -381,5 +381,7 @@ docker compose -f compose.prod.yaml --env-file .env.prod exec app \
 - [ ] 別ホストが `/health/ready` を 60s で pull し、非 ready / 到達不能でアラートする
 - [ ] ホスト exporter（Linux 9100 / Windows 9182）を別ホストが scrape する
 - [ ] `DISCORD_WEBHOOK_URL` を置き、起動直後の HEARTBEAT と 2 間隔欠落を人が検知できる
-- [ ] 最小ロット・厳しい risk 上限
+- [ ] `mix bitflyer.contract`（公開 GET）が緑。必要なら `--private`（署名 GET のみ。発注しない）
+- [ ] [game-day.md](./game-day.md) の paper 障害注入と Stage 記録がある
+- [ ] 最小ロット・厳しい risk 上限（Stage 3 以降は **P0 完了後**。現状は live 実発注禁止）
 - [ ] `BITFLYER_LIVE_CONFIRM` に UTC 当日を明示したうえで `live` に切り替える

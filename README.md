@@ -37,6 +37,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | observe — health | implemented | `/health/live`・`/health/ready`・`/health`。外部監視は別ホストから ready を pull（[prod.md](.workspace/0_doc/architecture/env/prod.md)） |
 | observe — LiveDashboard | implemented | BasicAuth 配下 `/ops/dashboard`（prod/dev）。Ecto/RequestLogger オフ |
 | UI StatusLive | implemented | 発注可否・建玉・未約定・当日損益・halt 復帰手順・Feed・鮮度・モード色分け。BasicAuth 付き kill / resume / reconcile |
+| observe — 実 API contract / Game Day | implemented | 匿名公開 corpus の意味論（`mix bitflyer.contract --corpus`）。公開 GET 探針は人手。`--private` は署名 GET のみ（発注しない）。手順は [game-day.md](.workspace/0_doc/architecture/env/game-day.md) |
 | CI（`mix precommit` / GitHub Actions） | implemented | PR と `main`。`Dockerfile.prod` ビルド検証（push なし）も実行 |
 | deps audit（`mix deps.audit`） | implemented | ゲート外の可視化。CI artifact。Hex のみ（GitHub 依存は対象外） |
 | CD（GHCR push） | implemented | `v*` / `workflow_dispatch`。**最新 CI（workflow 全体）success の SHA のみ**。digest を Compose に固定 |
@@ -146,10 +147,10 @@ Hex の既知 advisory が対象。`heroicons` / `daisyui` など GitHub タグ�
 
 | 取得できる情報 | 主なパス | 本リポ |
 | --- | --- | --- |
-| マーケット一覧（`product_code` / 現物・CFD） | `GET /v1/markets` | — |
+| マーケット一覧（`product_code` / 現物・CFD） | `GET /v1/markets`（契約は `getmarkets`） | contract corpus |
 | 板（bids / asks / mid） | `GET /v1/board` | — |
-| Ticker（LTP・出来高など） | `GET /v1/ticker` | market-data（gap-fill） |
-| 約定履歴（市場） | `GET /v1/executions` | — |
+| Ticker（LTP・出来高など） | `GET /v1/ticker` | market-data（gap-fill）+ contract |
+| 約定履歴（市場） | `GET /v1/executions`（契約は `getexecutions`） | contract corpus |
 | 板の状態（通常 / BUSY 等） | `GET /v1/getboardstate` | — |
 | 取引所の稼働状態 | `GET /v1/gethealth` | — |
 | ファンディングレート | `GET /v1/getfundingrate` | — |

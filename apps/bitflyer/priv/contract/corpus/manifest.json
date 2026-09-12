@@ -1,0 +1,14 @@
+{
+  "source": "https://api.bitflyer.com public GET",
+  "captured_at": "2026-09-12T07:01:33Z",
+  "product_code": "BTC_JPY",
+  "anonymized": [
+    "buy_child_order_acceptance_id",
+    "sell_child_order_acceptance_id"
+  ],
+  "files": [
+    "public/ticker_btc_jpy.json",
+    "public/executions_btc_jpy.json",
+    "public/markets.json"
+  ]
+}
