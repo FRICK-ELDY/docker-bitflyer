@@ -41,23 +41,24 @@ defmodule Bitflyer.Risk.DailyLoss do
   end
 
   @doc """
-  当日損失を返す。未同期・barrier 中・日付未再集計は `{:error, :unsynced}`。
+  当日損失・実現 net・equity ピーク（HWM）を返す。
+  未同期・barrier 中・日付未再集計は `{:error, :unsynced}`。
   """
-  @spec get(trade_mode(), keyword()) :: {:ok, Decimal.t()} | {:error, :unsynced}
-  def get(trade_mode, opts \\ []) when trade_mode in @trade_modes do
+  @spec snapshot(trade_mode(), keyword()) ::
+          {:ok, %{loss: Decimal.t(), net: Decimal.t(), peak: Decimal.t()}} | {:error, :unsynced}
+  def snapshot(trade_mode, opts \\ []) when trade_mode in @trade_modes do
     server = Keyword.get(opts, :server, @name)
     now = Keyword.get_lazy(opts, :now_dt, &DateTime.utc_now/0)
 
-    case GenServer.call(server, {:peek, trade_mode, now}) do
-      {:ok, loss} ->
-        {:ok, loss}
+    case GenServer.call(server, {:peek_snapshot, trade_mode, now}) do
+      {:ok, loss, net, peak} ->
+        {:ok, %{loss: loss, net: net, peak: peak}}
 
       :stale_day ->
-        # 日付跨ぎは安全 reload（barrier 中なら unsynced のまま）
         case reload(Keyword.merge(opts, trade_mode: trade_mode, now_dt: now)) do
           :ok ->
-            case GenServer.call(server, {:peek, trade_mode, now}) do
-              {:ok, loss} -> {:ok, loss}
+            case GenServer.call(server, {:peek_snapshot, trade_mode, now}) do
+              {:ok, loss, net, peak} -> {:ok, %{loss: loss, net: net, peak: peak}}
               _ -> {:error, :unsynced}
             end
 
@@ -67,6 +68,17 @@ defmodule Bitflyer.Risk.DailyLoss do
 
       :unsynced ->
         {:error, :unsynced}
+    end
+  end
+
+  @doc """
+  当日損失を返す。未同期・barrier 中・日付未再集計は `{:error, :unsynced}`。
+  """
+  @spec get(trade_mode(), keyword()) :: {:ok, Decimal.t()} | {:error, :unsynced}
+  def get(trade_mode, opts \\ []) when trade_mode in @trade_modes do
+    case snapshot(trade_mode, opts) do
+      {:ok, %{loss: loss}} -> {:ok, loss}
+      {:error, :unsynced} -> {:error, :unsynced}
     end
   end
 
@@ -157,13 +169,34 @@ defmodule Bitflyer.Risk.DailyLoss do
   end
 
   @doc """
-  テスト用。Fill を経由せず当日損失を直接置く。
+  テスト用。Fill を経由せず当日損失を直接置く（peak は 0 に戻す）。
   """
   @spec seed_loss(trade_mode(), Decimal.t(), keyword()) :: :ok
   def seed_loss(trade_mode, %Decimal{} = loss, opts \\ []) when trade_mode in @trade_modes do
     server = Keyword.get(opts, :server, @name)
     now = Keyword.get_lazy(opts, :now_dt, &DateTime.utc_now/0)
     GenServer.call(server, {:seed_loss, trade_mode, loss, now})
+  end
+
+  @doc """
+  テスト用。Fill を経由せず当日実現 net を直接置く（peak は維持）。
+  """
+  @spec seed_net(trade_mode(), Decimal.t(), keyword()) :: :ok
+  def seed_net(trade_mode, %Decimal{} = net, opts \\ []) when trade_mode in @trade_modes do
+    server = Keyword.get(opts, :server, @name)
+    now = Keyword.get_lazy(opts, :now_dt, &DateTime.utc_now/0)
+    GenServer.call(server, {:seed_net, trade_mode, net, now})
+  end
+
+  @doc """
+  当日 equity PnL のピーク（HWM）を上げる。日始は 0。負のピークは持たない。
+  """
+  @spec record_peak(trade_mode(), Decimal.t(), keyword()) :: {:ok, Decimal.t()}
+  def record_peak(trade_mode, %Decimal{} = equity_pnl, opts \\ [])
+      when trade_mode in @trade_modes do
+    server = Keyword.get(opts, :server, @name)
+    now = Keyword.get_lazy(opts, :now_dt, &DateTime.utc_now/0)
+    GenServer.call(server, {:record_peak, trade_mode, equity_pnl, now})
   end
 
   @doc """
@@ -184,14 +217,17 @@ defmodule Bitflyer.Risk.DailyLoss do
     case load_modes(@trade_modes, now) do
       {:ok, rows} ->
         Enum.each(rows, fn {mode, day, loss, net, true} ->
-          insert_row(table, {mode, day, loss, net, true, 0, 0})
+          insert_row(table, {mode, day, loss, net, true, 0, 0, zero()})
         end)
 
         {:ok, table}
 
       {:error, reason} ->
         Enum.each(@trade_modes, fn mode ->
-          insert_row(table, {mode, trading_day(now), Decimal.new(0), Decimal.new(0), false, 0, 0})
+          insert_row(
+            table,
+            {mode, trading_day(now), Decimal.new(0), Decimal.new(0), false, 0, 0, zero()}
+          )
         end)
 
         Bitflyer.Telemetry.log(:error, "daily loss init load failed; marked unsynced", %{
@@ -203,15 +239,15 @@ defmodule Bitflyer.Risk.DailyLoss do
   end
 
   @impl true
-  def handle_call({:peek, trade_mode, now}, _from, table) do
+  def handle_call({:peek_snapshot, trade_mode, now}, _from, table) do
     day = trading_day(now)
 
     reply =
       case :ets.lookup(table, trade_mode) do
-        [{^trade_mode, ^day, loss, _net, true, 0, _gen}] ->
-          {:ok, loss}
+        [{^trade_mode, ^day, loss, net, true, 0, _gen, peak}] ->
+          {:ok, loss, net, peak}
 
-        [{^trade_mode, other_day, _loss, _net, true, 0, _gen}] when other_day != day ->
+        [{^trade_mode, other_day, _loss, _net, true, 0, _gen, _peak}] when other_day != day ->
           :stale_day
 
         _ ->
@@ -222,17 +258,17 @@ defmodule Bitflyer.Risk.DailyLoss do
   end
 
   def handle_call({:invalidate, trade_mode}, _from, table) do
-    {day, loss, net, _synced, barrier, gen} = read_mode(table, trade_mode)
+    {day, loss, net, _synced, barrier, gen, peak} = read_mode(table, trade_mode)
     new_gen = gen + 1
     new_barrier = barrier + 1
-    insert_row(table, {trade_mode, day, loss, net, false, new_barrier, new_gen})
+    insert_row(table, {trade_mode, day, loss, net, false, new_barrier, new_gen, peak})
     {:reply, {:ok, new_gen}, table}
   end
 
   def handle_call({:snapshot_generations, modes}, _from, table) do
     gens =
       Map.new(modes, fn mode ->
-        {_day, _loss, _net, _synced, _barrier, gen} = read_mode(table, mode)
+        {_day, _loss, _net, _synced, _barrier, gen, _peak} = read_mode(table, mode)
         {mode, gen}
       end)
 
@@ -262,8 +298,8 @@ defmodule Bitflyer.Risk.DailyLoss do
 
   def handle_call({:mark_unsynced_keep_barrier, modes}, _from, table) do
     Enum.each(modes, fn mode ->
-      {day, loss, net, _synced, barrier, gen} = read_mode(table, mode)
-      insert_row(table, {mode, day, loss, net, false, barrier, gen})
+      {day, loss, net, _synced, barrier, gen, peak} = read_mode(table, mode)
+      insert_row(table, {mode, day, loss, net, false, barrier, gen, peak})
     end)
 
     {:reply, :ok, table}
@@ -273,7 +309,7 @@ defmodule Bitflyer.Risk.DailyLoss do
     day = trading_day(now)
 
     Enum.each(@trade_modes, fn mode ->
-      insert_row(table, {mode, day, Decimal.new(0), Decimal.new(0), true, 0, 0})
+      insert_row(table, {mode, day, Decimal.new(0), Decimal.new(0), true, 0, 0, zero()})
     end)
 
     {:reply, :ok, table}
@@ -281,8 +317,8 @@ defmodule Bitflyer.Risk.DailyLoss do
 
   def handle_call(:mark_unsynced, _from, table) do
     Enum.each(@trade_modes, fn mode ->
-      {day, loss, net, _synced, barrier, gen} = read_mode(table, mode)
-      insert_row(table, {mode, day, loss, net, false, barrier, gen})
+      {day, loss, net, _synced, barrier, gen, peak} = read_mode(table, mode)
+      insert_row(table, {mode, day, loss, net, false, barrier, gen, peak})
     end)
 
     {:reply, :ok, table}
@@ -291,9 +327,30 @@ defmodule Bitflyer.Risk.DailyLoss do
   def handle_call({:seed_loss, trade_mode, loss, now}, _from, table) do
     day = trading_day(now)
     net = Decimal.negate(loss)
-    {_d, _l, _n, _s, _b, gen} = read_mode(table, trade_mode)
-    insert_row(table, {trade_mode, day, loss, net, true, 0, gen})
+    {_d, _l, _n, _s, _b, gen, _peak} = read_mode(table, trade_mode)
+    insert_row(table, {trade_mode, day, loss, net, true, 0, gen, zero()})
     {:reply, :ok, table}
+  end
+
+  def handle_call({:seed_net, trade_mode, net, now}, _from, table) do
+    day = trading_day(now)
+    loss = loss_from_net(net)
+    {_d, _l, _n, _s, _b, gen, peak} = read_mode(table, trade_mode)
+    insert_row(table, {trade_mode, day, loss, net, true, 0, gen, peak})
+    {:reply, :ok, table}
+  end
+
+  def handle_call({:record_peak, trade_mode, equity_pnl, now}, _from, table) do
+    day = trading_day(now)
+    {row_day, loss, net, synced, barrier, gen, peak} = read_mode(table, trade_mode)
+    base = if row_day == day, do: peak, else: zero()
+    new_peak = equity_pnl |> Decimal.max(base) |> Decimal.max(zero())
+
+    if row_day == day do
+      insert_row(table, {trade_mode, row_day, loss, net, synced, barrier, gen, new_peak})
+    end
+
+    {:reply, {:ok, new_peak}, table}
   end
 
   defp apply_one(table, mode, day, loss, net, load_gen, true = _force?, release?) do
@@ -302,25 +359,30 @@ defmodule Bitflyer.Risk.DailyLoss do
   end
 
   defp apply_one(table, mode, day, loss, net, load_gen, false, true = _release?) do
-    {old_day, old_loss, old_net, _synced, barrier, gen} = read_mode(table, mode)
+    {old_day, old_loss, old_net, _synced, barrier, gen, peak} = read_mode(table, mode)
 
     cond do
       gen != load_gen ->
         # 後続 invalidate で世代が進んだ。自分の barrier だけ返して破棄。
         new_barrier = max(barrier - 1, 0)
-        insert_row(table, {mode, old_day, old_loss, old_net, false, new_barrier, gen})
+        insert_row(table, {mode, old_day, old_loss, old_net, false, new_barrier, gen, peak})
         :contended
 
       true ->
         new_barrier = max(barrier - 1, 0)
         synced? = new_barrier == 0
-        insert_row(table, {mode, day, loss, net, synced?, new_barrier, gen})
+
+        insert_row(
+          table,
+          {mode, day, loss, net, synced?, new_barrier, gen, carry_peak(old_day, day, peak)}
+        )
+
         if synced?, do: :ok, else: :deferred
     end
   end
 
   defp apply_one(table, mode, day, loss, net, load_gen, false, false) do
-    {_d, _l, _n, _synced, barrier, gen} = read_mode(table, mode)
+    {old_day, _l, _n, _synced, barrier, gen, peak} = read_mode(table, mode)
 
     cond do
       barrier > 0 ->
@@ -331,24 +393,29 @@ defmodule Bitflyer.Risk.DailyLoss do
         :deferred
 
       true ->
-        insert_row(table, {mode, day, loss, net, true, 0, gen})
+        insert_row(table, {mode, day, loss, net, true, 0, gen, carry_peak(old_day, day, peak)})
         :ok
     end
   end
 
   defp read_mode(table, trade_mode) do
     case :ets.lookup(table, trade_mode) do
-      [{^trade_mode, day, loss, net, synced, barrier, gen}] ->
-        {day, loss, net, synced, barrier, gen}
+      [{^trade_mode, day, loss, net, synced, barrier, gen, peak}] ->
+        {day, loss, net, synced, barrier, gen, peak}
 
       [] ->
-        {trading_day(DateTime.utc_now()), Decimal.new(0), Decimal.new(0), false, 0, 0}
+        {trading_day(DateTime.utc_now()), Decimal.new(0), Decimal.new(0), false, 0, 0, zero()}
     end
   end
 
-  defp insert_row(table, {mode, day, loss, net, synced, barrier, gen}) do
-    true = :ets.insert(table, {mode, day, loss, net, synced, barrier, gen})
+  defp insert_row(table, {mode, day, loss, net, synced, barrier, gen, peak}) do
+    true = :ets.insert(table, {mode, day, loss, net, synced, barrier, gen, peak})
   end
+
+  defp carry_peak(old_day, day, peak) when old_day == day, do: peak
+  defp carry_peak(_old_day, _day, _peak), do: zero()
+
+  defp zero, do: Decimal.new(0)
 
   defp ensure_table(table) when is_atom(table) do
     :ets.new(table, [:named_table, :protected, :set, read_concurrency: true])

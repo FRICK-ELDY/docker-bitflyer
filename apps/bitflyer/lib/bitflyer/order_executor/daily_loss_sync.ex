@@ -27,6 +27,7 @@ defmodule Bitflyer.OrderExecutor.DailyLossSync do
 
     case result do
       {:ok, _} = ok ->
+        _ = Bitflyer.Risk.Equity.enforce(trade_mode: trade_mode)
         ok
 
       {:error, _, _} = error ->

@@ -13,6 +13,7 @@ defmodule Bitflyer.Config.LiveSafety do
     {"BITFLYER_MAX_ORDER_SIZE", :max_order_size, :positive_decimal},
     {"BITFLYER_MAX_POSITION_SIZE", :max_position_size, :positive_decimal},
     {"BITFLYER_MAX_DAILY_LOSS", :max_daily_loss, :positive_decimal},
+    {"BITFLYER_MAX_DAILY_DRAWDOWN_JPY", :max_daily_drawdown, :positive_decimal},
     {"BITFLYER_MAX_ORDERS_PER_MINUTE", :max_orders_per_minute, :non_neg_integer},
     {"BITFLYER_MAX_PRICE_DEVIATION_PCT", :max_price_deviation_pct, :positive_decimal}
   ]
@@ -161,7 +162,7 @@ defmodule Bitflyer.Config.LiveSafety do
     raise ArgumentError, """
     #{env_key} is required when TRADE_MODE=live.
 
-    Development Risk defaults (e.g. 1 BTC order / 5 BTC position / 100000 JPY daily loss)
+    Development Risk defaults (e.g. 1 BTC order / 5 BTC position / 100000 JPY daily loss/drawdown)
     must not be used for live. Set live-specific limits explicitly.
     """
   end

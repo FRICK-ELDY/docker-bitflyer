@@ -72,6 +72,7 @@ defmodule Bitflyer.Startup.Reconciler do
     state =
       state
       |> then(&apply_result(run_reconcile(&1), &1))
+      |> maybe_enforce_drawdown()
       |> Map.put(:booted?, true)
       |> schedule_periodic()
 
@@ -81,7 +82,12 @@ defmodule Bitflyer.Startup.Reconciler do
   @impl true
   def handle_call(:run_now, _from, state) do
     result = run_reconcile(state)
-    state = result |> apply_result(state) |> Map.put(:booted?, true)
+
+    state =
+      result
+      |> apply_result(state)
+      |> maybe_enforce_drawdown()
+      |> Map.put(:booted?, true)
 
     reply =
       case result do
@@ -102,8 +108,16 @@ defmodule Bitflyer.Startup.Reconciler do
     # aged 取消は Task（同期 REST 連打で tick / run_now を止めない）。
     _ = Bitflyer.Risk.OpenOrderPolicy.cancel_aged_opens(exchange: state.exchange, async: true)
     _ = maybe_ensure_halt_cancels(state)
-    state = apply_result(run_reconcile(state), state)
+    state =
+      state
+      |> then(&apply_result(run_reconcile(&1), &1))
+      |> maybe_enforce_drawdown()
     {:noreply, schedule_periodic(state)}
+  end
+
+  defp maybe_enforce_drawdown(state) do
+    _ = Bitflyer.Risk.Equity.enforce()
+    state
   end
 
   defp maybe_ensure_halt_cancels(state) do

@@ -7,6 +7,7 @@ defmodule Bitflyer.Config.LiveSafetyTest do
     "BITFLYER_MAX_ORDER_SIZE" => "0.01",
     "BITFLYER_MAX_POSITION_SIZE" => "0.02",
     "BITFLYER_MAX_DAILY_LOSS" => "10000",
+    "BITFLYER_MAX_DAILY_DRAWDOWN_JPY" => "12000",
     "BITFLYER_MAX_ORDERS_PER_MINUTE" => "5",
     "BITFLYER_MAX_PRICE_DEVIATION_PCT" => "1"
   }
@@ -41,6 +42,7 @@ defmodule Bitflyer.Config.LiveSafetyTest do
     assert limits[:max_order_size] == "0.01"
     assert limits[:max_position_size] == "0.02"
     assert limits[:max_daily_loss] == "10000"
+    assert limits[:max_daily_drawdown] == "12000"
     assert limits[:max_orders_per_minute] == 5
     assert limits[:max_price_deviation_pct] == "1"
   end

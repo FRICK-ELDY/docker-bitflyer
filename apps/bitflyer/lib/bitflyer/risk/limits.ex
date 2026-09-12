@@ -16,6 +16,7 @@ defmodule Bitflyer.Risk.Limits do
           market_data_max_age_ms: non_neg_integer(),
           max_clock_skew_ms: non_neg_integer(),
           max_daily_loss: Decimal.t(),
+          max_daily_drawdown: Decimal.t(),
           max_orders_per_minute: non_neg_integer(),
           max_price_deviation_pct: Decimal.t()
         }
@@ -37,6 +38,8 @@ defmodule Bitflyer.Risk.Limits do
   def normalize(limits) when is_list(limits), do: normalize(Map.new(limits))
 
   def normalize(limits) when is_map(limits) do
+    max_daily_loss = decimal(Map.get(limits, :max_daily_loss, @default_max_daily_loss))
+
     %{
       max_order_size: decimal(Map.get(limits, :max_order_size, @default_max_order_size)),
       max_position_size: decimal(Map.get(limits, :max_position_size, @default_max_position_size)),
@@ -45,7 +48,8 @@ defmodule Bitflyer.Risk.Limits do
           Bitflyer.MarketData.Cache.default_max_age_ms(),
       max_clock_skew_ms:
         non_neg_int(Map.get(limits, :max_clock_skew_ms, @default_max_clock_skew_ms)),
-      max_daily_loss: decimal(Map.get(limits, :max_daily_loss, @default_max_daily_loss)),
+      max_daily_loss: max_daily_loss,
+      max_daily_drawdown: decimal(Map.get(limits, :max_daily_drawdown, max_daily_loss)),
       max_orders_per_minute:
         non_neg_int(Map.get(limits, :max_orders_per_minute, @default_max_orders_per_minute)),
       max_price_deviation_pct:
