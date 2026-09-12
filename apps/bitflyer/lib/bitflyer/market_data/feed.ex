@@ -2,7 +2,8 @@ defmodule Bitflyer.MarketData.Feed do
   @moduledoc """
   市場データ購読のオーケストレータ。
 
-  - 接続時: チャネル再購読 + REST 穴埋め
+  - 接続時: チャネル再購読 + REST 穴埋め。購読は request id の ACK 待ち。
+    書込み成功だけでは `connected?` にしない。未 ACK / error / timeout は再接続
   - 切断時: telemetry → backoff 再接続。接続フラグは `:persistent_term`
     （`connection_snapshot/0`）。Risk は Cache 鮮度を待たず拒否する
   - フレーム: 正規化 → Cache.put → tick telemetry
@@ -103,6 +104,13 @@ defmodule Bitflyer.MarketData.Feed do
           :stall_timeout_ms,
           Keyword.get(cfg, :stall_timeout_ms, default_stall_timeout_ms())
         ),
+      subscribe_ack: Keyword.get(opts, :subscribe_ack, :immediate),
+      subscribe_ack_timeout_ms:
+        Keyword.get(
+          opts,
+          :subscribe_ack_timeout_ms,
+          Keyword.get(cfg, :subscribe_ack_timeout_ms, 5_000)
+        ),
       socket: nil,
       connected?: false,
       reconnect_attempt: 0,
@@ -110,7 +118,9 @@ defmodule Bitflyer.MarketData.Feed do
       stall_timer: nil,
       stall_ref: nil,
       last_frame_at: nil,
-      subscribe_count: 0
+      subscribe_count: 0,
+      pending_acks: %{},
+      next_request_id: 1
     }
 
     publish_connection(state)
@@ -132,6 +142,7 @@ defmodule Bitflyer.MarketData.Feed do
       connected?: state.connected?,
       product_codes: state.product_codes,
       subscribe_count: state.subscribe_count,
+      pending_ack_count: map_size(state.pending_acks),
       reconnect_attempt: state.reconnect_attempt,
       socket: state.socket,
       last_frame_at: state.last_frame_at,
@@ -152,29 +163,47 @@ defmodule Bitflyer.MarketData.Feed do
     state =
       state
       |> cancel_reconnect_timer()
-      |> set_connected(true)
       |> Map.put(:reconnect_attempt, 0)
       |> subscribe_all()
 
+    # 書込み成功だけでは connected にしない。stall は全 ACK 後。
     state =
-      if state.gap_fill_on_connect? do
+      if not is_nil(state.socket) and state.gap_fill_on_connect? do
         do_gap_fill(state)
       else
         state
       end
 
-    # 接続直後は tick 待ちの猶予を開始（無通信が続けば stale_watchdog）
-    {:noreply, arm_stall_watchdog(state)}
+    {:noreply, state}
   end
 
   def handle_info({:socket_frame, frame}, state) do
-    # 正規化結果に関わらずフレーム到着＝ソケット生存。薄商いでも無通信誤認を避ける
-    _ = ingest_frame(frame)
+    case Normalize.rpc_response(frame) do
+      {:ok, id} ->
+        {:noreply, handle_subscribe_ack(state, id)}
 
-    if state.connected? do
-      {:noreply, arm_stall_watchdog(state)}
-    else
-      {:noreply, state}
+      {:error, _id, _reason} ->
+        {:noreply, handle_disconnect(state, :subscribe_error)}
+
+      :not_rpc ->
+        # 正規化結果に関わらずフレーム到着＝ソケット生存。薄商いでも無通信誤認を避ける
+        _ = ingest_frame(frame)
+
+        if state.connected? do
+          {:noreply, arm_stall_watchdog(state)}
+        else
+          {:noreply, state}
+        end
+    end
+  end
+
+  def handle_info({:subscribe_ack_timeout, id, ref}, state) do
+    case Map.get(state.pending_acks, id) do
+      %{ref: ^ref} ->
+        {:noreply, handle_disconnect(state, :subscribe_ack_timeout)}
+
+      _ ->
+        {:noreply, state}
     end
   end
 
@@ -232,6 +261,7 @@ defmodule Bitflyer.MarketData.Feed do
     emit_disconnected(reason)
 
     state
+    |> cancel_pending_acks()
     |> cancel_stall_timer()
     |> stop_socket()
     |> set_connected(false)
@@ -244,7 +274,11 @@ defmodule Bitflyer.MarketData.Feed do
       |> cancel_reconnect_timer()
       |> stop_socket()
 
-    case state.socket_client.start(url: state.ws_url, feed: self()) do
+    case state.socket_client.start(
+           url: state.ws_url,
+           feed: self(),
+           subscribe_ack: state.subscribe_ack
+         ) do
       {:ok, pid} ->
         %{state | socket: pid}
 
@@ -270,24 +304,90 @@ defmodule Bitflyer.MarketData.Feed do
   defp subscribe_all(%{socket: nil} = state), do: state
 
   defp subscribe_all(state) do
-    Enum.reduce(state.product_codes, state, fn product_code, acc ->
+    Enum.reduce_while(state.product_codes, {:ok, state}, fn product_code, {:ok, acc} ->
+      {id, acc} = next_request_id(acc)
       channel = MarketData.ticker_channel(product_code)
 
-      case state.socket_client.subscribe(acc.socket, channel) do
+      case acc.socket_client.subscribe(acc.socket, channel, id) do
         :ok ->
-          %{acc | subscribe_count: acc.subscribe_count + 1}
+          {:cont, {:ok, track_pending(acc, id, product_code, channel)}}
 
         {:error, reason} ->
           Bitflyer.Telemetry.log(
             :warning,
-            "market_data subscribe failed: #{inspect(reason)}",
+            "market_data subscribe write failed: #{inspect(reason)}",
             %{product_code: product_code, reason: reason, status: :subscribe_failed}
           )
 
-          acc
+          {:halt, {:error, acc}}
       end
     end)
+    |> case do
+      {:ok, state} ->
+        state
+
+      {:error, state} ->
+        handle_disconnect(state, :subscribe_failed)
+    end
   end
+
+  defp next_request_id(state) do
+    id = state.next_request_id
+    {id, %{state | next_request_id: id + 1}}
+  end
+
+  defp track_pending(state, id, product_code, channel) do
+    ref = make_ref()
+
+    timer =
+      Process.send_after(
+        self(),
+        {:subscribe_ack_timeout, id, ref},
+        state.subscribe_ack_timeout_ms
+      )
+
+    pending = %{
+      product_code: product_code,
+      channel: channel,
+      timer: timer,
+      ref: ref
+    }
+
+    %{state | pending_acks: Map.put(state.pending_acks, id, pending)}
+  end
+
+  defp handle_subscribe_ack(state, id) do
+    case Map.pop(state.pending_acks, id) do
+      {nil, _} ->
+        state
+
+      {pending, rest} ->
+        cancel_ack_timer(pending)
+
+        %{state | pending_acks: rest, subscribe_count: state.subscribe_count + 1}
+        |> maybe_finish_subscribe()
+    end
+  end
+
+  defp maybe_finish_subscribe(%{pending_acks: pending} = state) when map_size(pending) == 0 do
+    state
+    |> set_connected(true)
+    |> arm_stall_watchdog()
+  end
+
+  defp maybe_finish_subscribe(state), do: state
+
+  defp cancel_pending_acks(state) do
+    Enum.each(Map.values(state.pending_acks), &cancel_ack_timer/1)
+    %{state | pending_acks: %{}}
+  end
+
+  defp cancel_ack_timer(%{timer: timer}) do
+    _ = Process.cancel_timer(timer)
+    :ok
+  end
+
+  defp cancel_ack_timer(_), do: :ok
 
   defp do_gap_fill(state) do
     rest_client = state.rest_client

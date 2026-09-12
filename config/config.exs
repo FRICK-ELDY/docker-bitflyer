@@ -70,9 +70,11 @@ config :bitflyer, Bitflyer.MarketData,
   socket_client: Bitflyer.MarketData.Socket,
   gap_fill_on_connect?: true,
   reconnect_base_ms: 500,
-  reconnect_max_ms: 30_000
+  reconnect_max_ms: 30_000,
+  subscribe_ack_timeout_ms: 5_000
 
 # stall_timeout_ms 未設定時は Risk の market_data_max_age_ms × 3（Feed 既定）
+# 購読は JSON-RPC id の ACK 待ち。未 ACK は subscribe_ack_timeout_ms で再接続
 
 # Feed → Strategy → Risk → Executor（dry_run 既定で意図を 1 回出す）
 # live では runtime が enabled を false にし、FixedOnce 有効化を拒否する。

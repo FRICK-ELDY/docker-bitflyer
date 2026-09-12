@@ -3,8 +3,9 @@ defmodule Bitflyer.MarketData do
   市場データ購読の設定と公開ヘルパ。
 
   WebSocket で ticker を受け、切断時は再購読と REST 穴埋めで Cache を更新する。
-  古いデータと Feed 切断での発注拒否は `Risk.authorize/2`
-  （`market_feed_gate` + `Cache.fresh?/3`）に任せる。
+  購読は JSON-RPC request id の ACK を待つ。書込み成功だけでは
+  connected にしない。古いデータと Feed 切断での発注拒否は
+  `Risk.authorize/2`（`market_feed_gate` + `Cache.fresh?/3`）に任せる。
   """
 
   @doc """

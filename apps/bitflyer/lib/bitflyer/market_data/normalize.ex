@@ -71,6 +71,85 @@ defmodule Bitflyer.MarketData.Normalize do
 
   def from_ws_frame(_), do: :ignore
 
+  @doc """
+  JSON-RPC 応答（購読 ACK / error）。
+
+  Lightstream は subscribe 成功で `result: true`（公式）。`false` / `null` /
+  欠落は失敗。`channelMessage` は `:not_rpc`。`channelError` は再接続。
+  応答 `id` は整数に正規化する（文字列 `"1"` も 1）。
+  """
+  @spec rpc_response(binary() | map()) ::
+          {:ok, pos_integer()} | {:error, term(), term()} | :not_rpc
+  def rpc_response(raw) when is_binary(raw) do
+    case Jason.decode(raw) do
+      {:ok, map} -> rpc_response(map)
+      {:error, _} -> :not_rpc
+    end
+  end
+
+  def rpc_response(map) when is_map(map) do
+    method = Map.get(map, "method") || Map.get(map, :method)
+
+    cond do
+      method == "channelMessage" ->
+        :not_rpc
+
+      method == "channelError" ->
+        {:error, rpc_id(map), :channel_error}
+
+      true ->
+        classify_rpc_result(map)
+    end
+  end
+
+  def rpc_response(_), do: :not_rpc
+
+  defp classify_rpc_result(map) do
+    case normalize_rpc_id(rpc_id(map)) do
+      :error ->
+        if is_nil(rpc_id(map)), do: :not_rpc, else: {:error, rpc_id(map), :invalid_id}
+
+      {:ok, id} ->
+        error = Map.get(map, "error") || Map.get(map, :error)
+
+        cond do
+          not is_nil(error) ->
+            {:error, id, rpc_error_reason(error)}
+
+          rpc_result(map) == true ->
+            {:ok, id}
+
+          true ->
+            {:error, id, :subscribe_rejected}
+        end
+    end
+  end
+
+  defp rpc_id(map), do: Map.get(map, "id") || Map.get(map, :id)
+
+  defp rpc_result(map) do
+    cond do
+      Map.has_key?(map, "result") -> Map.get(map, "result")
+      Map.has_key?(map, :result) -> Map.get(map, :result)
+      true -> :missing
+    end
+  end
+
+  defp normalize_rpc_id(id) when is_integer(id) and id > 0, do: {:ok, id}
+
+  defp normalize_rpc_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {n, ""} when n > 0 -> {:ok, n}
+      _ -> :error
+    end
+  end
+
+  defp normalize_rpc_id(_), do: :error
+
+  defp rpc_error_reason(%{"message" => message}) when is_binary(message), do: message
+  defp rpc_error_reason(%{message: message}) when is_binary(message), do: message
+  defp rpc_error_reason(_), do: :rpc_error
+
   defp cast_decimal(v) do
     case Decimal.cast(v) do
       {:ok, %Decimal{} = d} -> {:ok, d}

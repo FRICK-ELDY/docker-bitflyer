@@ -11,12 +11,21 @@ defmodule Bitflyer.MarketData.Socket.Local do
     name = Keyword.get(opts, :name)
     genserver_opts = if name, do: [name: name], else: []
 
-    GenServer.start_link(__MODULE__, %{feed: feed, subscribed: []}, genserver_opts)
+    GenServer.start_link(
+      __MODULE__,
+      %{
+        feed: feed,
+        subscribed: [],
+        subscribe_ack: Keyword.get(opts, :subscribe_ack, :immediate)
+      },
+      genserver_opts
+    )
   end
 
   @impl Bitflyer.MarketData.Socket.Client
-  def subscribe(socket, channel) when is_binary(channel) do
-    GenServer.call(socket, {:subscribe, channel})
+  def subscribe(socket, channel, request_id)
+      when is_binary(channel) and is_integer(request_id) and request_id > 0 do
+    GenServer.call(socket, {:subscribe, channel, request_id})
   end
 
   @doc """
@@ -41,6 +50,13 @@ defmodule Bitflyer.MarketData.Socket.Local do
   end
 
   @doc """
+  テスト用: 未送信の購読 ACK を後から送る。
+  """
+  def ack(socket, request_id) when is_integer(request_id) do
+    GenServer.call(socket, {:ack, request_id})
+  end
+
+  @doc """
   購読済みチャネル一覧（テスト用）。
   """
   def subscribed(socket) do
@@ -61,8 +77,21 @@ defmodule Bitflyer.MarketData.Socket.Local do
   end
 
   @impl GenServer
-  def handle_call({:subscribe, channel}, _from, state) do
-    {:reply, :ok, %{state | subscribed: state.subscribed ++ [channel]}}
+  def handle_call({:subscribe, channel, request_id}, _from, state) do
+    state = %{state | subscribed: state.subscribed ++ [channel]}
+
+    case state.subscribe_ack do
+      :immediate ->
+        send_rpc(state.feed, %{"id" => request_id, "result" => true})
+        {:reply, :ok, state}
+
+      :error ->
+        send_rpc(state.feed, %{"id" => request_id, "error" => %{"message" => "denied"}})
+        {:reply, :ok, state}
+
+      :never ->
+        {:reply, :ok, state}
+    end
   end
 
   def handle_call(:subscribed, _from, state) do
@@ -71,6 +100,11 @@ defmodule Bitflyer.MarketData.Socket.Local do
 
   def handle_call({:push_frame, frame}, _from, state) do
     send(state.feed, {:socket_frame, frame})
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:ack, request_id}, _from, state) do
+    send_rpc(state.feed, %{"id" => request_id, "result" => true})
     {:reply, :ok, state}
   end
 
@@ -83,5 +117,9 @@ defmodule Bitflyer.MarketData.Socket.Local do
   def handle_cast({:notify_disconnected, reason}, state) do
     send(state.feed, {:socket_disconnected, reason})
     {:noreply, %{state | subscribed: []}}
+  end
+
+  defp send_rpc(feed, map) do
+    send(feed, {:socket_frame, Jason.encode!(map)})
   end
 end

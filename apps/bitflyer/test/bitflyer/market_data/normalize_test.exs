@@ -75,6 +75,35 @@ defmodule Bitflyer.MarketData.NormalizeTest do
     assert :ignore = Normalize.from_ws_frame(~s({"id":1,"result":true}))
   end
 
+  test "rpc_response accepts only result true as subscribe ACK" do
+    assert {:ok, 7} = Normalize.rpc_response(~s({"jsonrpc":"2.0","id":7,"result":true}))
+    assert {:ok, 8} = Normalize.rpc_response(%{"id" => "8", "result" => true})
+
+    assert {:error, 8, :subscribe_rejected} =
+             Normalize.rpc_response(%{"id" => 8, "result" => nil})
+
+    assert {:error, 8, :subscribe_rejected} =
+             Normalize.rpc_response(%{"id" => 8, "result" => false})
+
+    assert {:error, 8, :subscribe_rejected} = Normalize.rpc_response(%{"id" => 8})
+
+    assert {:error, 9, "denied"} =
+             Normalize.rpc_response(%{"id" => 9, "error" => %{"message" => "denied"}})
+
+    assert {:error, 1, :channel_error} =
+             Normalize.rpc_response(%{"method" => "channelError", "id" => 1})
+
+    assert :not_rpc =
+             Normalize.rpc_response(%{
+               "method" => "channelMessage",
+               "id" => 1,
+               "params" => %{}
+             })
+
+    assert :not_rpc = Normalize.rpc_response(%{"result" => true})
+    assert {:error, "x", :invalid_id} = Normalize.rpc_response(%{"id" => "x", "result" => true})
+  end
+
   test "from_ticker rejects invalid ltp without raising" do
     assert :error =
              Normalize.from_ticker(%{"product_code" => "FX_BTC_JPY", "ltp" => "not-a-number"})

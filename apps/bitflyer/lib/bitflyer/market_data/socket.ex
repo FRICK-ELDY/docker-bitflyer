@@ -18,11 +18,14 @@ defmodule Bitflyer.MarketData.Socket do
   end
 
   @impl Bitflyer.MarketData.Socket.Client
-  def subscribe(socket, channel) when is_binary(channel) do
+  def subscribe(socket, channel, request_id)
+      when is_binary(channel) and is_integer(request_id) and request_id > 0 do
     payload =
       Jason.encode!(%{
+        "jsonrpc" => "2.0",
         "method" => "subscribe",
-        "params" => %{"channel" => channel}
+        "params" => %{"channel" => channel},
+        "id" => request_id
       })
 
     WebSockex.send_frame(socket, {:text, payload})

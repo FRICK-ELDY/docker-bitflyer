@@ -23,7 +23,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 
 | コンポーネント | 状態 | メモ |
 | --- | --- | --- |
-| market-data（Feed / Cache / 再接続 / gap-fill） | implemented | ETS 鮮度＋取引所 `source_timestamp`。stale / skew は risk。無通信は鮮度窓×3（`stall_timeout_ms` 上書き可）で切断→再接続 |
+| market-data（Feed / Cache / 再接続 / gap-fill） | implemented | ETS 鮮度＋取引所 `source_timestamp`。stale / skew は risk。購読は JSON-RPC id の ACK 待ち（`result: true` のみ。未 ACK / error / 失敗 ACK は再接続。書込み成功だけでは connected にしない）。無通信は鮮度窓×3（`stall_timeout_ms` 上書き可）で切断→再接続 |
 | strategy（Behaviour / Runner / FixedOnce） | implemented | dry_run/paper の骨。live は既定オフ・FixedOnce 禁止・Risk 上限は env 必須。適用履歴は `StrategyParameterRevision` + Order 由来 |
 | risk-manager（limits / circuit / 鮮度） | partial | サイズ・建玉・頻度（再起動時 Order 温存）・価格逸脱・時計ずれは実効。MarketData 有効時は Feed 接続を Status / ready と同じ `market_feed_gate` で認可（切断直後は Cache 鮮度を待たない）。日次損失は Fill.realized_pnl（live は getexecutions `commission` を `Fill.fee` に残し net）/DailyLoss。日次ドローダウンは realized+unrealized の当日ピーク（HWM）からの下落（`Equity`。HWM は `DailyEquityPeak` に永続、読取失敗は unsynced。mark stale は認可・resume fail-closed・周期は halt しない。unrealized は内部平均×LTP の推定）。残高は BalanceCache（**live は spot `getbalance` のみ。FX/CFD 証拠金は未実装**。記録済み fee は quote 差分に織り込み、未記録 Fill だけ 20bps）。spot 在庫は getbalance base amount と買い Position（内部膨張・売建玉で halt。live 売りは建玉カバー必須）。成功時はワンショット `AuthorizedOrder`（偽造・再利用不可）。401/403 即 halt・窓内連続拒否は FailureRate |
 | order-executor（dry_run / paper / live 出口） | implemented | `AuthorizedOrder.consume` 必須（`System.submit_order` 経由）。冪等キーあり。paper は成行 LTP±bps（slip+fee）/ 指値は fee のみ。認可拘束も同価格。live はゲート通過時のみ REST |
