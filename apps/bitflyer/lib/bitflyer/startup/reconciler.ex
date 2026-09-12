@@ -64,8 +64,9 @@ defmodule Bitflyer.Startup.Reconciler do
 
   @impl true
   def handle_continue(:boot_reconcile, state) do
-    # 起動直後にも age 超過と（halt 済みなら）cancel-all を一度試す
-    _ = Bitflyer.Risk.OpenOrderPolicy.cancel_aged_opens(exchange: state.exchange)
+    # 起動直後にも age 超過と（halt 済みなら）cancel-all を一度試す。
+    # aged 取消の REST は Task に逃がし、boot 突合を止めない。
+    _ = Bitflyer.Risk.OpenOrderPolicy.cancel_aged_opens(exchange: state.exchange, async: true)
     _ = maybe_ensure_halt_cancels(state)
 
     state =
@@ -97,8 +98,9 @@ defmodule Bitflyer.Startup.Reconciler do
 
   @impl true
   def handle_info(:periodic_reconcile, state) do
-    # 突合前に open age 超過・halt 中 cancel-all を試す
-    _ = Bitflyer.Risk.OpenOrderPolicy.cancel_aged_opens(exchange: state.exchange)
+    # 突合前に open age 超過・halt 中 cancel-all を試す。
+    # aged 取消は Task（同期 REST 連打で tick / run_now を止めない）。
+    _ = Bitflyer.Risk.OpenOrderPolicy.cancel_aged_opens(exchange: state.exchange, async: true)
     _ = maybe_ensure_halt_cancels(state)
     state = apply_result(run_reconcile(state), state)
     {:noreply, schedule_periodic(state)}

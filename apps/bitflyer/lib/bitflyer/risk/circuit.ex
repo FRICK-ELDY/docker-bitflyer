@@ -94,6 +94,8 @@ defmodule Bitflyer.Risk.Circuit do
 
     case persist_clear() do
       :ok ->
+        _ = Bitflyer.Risk.OpenOrderPolicy.reset_halt_cancel_gate!()
+
         case readiness.clear_halt() do
           :ok -> :ok
           {:error, :not_halted} -> :ok
