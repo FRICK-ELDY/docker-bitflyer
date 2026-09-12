@@ -328,6 +328,9 @@ defmodule Bitflyer.Startup.Baseline do
            else
              {:error, reason, details} when is_atom(reason) and is_map(details) ->
                Bitflyer.Repo.rollback({reason, details})
+
+             other ->
+               Bitflyer.Repo.rollback({:persist_failed, %{error: other}})
            end
          end) do
       {:ok, {import_row, notifications}} ->

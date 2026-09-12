@@ -156,6 +156,43 @@ defmodule Bitflyer.Startup.LiveBalanceTest do
              )
   end
 
+  test "BTC as base and quote sums fee allowance instead of picking one leg" do
+    fills = [
+      %{
+        product_code: "BTC_JPY",
+        side: :sell,
+        size: Decimal.new("1"),
+        price: Decimal.new("5000000"),
+        inserted_at: ~U[2026-09-01 00:01:00.000000Z]
+      },
+      %{
+        product_code: "ETH_BTC",
+        side: :buy,
+        size: Decimal.new("0.001"),
+        price: Decimal.new("0.05"),
+        inserted_at: ~U[2026-09-01 00:01:01.000000Z]
+      }
+    ]
+
+    # expected BTC = 1.5 - 1 - 0.00005 = 0.49995。実残高は売り手数料 0.00015 を引く。
+    # exclusive なら ETH_BTC の quote 側 20bps だけ（≈5e-8）になり halt する。
+    tips = [
+      %{currency: "JPY", amount: @jpy, available: @jpy, captured_at: @captured},
+      %{
+        currency: "BTC",
+        amount: Decimal.new("1.5"),
+        available: Decimal.new("1.5"),
+        captured_at: @captured
+      }
+    ]
+
+    jpy = Decimal.new("6000000")
+    btc = Decimal.new("0.4998")
+
+    assert {:ok, _} =
+             LiveBalance.explain(tips, exchange(jpy, jpy, btc, btc), ["JPY", "BTC"], fills: fills)
+  end
+
   test "two partial buy fills add to the same notional" do
     fills = [
       spot_buy_fill(%{

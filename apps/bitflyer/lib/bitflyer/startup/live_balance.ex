@@ -288,17 +288,11 @@ defmodule Bitflyer.Startup.LiveBalance do
       notionals = quote_notional_abs(fills, currency)
       sizes = base_size_abs(fills, currency)
 
-      from_bps =
-        cond do
-          Decimal.compare(notionals, 0) == :gt ->
-            Decimal.div(Decimal.mult(notionals, bps), Decimal.new(10_000))
-
-          Decimal.compare(sizes, 0) == :gt ->
-            Decimal.div(Decimal.mult(sizes, bps), Decimal.new(10_000))
-
-          true ->
-            Decimal.new(0)
-        end
+      # 同一通貨が quote（ETH_BTC の BTC）と base（BTC_JPY の BTC）の両方になりうる。
+      # どちらも当該通貨建なので、bps を掛けたあと合算する（notional と size を足さない）。
+      from_quote = Decimal.div(Decimal.mult(notionals, bps), Decimal.new(10_000))
+      from_base = Decimal.div(Decimal.mult(sizes, bps), Decimal.new(10_000))
+      from_bps = Decimal.add(from_quote, from_base)
 
       if Decimal.compare(from_bps, abs_floor) == :gt, do: from_bps, else: abs_floor
     end
@@ -346,6 +340,8 @@ defmodule Bitflyer.Startup.LiveBalance do
     |> Keyword.get(key, default)
   end
 
+  # float は受けない（金額の float 禁止。config は string / Decimal / integer）。
+  # 未知型は 0（許容なし）へ倒し、端数をごまかして前進しない。
   defp parse_decimal(%Decimal{} = value), do: value
   defp parse_decimal(value) when is_integer(value), do: Decimal.new(value)
   defp parse_decimal(value) when is_binary(value), do: Decimal.new(value)
@@ -425,8 +421,13 @@ defmodule Bitflyer.Startup.LiveBalance do
                end
              end)
            else
-             {:error, reason, details} ->
+             {:error, reason, details} when is_atom(reason) and is_map(details) ->
                Bitflyer.Repo.rollback({reason, details})
+
+             other ->
+               Bitflyer.Repo.rollback(
+                 {:persist_failed, %{error: other, step: :live_balance_advance}}
+               )
            end
          end) do
       {:ok, notifications} ->
