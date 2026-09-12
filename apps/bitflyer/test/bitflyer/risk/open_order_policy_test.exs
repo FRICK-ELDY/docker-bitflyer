@@ -430,6 +430,65 @@ defmodule Bitflyer.Risk.OpenOrderPolicyTest do
     assert CountingFailExchange.count() == 1
   end
 
+  test "HaltCancelGate releases in-flight when watched worker dies" do
+    assert :go = HaltCancelGate.try_begin(force: true)
+
+    worker =
+      spawn(fn ->
+        Process.sleep(10_000)
+      end)
+
+    assert :ok = HaltCancelGate.watch(worker)
+    ref = Process.monitor(worker)
+    Process.exit(worker, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^worker, :killed}, 1_000
+    _ = :sys.get_state(HaltCancelGate)
+
+    # finish 前の死 → backoff。force なら即再試行可
+    assert :backoff = HaltCancelGate.try_begin([])
+    assert :go = HaltCancelGate.try_begin(force: true)
+    assert :ok = HaltCancelGate.finish(:cleared)
+  end
+
+  test "ensure_halt_cancels skips list after cleared until force" do
+    {:ok, order} = create_live_open("cleared-1", "JRF-cleared-1")
+    order_id = order.id
+
+    assert :ok =
+             OpenOrderPolicy.ensure_halt_cancels(:manual_halt,
+               async: false,
+               exchange: SpyCancelExchange
+             )
+
+    assert HaltCancelGate.cleared?()
+    assert [%{exchange_order_id: "JRF-cleared-1"}] = SpyCancelExchange.calls()
+    {:ok, reloaded} = Order |> Ash.Query.filter(id == ^order_id) |> Ash.read_one()
+    assert reloaded.status == :cancelled
+
+    {:ok, leftover} = create_live_open("cleared-late-1", "JRF-cleared-late-1")
+    leftover_id = leftover.id
+
+    assert :ok =
+             OpenOrderPolicy.ensure_halt_cancels(:manual_halt,
+               async: false,
+               exchange: SpyCancelExchange
+             )
+
+    assert length(SpyCancelExchange.calls()) == 1
+    {:ok, still_open} = Order |> Ash.Query.filter(id == ^leftover_id) |> Ash.read_one()
+    assert still_open.status == :pending
+
+    assert :ok =
+             OpenOrderPolicy.ensure_halt_cancels(:manual_halt,
+               async: false,
+               force: true,
+               exchange: SpyCancelExchange
+             )
+
+    assert [%{exchange_order_id: "JRF-cleared-1"}, %{exchange_order_id: "JRF-cleared-late-1"}] =
+             SpyCancelExchange.calls()
+  end
+
   defp create_live_open(internal_id, exchange_id) do
     Order
     |> Ash.Changeset.for_create(:create, %{

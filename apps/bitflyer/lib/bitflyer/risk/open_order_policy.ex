@@ -15,6 +15,8 @@ defmodule Bitflyer.Risk.OpenOrderPolicy do
   - **再試行背圧:** open が残っていても in-flight 中はスキップし、失敗／残留後は
     `halt_cancel_retry_backoff_ms` まで次の cancel 起動を抑える（CircuitSync 2s 連打防止）。
     状態は `HaltCancelGate` GenServer 所有の ETS（短命呼び出し元に紐づけない）。
+    非同期 Task は Gate が monitor し、`finish` 前の死でロックを解放する。
+    cancel-all 完了（`:cleared`）後は resume / `:force` まで open list を省略する。
 
   ## Config（`:bitflyer, Bitflyer.Risk.OpenOrderPolicy`）
 
@@ -92,30 +94,39 @@ defmodule Bitflyer.Risk.OpenOrderPolicy do
   @spec ensure_halt_cancels(atom(), keyword()) :: :ok
   def ensure_halt_cancels(reason, opts \\ []) when is_atom(reason) do
     if cancel_on_halt?(reason) do
-      case list_open_orders(trade_modes: [:live]) do
-        {:ok, []} ->
-          :ok
+      force? = Keyword.get(opts, :force, false)
 
-        {:ok, _opens} ->
-          case try_begin_halt_cancel(opts) do
-            :go ->
-              schedule_cancel(reason, opts)
+      if not force? and halt_cancels_cleared?(opts) do
+        :ok
+      else
+        case list_open_orders(trade_modes: [:live]) do
+          {:ok, []} ->
+            _ =
+              safe_gate_call(fn -> HaltCancelGate.mark_cleared(Keyword.take(opts, [:server])) end)
 
-            :busy ->
-              :ok
+            :ok
 
-            :backoff ->
-              :ok
-          end
+          {:ok, _opens} ->
+            case try_begin_halt_cancel(opts) do
+              :go ->
+                schedule_cancel(reason, opts)
 
-        {:error, error} ->
-          Bitflyer.Telemetry.log(
-            :error,
-            "OpenOrderPolicy.ensure_halt_cancels list failed",
-            %{halt_reason: reason, error: inspect(error)}
-          )
+              :busy ->
+                :ok
 
-          :ok
+              :backoff ->
+                :ok
+            end
+
+          {:error, error} ->
+            Bitflyer.Telemetry.log(
+              :error,
+              "OpenOrderPolicy.ensure_halt_cancels list failed",
+              %{halt_reason: reason, error: inspect(error)}
+            )
+
+            :ok
+        end
       end
     else
       :ok
@@ -132,18 +143,14 @@ defmodule Bitflyer.Risk.OpenOrderPolicy do
         :ok
 
       ms ->
-        older_than =
-          DateTime.utc_now()
-          |> DateTime.add(-ms, :millisecond)
-          |> DateTime.truncate(:microsecond)
+        run = fn -> run_cancel_aged_opens(ms, opts) end
 
-        Bitflyer.OrderExecutor.cancel_open_orders(
-          Keyword.merge(opts,
-            trade_modes: [:live],
-            older_than: older_than,
-            cause: :open_age
-          )
-        )
+        if Keyword.get(opts, :async, false) do
+          _ = start_cancel_task(run)
+          :ok
+        else
+          run.()
+        end
     end
   end
 
@@ -170,7 +177,10 @@ defmodule Bitflyer.Risk.OpenOrderPolicy do
   @doc false
   @spec reset_halt_cancel_gate!() :: :ok
   def reset_halt_cancel_gate! do
-    HaltCancelGate.reset!()
+    case safe_gate_call(fn -> HaltCancelGate.reset!() end) do
+      {:ok, :ok} -> :ok
+      :unavailable -> :ok
+    end
   end
 
   defp schedule_cancel(reason, opts) do
@@ -188,11 +198,11 @@ defmodule Bitflyer.Risk.OpenOrderPolicy do
 
     if async? do
       case start_cancel_task(run) do
-        {:ok, _pid} ->
-          :ok
+        {:ok, pid} ->
+          watch_cancel_task(pid, opts)
 
-        {:ok, _pid, _info} ->
-          :ok
+        {:ok, pid, _info} ->
+          watch_cancel_task(pid, opts)
 
         {:error, reason_start} ->
           finish_halt_cancel(:retry, opts)
@@ -207,6 +217,53 @@ defmodule Bitflyer.Risk.OpenOrderPolicy do
       end
     else
       run.()
+    end
+  end
+
+  defp watch_cancel_task(pid, opts) do
+    _ = safe_gate_call(fn -> HaltCancelGate.watch(pid, Keyword.take(opts, [:server])) end)
+    :ok
+  end
+
+  defp halt_cancels_cleared?(opts) do
+    case safe_gate_call(fn -> HaltCancelGate.cleared?(Keyword.take(opts, [:server])) end) do
+      {:ok, true} -> true
+      _ -> false
+    end
+  end
+
+  defp run_cancel_aged_opens(ms, opts) do
+    older_than =
+      DateTime.utc_now()
+      |> DateTime.add(-ms, :millisecond)
+      |> DateTime.truncate(:microsecond)
+
+    try do
+      Bitflyer.OrderExecutor.cancel_open_orders(
+        Keyword.merge(opts,
+          trade_modes: [:live],
+          older_than: older_than,
+          cause: :open_age
+        )
+      )
+    rescue
+      error ->
+        Bitflyer.Telemetry.log(
+          :error,
+          "OpenOrderPolicy aged cancel failed",
+          %{error: Exception.message(error)}
+        )
+
+        {:error, :aged_cancel_failed, %{error: error}}
+    catch
+      kind, reason_caught ->
+        Bitflyer.Telemetry.log(
+          :error,
+          "OpenOrderPolicy aged cancel crashed",
+          %{kind: kind, error: inspect(reason_caught)}
+        )
+
+        {:error, :aged_cancel_crashed, %{kind: kind, error: reason_caught}}
     end
   end
 

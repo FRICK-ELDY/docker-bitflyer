@@ -82,7 +82,8 @@
 | 取消する理由（既定 true） | `manual_halt`, `daily_loss_exceeded`, `consecutive_exchange_errors`, `auth_failed`, `fill_sync_failed`, `fill_price_unavailable` |
 | 取消しない理由（既定 false） | `reconcile_mismatch`, `submission_unknown`, `persist_failed`, `restore_failed`, `exchange_unavailable`, `invalid_exchange_payload`, `unsafe_api_permissions`, `clock_skew`, `risk_halted`, `failure_rate_unsynced`（証拠保全・recover 優先） |
 | 再起動／CircuitSync | 永続 halt を ETS に載せたとき、および既に halted の同期 tick でも `ensure_halt_cancels` を再実行（一回限りではない）。目的は未完了 cancel の再試行 |
-| cancel 背圧 | in-flight 中はスキップ。失敗／open 残留後は `halt_cancel_retry_backoff_ms`（既定 30s）。状態は `HaltCancelGate` GenServer 所有 ETS（LV 等の呼び出し元終了でも消えない）。`Circuit.open`／初回 ETS 適用は `:force` でバックオフ解除。in-flight 失効は `halt_cancel_in_flight_stale_ms`（既定 600s） |
+| cancel 背圧 | in-flight 中はスキップ。失敗／open 残留後は `halt_cancel_retry_backoff_ms`（既定 30s）。状態は `HaltCancelGate` GenServer 所有 ETS（LV 等の呼び出し元終了でも消えない）。非同期 Task は Gate が monitor し、`finish` 前の死でロック解除＋backoff。`:cleared` 後は resume / `:force` まで open list を省略。`Circuit.open`／初回 ETS 適用は `:force`。in-flight 失効は `halt_cancel_in_flight_stale_ms`（既定 600s、monitor の保険） |
+| open age 実行 | 突合 GenServer 上では非同期 Task。halt cancel の Gate とは共有しない |
 | ID 無し / ACTIVE 残 | 既存 `cancel/2` と同じ（ローカル終端 or fill 同期後に終端。取引所 ACTIVE なら pending 維持） |
 
 運用で TTL を有効にする例: `max_open_age_ms: 3_600_000`（1 時間）。live 解禁前に理由マップを環境に合わせて見直す。
