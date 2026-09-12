@@ -116,6 +116,29 @@ defmodule Bitflyer.Startup.LiveInventoryTest do
              )
   end
 
+  test "string-key balance row is accepted" do
+    amount = Decimal.new("0.5")
+
+    assert :ok =
+             LiveInventory.compare(
+               [buy("BTC_JPY", "0.5")],
+               [],
+               [%{"currency" => "BTC", "amount" => amount, "available" => amount}],
+               position_size_tolerance_abs: @tol
+             )
+  end
+
+  test "non-decimal amount is position_mismatch" do
+    assert {:error, :reconcile_mismatch,
+            %{reason: :invalid_balance_amount, currency: "BTC"}} =
+             LiveInventory.compare(
+               [buy("BTC_JPY", "0.01")],
+               [],
+               [%{currency: "BTC", amount: "0.5"}],
+               position_size_tolerance_abs: @tol
+             )
+  end
+
   defp buy(product_code, size) do
     %{product_code: product_code, side: :buy, size: Decimal.new(size)}
   end

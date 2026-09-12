@@ -111,7 +111,7 @@ defmodule Bitflyer.Startup.LiveInventory do
         {:ok, Decimal.new(0)}
 
       row ->
-        case Map.get(row, :amount) do
+        case balance_amount(row) do
           %Decimal{} = amount ->
             {:ok, amount}
 
@@ -126,7 +126,11 @@ defmodule Bitflyer.Startup.LiveInventory do
     end
   end
 
-  defp balance_currency(row), do: Map.fetch!(row, :currency)
+  # Decode / Client.balance はアトムキー。テスト注入は文字列キーもありうる（Risk と同じ）。
+  # どちらも無い行は通貨不一致として amount 0 扱い（KeyError で突合全体を落とさない）。
+  defp balance_currency(row), do: Map.get(row, :currency) || Map.get(row, "currency")
+
+  defp balance_amount(row), do: Map.get(row, :amount) || Map.get(row, "amount")
 
   defp tolerance_abs(currency, opts) do
     abs_map =
@@ -135,9 +139,12 @@ defmodule Bitflyer.Startup.LiveInventory do
         |> Keyword.get(:position_size_tolerance_abs, %{"JPY" => "1", "BTC" => "0.00000001"})
       end)
 
+    # キーは config どおり文字列。アトムキーは見ない（String.to_atom 禁止。欠落は 0＝許容なし）。
     parse_decimal(Map.get(abs_map, currency, 0))
   end
 
+  # float は受けない（金額の float 禁止。config は string / Decimal / integer）。
+  # 未知型は 0（許容なし）へ倒し、端数をごまかして前進しない。
   defp parse_decimal(%Decimal{} = value), do: value
   defp parse_decimal(value) when is_binary(value), do: Decimal.new(value)
   defp parse_decimal(value) when is_integer(value), do: Decimal.new(value)
