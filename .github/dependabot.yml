@@ -1,0 +1,26 @@
+# Hex lock と GitHub Actions（SHA pin）の更新 PR。
+# GitHub タグ依存（heroicons / daisyui）も mix 経由で差分が出る。
+# mix_audit は Hex advisory のみ。タグ依存・Docker イメージはスキャンしない。
+version: 2
+updates:
+  - package-ecosystem: mix
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

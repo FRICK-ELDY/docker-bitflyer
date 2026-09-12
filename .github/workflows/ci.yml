@@ -1,5 +1,6 @@
 # 品質ゲート: mix precommit（ローカルと同範囲）
-# deps.audit はゲート外の可視化（失敗してもジョブは緑）
+# deps.audit は別ジョブ。advisory 検出時のみ fail。ツール/取得障害は落とさない。
+# Actions はタグではなく commit SHA（Dependabot がコメントの版と一緒に更新）。
 # 方針: .workspace/0_doc/architecture/ci-cd.md
 name: CI
 
@@ -8,9 +9,9 @@ on:
   push:
     branches: [main]
 
+# artifact は専用トークン。actions: write は他 run の cancel にも使えるので付けない。
 permissions:
   contents: read
-  actions: write
 
 jobs:
   precommit:
@@ -41,17 +42,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Elixir
         id: beam
-        uses: erlef/setup-beam@v1
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           elixir-version: "1.18.3"
           otp-version: "27"
 
       - name: Cache Mix deps and build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             deps
@@ -64,41 +65,63 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
 
-      # ゲートではない。脆弱性・ツール失敗のどちらでも非0になる。artifact で区別する。
+      - name: Create and migrate test database
+        run: mix ash.setup --domains Bitflyer.Trading
+
+      - name: Quality gate
+        run: mix precommit
+
+  # Hex advisory 検出時だけ落とす。precommit とは分離（Hex 障害で format/test を止めない）。
+  deps-audit:
+    name: mix deps.audit
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Elixir
+        id: beam
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: "1.18.3"
+          otp-version: "27"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
+            ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
       # advisory 取得は 1 回（json）に限定する。
-      - name: Dependency audit (visibility only)
-        id: deps_audit
-        continue-on-error: true
+      - name: Dependency audit
         run: |
           mkdir -p tmp
           set +e
           mix deps.audit --format=json > tmp/deps-audit.json 2> tmp/deps-audit.stderr
           json_exit=$?
-          # ログに結果を出す（再実行しない）
+          set -e
           if [ -s tmp/deps-audit.json ]; then
             cat tmp/deps-audit.json
           fi
           if [ -s tmp/deps-audit.stderr ]; then
             cat tmp/deps-audit.stderr >&2
           fi
-          {
-            echo "json_exit=${json_exit}"
-            if [ "${json_exit}" -eq 0 ] && [ -s tmp/deps-audit.json ] && grep -q '"pass":true' tmp/deps-audit.json; then
-              echo "outcome=clean"
-            elif [ -s tmp/deps-audit.json ] && grep -q '"pass":false' tmp/deps-audit.json; then
-              echo "outcome=vulnerabilities_found"
-            else
-              echo "outcome=audit_tool_or_fetch_failed"
-            fi
-          } | tee tmp/deps-audit-meta.txt
-          if [ "${json_exit}" -ne 0 ]; then
-            echo "::warning::mix deps.audit exited ${json_exit} (see artifact deps-audit-report / tmp/deps-audit-meta.txt). CI green does not mean no advisories."
-          fi
-          exit "${json_exit}"
+          bash bin/classify-deps-audit.sh tmp/deps-audit.json "${json_exit}" tmp/deps-audit-meta.txt
 
       - name: Upload dependency audit report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: deps-audit-report
           path: |
@@ -108,26 +131,20 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Create and migrate test database
-        run: mix ash.setup --domains Bitflyer.Trading
-
-      - name: Quality gate
-        run: mix precommit
-
-  # P2 #14: Dockerfile.prod を push なしで検証（PR でも実行＝時間・Actions 分が増える意図的なトレードオフ）
+  # Dockerfile.prod を push なしで検証（PR でも実行＝時間・Actions 分が増える意図的なトレードオフ）
   # CD ゲートは workflow 全体 success を見るため、本ジョブ失敗でも配布されない
   docker-prod:
     name: Build Dockerfile.prod (no push)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build prod image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: Dockerfile.prod

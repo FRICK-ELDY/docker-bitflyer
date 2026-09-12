@@ -47,7 +47,7 @@
 | 12 | 外部監視 | **完了（手順・探針）:** 別ホスト pull（`/health/ready`・`bin/watch-ready.sh`）、ホスト exporter（Linux は `pid: host` + proc/sys、Windows は 9182）、Discord は起動直後 HEARTBEAT。別ホストの常駐ジョブ自体は live チェックリスト | 同一ホスト死を外部が検知できる手順がある |
 | 13 | Status 情報密度 | **完了:** StatusLive に建玉・未約定（`pending` / `partially_filled` / `submission_unknown`）・当日損益（`Equity.snapshot`、enforce なし）・halt 理由別復帰手順。UI は `System.exposure/0` のみ | 運用画面だけで exposure が分かる |
 | 14 | 実 API contract / Game Day | **完了:** 公開 GET 契約（`mix bitflyer.contract`）、匿名公開 corpus の意味論検証、paper 障害注入と最小ロット段階の記録（[game-day.md](../architecture/env/game-day.md)）。CI は実ホストを叩かない。live 実発注は P0 まで禁止 | fixture 以外の意味論検証がある |
-| 15 | deps.audit ゲート分離 | advisory 検出時のみ fail。Actions SHA pin / Dependabot | 既知脆弱性で配布が止まらない状態を解消 |
+| 15 | deps.audit ゲート分離 | **完了:** 別ジョブ `deps-audit` が Hex advisory 検出時のみ fail（ツール障害は落とさない）。Actions は commit SHA。Dependabot（`mix` / `github-actions`） | 既知脆弱性で配布が止まらない状態を解消 |
 
 ---
 
