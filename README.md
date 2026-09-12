@@ -33,8 +33,8 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | 既定銘柄 | **spot `BTC_JPY`**（allowlist） | live は spot 限定（`FX_*` / 未登録ペアは起動・認可で拒否）。FX live は `getcollateral` 実装後（[backlog](.workspace/1_backlog/fx-collateral-adapter.md)） |
 | Readiness / 突合 / resume / baseline / recover | implemented | boot・定期突合。live は権限（出金禁止）・ticker 時計検査あり。`mix bitflyer.resume` / baseline / recover。`prep_stop` はゲート閉鎖＋ drain |
 | observe — telemetry / 構造化ログ | implemented | allowlist（`:kind` / `:currency` / `:limit` 含む）。prod は ConsoleReporter 既定オン（低頻度ドメインのみ） |
-| observe — Discord 通知 | implemented | Incoming Webhook。未設定でも起動。発注は止めない |
-| observe — health | implemented | `/health/live`・`/health/ready`・`/health` |
+| observe — Discord 通知 | implemented | Incoming Webhook。halt / mismatch / disconnect + 起動直後 HEARTBEAT。未設定でも起動。発注は止めない |
+| observe — health | implemented | `/health/live`・`/health/ready`・`/health`。外部監視は別ホストから ready を pull（[prod.md](.workspace/0_doc/architecture/env/prod.md)） |
 | observe — LiveDashboard | implemented | BasicAuth 配下 `/ops/dashboard`（prod/dev）。Ecto/RequestLogger オフ |
 | UI StatusLive | implemented | 発注可否・Feed・鮮度・モード色分け。BasicAuth 付き kill / resume / reconcile |
 | CI（`mix precommit` / GitHub Actions） | implemented | PR と `main`。`Dockerfile.prod` ビルド検証（push なし）も実行 |
@@ -131,6 +131,7 @@ Hex の既知 advisory が対象。`heroicons` / `daisyui` など GitHub タグ�
 | `BITFLYER_API_KEY` / `BITFLYER_API_SECRET` | Private API。`TRADE_MODE=live` 時のみ必須。出金権限は付けない |
 | `BITFLYER_MAX_*` / `BITFLYER_STRATEGY_ENABLED` | live 専用。上限 5 項目は必須。戦略は既定オフ（FixedOnce 不可） |
 | `DISCORD_WEBHOOK_URL` | 任意。Discord Incoming Webhook。未設定でも起動する |
+| `DISCORD_HEARTBEAT_INTERVAL_MS` | 通知 HEARTBEAT 間隔（既定 900000 = 15 分）。`0` / `infinity` でオフ |
 | `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` | Status UI・`/ops/dashboard`。prod 必須。dev は両方揃ったときだけ有効 |
 | `UI_METRICS_CONSOLE` | ConsoleReporter。未設定時は prod のみオン（tick/Phoenix/VM 除外）。`false` でオフ |
 | `PHX_HTTP_IP` | prod のみ。既定 `127.0.0.1`（公開面最小化） |

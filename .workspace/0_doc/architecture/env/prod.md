@@ -96,20 +96,89 @@
 
 ## 監視とアラート
 
-最低限、次を見る。
+同一ホスト上の Compose healthcheck・stdout・LiveDashboard はホスト停止で一緒に消える。
+**同一ホスト死を外部が検知できる**ことが外部監視の完了条件。次の 3 点を取引ホストの外に置く。
+
+### 別ホストからの `/health/ready`（必須）
+
+| 項目 | 値 |
+| --- | --- |
+| URL | `https://<公開面>/health/ready`（認証なし。詳細は取引画面より薄い） |
+| 成功 | HTTP 200 かつ JSON `"status":"ready"` |
+| 失敗 | 接続不能・タイムアウト・503（halt / Feed 断 / stale / DB 断） |
+| 間隔 | 60s |
+| タイムアウト | 5s |
+| 連続失敗 | 3 でアラート |
+
+Compose の `/health/live` はコンテナ再起動用。WS 断では落とさない。盲目運転とホスト死は **ready を別ホストから pull** する。同一ホストの cron で Healthchecks.io に push しても、ホスト死は届かない。
+
+公開面が loopback のみなら、監視ホストから Tailscale / WireGuard / SSH トンネルで到達させる。インターネットに晒すなら TLS + IP allowlist。
+
+探針スクリプト（監視ホスト側。実行ビットは不要）:
+
+```bash
+# 単発（cron / Kuma Command）
+READY_URL=https://bot.example/health/ready bash bin/watch-ready.sh
+
+# 常駐（60s・連続 3 失敗で stderr alert）
+READY_URL=https://bot.example/health/ready READY_LOOP=1 READY_INTERVAL=60 READY_STRIKES=3 \
+  bash bin/watch-ready.sh
+```
+
+Uptime Kuma（安価 VPS など）の例: Monitor type HTTP(s)、URL 上記、Keyword `"status":"ready"`、間隔 60s、retries 3。失敗で Discord / メール。Kuma 自体は取引 PC に置かない。
+
+計画上の「完了」は手順と探針があること。別ホストのジョブが実際に動いているかは live チェックリスト側。
+
+### ホスト exporter（必須）
+
+取引ホストの disk / メモリ / 時刻ずれはアプリ JSON に出ない。exporter を取引ホストで listen し、**別ホストが scrape** する。
+
+#### Linux
+
+`compose.observe.yaml`（`pid: host` + `/proc` `/sys` `/` を bind。既定 `127.0.0.1:9100`）。
+
+```bash
+docker compose -f compose.prod.yaml -f compose.observe.yaml --env-file .env.prod up -d
+```
+
+LAN から取るときは `NODE_EXPORTER_HOST_PORT=0.0.0.0:9100` と FW / Tailscale。
+見るもの: `node_boot_time_seconds`（再起動ループ）、`node_filesystem_avail_bytes`、`node_memory_MemAvailable_bytes`、scrape 時刻と `node_time_seconds` のずれ（NTP）。
+
+#### Windows（Docker Desktop では compose.observe.yaml を使わない）
+
+1. [windows_exporter releases](https://github.com/prometheus-community/windows_exporter/releases) の MSI を取引ホストに入れる
+2. 既定 listen は `0.0.0.0:9182`。可能なら localhost + Tailscale に閉じる
+3. collector 例: `cpu,cs,logical_disk,memory,os,system,time`
+4. 別ホストから `http://<取引ホスト>:9182/metrics` を scrape（FW は監視ホストだけ許可）
+5. 見るもの: `windows_system_system_up_time`、`windows_logical_disk_free_bytes`、`windows_os_physical_memory_free_bytes`、`windows_time_computed_time_offset_seconds`
+
+時系列蓄積・SLO ダッシュボードは後続（P3 #18）。ここでは「ホストが応答するか」が閉じればよい。
+
+### 通知 heartbeat（通知経路死を見るとき必須）
+
+ホスト死の正本は別ホストの ready pull。Discord は **通知経路そのものの死** を見る。
+`DISCORD_WEBHOOK_URL` が無いと HEARTBEAT は出ない（起動はする）。経路死を検知する運用では Webhook を置く。
+
+Webhook があるとき、起動直後に 1 通、以降は既定 15 分（`DISCORD_HEARTBEAT_INTERVAL_MS`、0 / infinity でオフ）。
+イベント cooldown は掛けない。HTTP は Discord プロセスを待たせない。未設定・送信失敗でも発注は止めない。
+
+運用: **2 間隔（既定 30 分）来なければ** 通知経路またはプロセス死。Discord チャンネルを人が見るか、別経路（メール / 別 webhook）で欠落を取る。halt / mismatch / disconnect のイベント通知とは別に、沈黙自体をアラートにする。
+
+### ホスト内の補助（外部監視の代替にしない）
+
+最低限、次も見る（率・推移の本命は後続の永続 metrics）。
 
 - コンテナの死活と再起動ループ
 - WebSocket の切断時間とデータ遅延
 - 未約定注文の滞留
 - 内部状態と取引所状態の不一致
 - 日次損益とリミット接近
-- ディスク / メモリ / 時刻同期
 
 率・推移の見方:
 
 - **ログ**: prod 既定で `Telemetry.Metrics.ConsoleReporter` が低頻度ドメイン（disconnect / rejected / order / reconcile / circuit / readiness / health）をイベント毎に stdout へ出す。tick・Phoenix・VM は除外。長期保管で埋もれる場合は `UI_METRICS_CONSOLE=false`
 - **画面**: `https://…/ops/dashboard`（Status と同じ `UI_BASIC_AUTH_*`）。loopback / ACL 配下で公開する。Ecto・RequestLogger・OS env 表示・破壊操作はオフ。Processes / ETS / Applications はライブラリ既定で残るため、Status 単独より OTP 内省の到達面が広い
-- Prometheus エクスポートは未導入（必要になったら後続）
+- アプリの Prometheus scrape エンドポイントは未導入（P3 #18）
 
 アラートは「起きたこと」と「今トレードしてよいか」が分かる文言にする。
 
@@ -304,9 +373,13 @@ docker compose -f compose.prod.yaml --env-file .env.prod exec app \
 
 ### live 解禁チェックリスト（短い）
 
+コードと手順があることと、別ホストのジョブが動いていることは別。下は運用側の確認。
+
 - [ ] `TRADE_MODE=dry_run`（または paper）で入れ替え・ロールバックを一度成功している
 - [ ] API キーは出金なし。ホスト `.env.prod` のみ
 - [ ] BasicAuth・公開面（ホスト loopback / ACL）が有効
-- [ ] Discord 等の心拍が届く（未設定ならログ監視を代替とし、後続で必須化）
+- [ ] 別ホストが `/health/ready` を 60s で pull し、非 ready / 到達不能でアラートする
+- [ ] ホスト exporter（Linux 9100 / Windows 9182）を別ホストが scrape する
+- [ ] `DISCORD_WEBHOOK_URL` を置き、起動直後の HEARTBEAT と 2 間隔欠落を人が検知できる
 - [ ] 最小ロット・厳しい risk 上限
 - [ ] `BITFLYER_LIVE_CONFIRM` に UTC 当日を明示したうえで `live` に切り替える

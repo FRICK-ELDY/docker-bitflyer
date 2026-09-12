@@ -1,0 +1,30 @@
+# Linux 取引ホスト上の node_exporter（スクレイプ対象）。監視する側ではない。
+#
+#   docker compose -f compose.prod.yaml -f compose.observe.yaml --env-file .env.prod up -d
+#
+# pid: host と /proc /sys / の bind でホスト disk / メモリ / 時刻を出す。
+# 別ホストの Prometheus / Uptime Kuma が NODE_EXPORTER_HOST_PORT を取る。
+# 同一ホストに Prometheus を置いてもホスト死は検知できない。
+#
+# Windows / Docker Desktop ではこのファイルを使わない（/proc が無く、
+# コンテナ/VM メトリクスになる）。windows_exporter の手順は prod.md。
+#
+# 既定は loopback のみ。LAN から取るときは NODE_EXPORTER_HOST_PORT=0.0.0.0:9100 と
+# ホスト FW / Tailscale を併用する。
+
+services:
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($|/)"
+    ports:
+      - "${NODE_EXPORTER_HOST_PORT:-127.0.0.1:9100}:9100"
+    restart: unless-stopped

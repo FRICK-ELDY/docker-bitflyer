@@ -200,7 +200,40 @@ discord_webhook =
       nil
   end
 
-config :bitflyer, Bitflyer.Observe.Discord, webhook_url: discord_webhook
+discord_heartbeat_ms =
+  case System.get_env("DISCORD_HEARTBEAT_INTERVAL_MS") do
+    nil ->
+      :bitflyer
+      |> Application.get_env(Bitflyer.Observe.Discord, [])
+      |> Keyword.get(:heartbeat_interval_ms, 900_000)
+
+    raw ->
+      trimmed = String.trim(raw)
+
+      cond do
+        trimmed in ["", "infinity"] ->
+          :infinity
+
+        true ->
+          case Integer.parse(trimmed) do
+            {ms, ""} when ms > 0 ->
+              ms
+
+            {0, ""} ->
+              :infinity
+
+            _ ->
+              raise """
+              invalid DISCORD_HEARTBEAT_INTERVAL_MS #{inspect(raw)}.
+              Use a positive millisecond integer, 0, or infinity.
+              """
+          end
+      end
+  end
+
+config :bitflyer, Bitflyer.Observe.Discord,
+  webhook_url: discord_webhook,
+  heartbeat_interval_ms: discord_heartbeat_ms
 
 # UI BasicAuth。prod は必須。dev は両方揃ったときだけ有効（test は既定オフ）。
 ui_basic_user =

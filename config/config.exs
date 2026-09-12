@@ -104,6 +104,8 @@ config :bitflyer, Bitflyer.OrderExecutor.Paper,
 config :bitflyer, Bitflyer.Observe.Discord,
   webhook_url: nil,
   cooldown_ms: 60_000,
+  # 通知経路の死はイベント欠落では分からない。0 / infinity でオフ。
+  heartbeat_interval_ms: 900_000,
   http_client: Bitflyer.Observe.Discord.HTTP
 
 config :ui,
