@@ -39,7 +39,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | UI StatusLive | implemented | 発注可否・建玉・未約定・当日損益・halt 復帰手順・Feed・鮮度・モード色分け。BasicAuth 付き kill / resume / reconcile |
 | observe — 実 API contract / Game Day | implemented | 匿名公開 corpus の意味論（`mix bitflyer.contract --corpus`）。公開 GET 探針は人手。`--private` は署名 GET のみ（発注しない）。手順は [game-day.md](.workspace/0_doc/architecture/env/game-day.md) |
 | CI（`mix precommit` / GitHub Actions） | implemented | PR と `main`。`Dockerfile.prod` ビルド検証（push なし）も実行 |
-| deps audit（`mix deps.audit`） | implemented | ゲート外の可視化。CI artifact。Hex のみ（GitHub 依存は対象外） |
+| deps audit（`mix deps.audit`） | implemented | CI 別ジョブ。Hex advisory 検出時のみ fail。ツール障害は落とさない。Actions は SHA pin。Dependabot（mix / github-actions）。GitHub タグ依存はスキャン対象外 |
 | CD（GHCR push） | implemented | `v*` / `workflow_dispatch`。**最新 CI（workflow 全体）success の SHA のみ**。digest を Compose に固定 |
 | private bitFlyer API（署名付き REST） | implemented | `Exchange.Rest`。cancel / 照会 / 約定反映。live+キーで差し込み。既定は Unavailable |
 | UI 認証（BasicAuth） | implemented | `UI_BASIC_AUTH_*`。prod 必須。`/health*` は対象外 |
@@ -105,17 +105,17 @@ docker compose run --rm -e MIX_ENV=test app mix ash.setup --domains Bitflyer.Tra
 
 （上書きしたいときは `TEST_DATABASE_URL` を設定する。CI はジョブ内で setup してから `precommit` する。）
 
-GitHub Actions は PR / `main` で `mix precommit` に加え `Dockerfile.prod` ビルド検証（push なし）も行う。範囲の詳細は [architecture/ci-cd.md](.workspace/0_doc/architecture/ci-cd.md)。**CI が赤のまま `main` へマージしない。** CD（GHCR）は対象 SHA の**最新** `ci.yml`（workflow 全体）success を前提とする（未完了時は待たず失敗・再実行）。
+GitHub Actions は PR / `main` で `mix precommit` に加え `deps-audit`（Hex advisory 検出時のみ fail）と `Dockerfile.prod` ビルド検証（push なし）も行う。範囲の詳細は [architecture/ci-cd.md](.workspace/0_doc/architecture/ci-cd.md)。**CI が赤のまま `main` へマージしない。** CD（GHCR）は対象 SHA の**最新** `ci.yml`（workflow 全体）success を前提とする（未完了時は待たず失敗・再実行）。
 
-### deps audit（ゲート外・可視化）
+### deps audit（precommit から分離）
 
-品質ゲートには含めない。CI では別ステップで実行し、失敗してもジョブは緑のまま（artifact `deps-audit-report` に残る）。ローカル再現:
+`mix precommit` には入れない。CI の別ジョブが `mix deps.audit --format=json` を 1 回実行し、`"pass":false` のときだけ落とす。Hex の取得障害などは warning でジョブ成功（配布は止めない）。artifact `deps-audit-report`。ローカル再現:
 
 ```bash
 docker compose run --rm app mix deps.audit
 ```
 
-Hex の既知 advisory が対象。`heroicons` / `daisyui` など GitHub タグ依存はスキャンされない。**CI 緑 ≠ 依存に既知脆弱性なし。**
+Hex の既知 advisory が対象。`heroicons` / `daisyui` など GitHub タグ依存はスキャンされない。更新 PR は Dependabot（`.github/dependabot.yml`）。Actions は commit SHA 固定。**CI 緑 ≠ GitHub 依存に既知脆弱性なし。**
 
 ## 環境変数
 
