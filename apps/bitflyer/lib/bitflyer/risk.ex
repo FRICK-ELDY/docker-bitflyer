@@ -6,9 +6,11 @@ defmodule Bitflyer.Risk do
   上限超過・stale・未同期は必ず拒否する。
   サーキットは `open_circuit/1` / `clear_circuit/1`。
 
-  検査: 同期 → FailureRate 同期 → 鮮度 → 時計ずれ → 注文サイズ → 建玉 → 価格逸脱 →
+  検査: 同期 → FailureRate 同期 → 鮮度 → 時計ずれ → 注文サイズ → 建玉 →
+  live spot 売りカバー（買い建玉 − 未約定売り） → 価格逸脱 →
   発注頻度予約 → 日次損失 → 日次ドローダウン（realized+unrealized） → 残高。
   live は先に銘柄種別を検査し、spot 以外（FX/CFD）を拒否する。
+  live spot の売りは Position なしのベースライン在庫を対象にしない。
 
   鮮度は `Cache.fresh?/3` のみ。Feed 切断そのものは見ないため、切断直後〜stale までの
   短時間は Status STOPPED / `/health/ready` 503 でも authorize が通りうる
@@ -36,7 +38,7 @@ defmodule Bitflyer.Risk do
     OrderRate
   }
 
-  alias Bitflyer.Trading.{Position, Product}
+  alias Bitflyer.Trading.{Order, Position, Product, SpotInventory}
 
   @type rejection_code ::
           :invalid_command
@@ -57,6 +59,7 @@ defmodule Bitflyer.Risk do
   - `:limits` — 上限上書き（`Limits.normalize/1` される）
   - `:positions` — 建玉リスト（テスト注入。`allow_test_injections: true` のときのみ。
     未指定／本番は trade_mode 全建玉を **1 回** 読み、建玉上限と Equity で共有する）
+  - `:open_orders` — 未約定リスト（テスト注入。live spot 売りカバー用。未指定時は DB）
   - `:now` / `:server` — Cache.fresh?/3・LTP 取得へ転送
   - `:authorized_order_server` — `AuthorizedOrder` GenServer（Cache の `:server` とは別）
   - `:failure_rate` / `:failure_rate_server` — FailureRate モジュールと GenServer 名（テスト注入）
@@ -86,6 +89,7 @@ defmodule Bitflyer.Risk do
            :ok <- check_clock_skew(command, limits, opts),
            :ok <- check_order_size(command, limits),
            :ok <- check_position_size(command, limits, opts),
+           :ok <- check_spot_sell_cover(command, opts),
            :ok <- check_price_deviation(command, limits, opts),
            {:ok, reservation} <- reserve_order_rate(limits, opts),
            :ok <- finish_authorize_after_rate(command, limits, opts, reservation) do
@@ -372,6 +376,46 @@ defmodule Bitflyer.Risk do
       {:error, _error} ->
         # 建玉が読めないときは空とみなさない（fail-closed）
         {:error, :unsynced, %{reason: :position_load_failed, product_code: product_code}}
+    end
+  end
+
+  # live spot: 売れるのは買い建玉 − 未約定売りまで。ベースライン専用在庫は売らない。
+  defp check_spot_sell_cover(command, opts) do
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+    side = Map.fetch!(command, :side)
+    product_code = Map.fetch!(command, :product_code)
+
+    cond do
+      trade_mode != :live ->
+        :ok
+
+      side != :sell ->
+        :ok
+
+      not Product.spot?(product_code) ->
+        :ok
+
+      true ->
+        enforce_spot_sell_cover(command, opts)
+    end
+  end
+
+  defp enforce_spot_sell_cover(command, opts) do
+    size = Map.fetch!(command, :size)
+    product_code = Map.fetch!(command, :product_code)
+
+    with {:ok, positions} <- fetch_positions(product_code, opts),
+         {:ok, open_orders} <- resolve_open_orders(opts) do
+      if SpotInventory.sell_covered?(positions, open_orders, product_code, size) do
+        :ok
+      else
+        {:error, :limit_exceeded,
+         %{
+           limit: :spot_sell_exceeds_position,
+           product_code: product_code,
+           size: size
+         }}
+      end
     end
   end
 
@@ -788,6 +832,36 @@ defmodule Bitflyer.Risk do
     case Keyword.fetch(opts, :positions) do
       {:ok, positions} -> {:ok, positions || []}
       :error -> resolve_positions(opts)
+    end
+  end
+
+  defp resolve_open_orders(opts) do
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+
+    case Keyword.fetch(opts, :open_orders) do
+      {:ok, orders} ->
+        if test_injections_allowed?() do
+          {:ok, orders || []}
+        else
+          load_open_orders(trade_mode)
+        end
+
+      :error ->
+        load_open_orders(trade_mode)
+    end
+  end
+
+  defp load_open_orders(trade_mode) do
+    case Order
+         |> Ash.Query.filter(
+           trade_mode == ^trade_mode and status in [:pending, :partially_filled]
+         )
+         |> Ash.read() do
+      {:ok, orders} ->
+        {:ok, orders}
+
+      {:error, error} ->
+        {:error, :unsynced, %{reason: :open_order_load_failed, error: inspect(error)}}
     end
   end
 

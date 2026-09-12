@@ -73,7 +73,11 @@
   建玉の mark が stale / 欠落なら **認可と resume は fail-closed**。周期 enforce
   （boot / `run_now` / periodic / Fill 後）は **halt しない**（切断だけで永続停止にしない）。
   超過時は `daily_drawdown_exceeded` で halt。新規注文は未実現に投影しない
-  （同一 LTP なら増分はほぼ 0。超過は約定後 enforce か周期で拾う）
+  （同一 LTP なら増分はほぼ 0。超過は約定後 enforce か周期で拾う）。
+  `unrealized` は内部 `Position.average_price` × LTP の推定（spot に取引所平均は無い）。
+  spot 在庫は突合で `getbalance` base amount と買い Position.size を比べ、
+  内部膨張・売り残超過・売建玉を `position_mismatch` にする（平均は比較しない）。
+  live 売りは認可でも同じカバー条件（ベースライン専用在庫は売らない）
 - 価格が直近相場から乖離した注文は出さない
 - 連続障害、署名エラー、想定外残高変動でサーキットブレーカを開く
 - サーキットが開いたら、新規注文を止め、**理由別に未約定 live の全取消（cancel-all）を選べる**

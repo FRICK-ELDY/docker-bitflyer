@@ -6,7 +6,8 @@ defmodule Bitflyer.Risk.Equity do
   ピーク上昇の persist は Fill 後 / 突合 / resume。認可は `persist: false` で
   ETS だけ上げ、ホットパスから Ash を呼ばない。再起動後は `DailyLoss.init` /
   `reload` が当日行を読む。
-  未実現は判定時に `MarketData.Cache` の LTP と `Position.average_price` から計算する。
+  未実現は判定時に `MarketData.Cache` の LTP と **内部** `Position.average_price`
+  から計算する推定値。spot に取引所平均は無く、比較対象にもしない。
 
   `drawdown = peak − equity_pnl`。日始 peak は 0 なので、一度もプラスにならなければ
   ゼロ基準の損失と同じ。実現益のあと含み損が膨らんでも、ピークからの下落で halt する。
