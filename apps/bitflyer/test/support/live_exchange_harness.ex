@@ -18,9 +18,10 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
     }
   end
 
-  def start_link(opts \\ []) do
-    name = Keyword.get(opts, :name, __MODULE__)
-    Agent.start_link(fn -> initial_state() end, name: name)
+  def start_link(_opts \\ []) do
+    # コールバックは Agent 名を __MODULE__ に固定している。
+    # :name を受けてずらすと fetch/place が別プロセスを見て壊れる。
+    Agent.start_link(fn -> initial_state() end, name: __MODULE__)
   end
 
   @impl true
@@ -216,17 +217,24 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
   end
 
   defp adjust_balance(balances, currency, amount_delta, available_delta) do
-    Enum.map(balances, fn
-      %{currency: ^currency} = row ->
-        %{
-          row
-          | amount: Decimal.add(row.amount, amount_delta),
-            available: Decimal.add(row.available, available_delta)
-        }
+    {updated, found?} =
+      Enum.map_reduce(balances, false, fn
+        %{currency: ^currency} = row, _found? ->
+          {%{
+             row
+             | amount: Decimal.add(row.amount, amount_delta),
+               available: Decimal.add(row.available, available_delta)
+           }, true}
 
-      row ->
-        row
-    end)
+        row, found? ->
+          {row, found?}
+      end)
+
+    if found? do
+      updated
+    else
+      raise ArgumentError, "LiveExchangeHarness has no #{currency} balance row"
+    end
   end
 
   defp open_orders(orders) do
