@@ -3,23 +3,32 @@ defmodule UiWeb.StatusLiveTest do
 
   require Ash.Query
 
+  import Bitflyer.TestSupport.BalanceCacheHelper
+  import Bitflyer.TestSupport.DailyLossHelper
+  import Bitflyer.TestSupport.MarketDataCacheHelper
   import Bitflyer.TestSupport.ReadinessHelper
   import Phoenix.LiveViewTest
 
   alias Bitflyer.MarketData.Cache
   alias Bitflyer.Readiness
-  alias Bitflyer.Trading.RiskState
+  alias Bitflyer.Trading.{Order, Position, RiskState}
 
   @product "BTC_JPY"
   @market_key {:ticker, @product}
 
   setup do
     reset_readiness()
+    reset_daily_loss()
+    reset_market_data_cache()
+    reset_balance_cache()
     clear_default_risk_state()
     assert Cache.clear() == :ok
 
     on_exit(fn ->
       reset_readiness()
+      reset_daily_loss()
+      reset_market_data_cache()
+      reset_balance_cache()
       clear_default_risk_state()
       _ = Cache.clear()
     end)
@@ -48,6 +57,16 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#status-page", "Market data")
     assert has_element?(view, "#ops-controls")
     assert has_element?(view, "#ops-kill-switch")
+    assert has_element?(view, "#exposure")
+    assert has_element?(view, "#exposure-positions-empty")
+    assert has_element?(view, "#exposure-open-orders-empty")
+    assert has_element?(view, "#exposure-open-orders-count", "0 open")
+    assert has_element?(view, "#daily-pnl")
+    assert has_element?(view, "#daily-pnl-status", "available")
+    assert has_element?(view, "#exposure-balances")
+    assert has_element?(view, "#exposure-balance-JPY")
+    assert has_element?(view, "#exposure-balance-BTC")
+    refute has_element?(view, "#halt-recovery")
     assert has_element?(view, "#app-header", "docker_bitflyer")
     refute has_element?(view, "a", "Get Started")
     refute has_element?(view, "a", "Website")
@@ -71,6 +90,11 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#ops-controls", "運用操作")
     assert has_element?(view, "#orders-gate-label", "停止")
     assert has_element?(view, "#feed-status", "無効")
+    assert has_element?(view, "#exposure-positions", "建玉")
+    assert has_element?(view, "#exposure-open-orders", "未約定")
+    assert has_element?(view, "#daily-pnl", "当日損益")
+    assert has_element?(view, "#daily-pnl-status", "取得可")
+    assert has_element?(view, "#exposure-balances", "残高")
     assert has_element?(view, "#locale-ja")
   end
 
@@ -84,6 +108,103 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#orders-gate-reason", "reconcile_mismatch")
     assert has_element?(view, "#ops-resume")
     assert has_element?(view, "#ops-reconcile-now")
+    assert has_element?(view, "#halt-recovery")
+    assert has_element?(view, "#halt-recovery-reason", "reconcile_mismatch")
+    assert has_element?(view, "#halt-recovery-step-1")
+    assert has_element?(view, "#halt-recovery-steps", "Reconcile now")
+  end
+
+  test "status page shows positions, open orders, and daily pnl", %{conn: conn} do
+    {:ok, _} =
+      Position
+      |> Ash.Changeset.for_create(:create, %{
+        product_code: @product,
+        side: :buy,
+        size: Decimal.new("0.02"),
+        average_price: Decimal.new("5000000"),
+        trade_mode: :dry_run
+      })
+      |> Ash.create()
+
+    {:ok, _} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "status-open-1",
+        exchange_order_id: "JRF-status-open-1",
+        product_code: @product,
+        side: :buy,
+        status: :pending,
+        order_type: :limit,
+        price: Decimal.new("4990000"),
+        size: Decimal.new("0.01"),
+        filled_size: Decimal.new("0"),
+        trade_mode: :dry_run
+      })
+      |> Ash.create()
+
+    {:ok, _} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "status-partial-1",
+        exchange_order_id: "JRF-status-partial-1",
+        product_code: @product,
+        side: :sell,
+        status: :partially_filled,
+        order_type: :limit,
+        price: Decimal.new("5100000"),
+        size: Decimal.new("0.01"),
+        filled_size: Decimal.new("0.004"),
+        filled_notional: Decimal.new("20400"),
+        trade_mode: :dry_run
+      })
+      |> Ash.create()
+
+    assert put_fresh_ticker(@market_key, Decimal.new("4900000")) == :ok
+    seed_balance_cache!(:dry_run, %{"JPY" => "2500000", "BTC" => "0.4"})
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    assert has_element?(view, "#exposure-position-BTC_JPY", "0.02")
+    assert has_element?(view, "#exposure-position-BTC_JPY", "4900000")
+    assert has_element?(view, "#exposure-position-BTC_JPY", "-2000")
+    refute has_element?(view, "#exposure-positions-empty")
+    assert has_element?(view, "#exposure-open-order-status-open-1", "pending")
+    assert has_element?(view, "#exposure-open-order-status-open-1", "JRF-status-open-1")
+    assert has_element?(view, "#exposure-open-order-status-open-1", "4990000")
+    assert has_element?(view, "#exposure-open-order-status-partial-1", "partially_filled")
+    assert has_element?(view, "#exposure-open-order-status-partial-1", "sell")
+    assert has_element?(view, "#exposure-open-order-status-partial-1", "0.006")
+    refute has_element?(view, "#exposure-open-orders-empty")
+    assert has_element?(view, "#exposure-open-orders-count", "2 open")
+    assert has_element?(view, "#exposure-balance-JPY", "2500000")
+    assert has_element?(view, "#exposure-balance-BTC", "0.4")
+    assert has_element?(view, "#daily-pnl-unrealized", "-2000")
+    assert has_element?(view, "#daily-pnl-status", "available")
+  end
+
+  test "opening status does not halt or raise daily peak", %{conn: conn} do
+    assert Readiness.mark_ready() == :ok
+
+    {:ok, _} =
+      Position
+      |> Ash.Changeset.for_create(:create, %{
+        product_code: @product,
+        side: :buy,
+        size: Decimal.new("0.1"),
+        average_price: Decimal.new("5000000"),
+        trade_mode: :dry_run
+      })
+      |> Ash.create()
+
+    assert put_fresh_ticker(@market_key, Decimal.new("1000000")) == :ok
+
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    assert has_element?(view, "#exposure-position-BTC_JPY")
+    assert has_element?(view, "#daily-pnl-unrealized", "-400000")
+    assert Readiness.get() == :ready
+    assert {:ok, %{peak: peak}} = Bitflyer.Risk.DailyLoss.snapshot(:dry_run)
+    assert Decimal.eq?(peak, Decimal.new(0))
   end
 
   test "orders gate shows ALLOWED when ready and market data is fresh", %{conn: conn} do

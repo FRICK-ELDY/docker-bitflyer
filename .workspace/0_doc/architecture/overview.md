@@ -143,7 +143,7 @@ Ready 状態の正本は `Bitflyer.Readiness`（`:not_ready` / `:ready` / `{:hal
 
 LiveView Socket が Endpoint で `/live` を使うため、liveness は `/health/live` とする。Compose の healthcheck は `/health/live` を見る（WS 断でコンテナ再起動しない）。盲目運転の検知は `/health/ready` を監視する。
 
-Status UI（`:browser`）は `UI_BASIC_AUTH_*` による BasicAuth（prod 必須）。`/health*` は認証なし。LiveView は session `:ui_basic_ok` も要求する（health 経由の匿名 session だけでは購読不可）。本番 HTTP bind の既定は `PHX_HTTP_IP=127.0.0.1`。
+Status UI（`:browser`）は発注可否・建玉・未約定・当日損益・halt 復帰手順を `Bitflyer.System` 経由で表示する。`UI_BASIC_AUTH_*` による BasicAuth（prod 必須）。`/health*` は認証なし。LiveView は session `:ui_basic_ok` も要求する（health 経由の匿名 session だけでは購読不可）。本番 HTTP bind の既定は `PHX_HTTP_IP=127.0.0.1`。
 
 ## 発注経路
 

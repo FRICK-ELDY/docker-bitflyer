@@ -16,42 +16,39 @@ msgstr ""
 msgid "Actions"
 msgstr "操作"
 
-#: lib/ui_web/components/layouts.ex:103
-#: lib/ui_web/components/layouts.ex:118
+#: lib/ui_web/components/layouts.ex:85
+#: lib/ui_web/components/layouts.ex:100
 #, elixir-autogen, elixir-format
 msgid "Attempting to reconnect"
 msgstr "再接続を試行しています"
 
-#: lib/ui_web/live/status_live.ex:95
-#: lib/ui_web/live/status_live.ex:95
+#: lib/ui_web/live/status_live.ex:139
 #, elixir-autogen, elixir-format
 msgid "Language"
 msgstr "言語"
 
-#: lib/ui_web/live/status_live.ex:88
-#: lib/ui_web/live/status_live.ex:88
+#: lib/ui_web/live/status_live.ex:132
 #, elixir-autogen, elixir-format
 msgid "Operational health check. This is not a trading UI."
 msgstr "運用用の生存確認。取引 UI ではない。"
 
-#: lib/ui_web/components/layouts.ex:110
+#: lib/ui_web/components/layouts.ex:92
 #, elixir-autogen, elixir-format
 msgid "Something went wrong!"
 msgstr "問題が発生しました"
 
-#: lib/ui_web/live/status_live.ex:83
-#: lib/ui_web/live/status_live.ex:83
+#: lib/ui_web/live/status_live.ex:127
+#: lib/ui_web/live/status_live.ex:375
 #, elixir-autogen, elixir-format
 msgid "Status"
 msgstr "ステータス"
 
-#: lib/ui_web/live/status_live.ex:216
-#: lib/ui_web/live/status_live.ex:216
+#: lib/ui_web/live/status_live.ex:497
 #, elixir-autogen, elixir-format
 msgid "Trade mode"
 msgstr "取引モード"
 
-#: lib/ui_web/components/layouts.ex:95
+#: lib/ui_web/components/layouts.ex:77
 #, elixir-autogen, elixir-format
 msgid "We can't find the internet"
 msgstr "インターネットに接続できません"
@@ -61,216 +58,506 @@ msgstr "インターネットに接続できません"
 msgid "close"
 msgstr "閉じる"
 
-#: lib/ui_web/live/status_live.ex:338
-#: lib/ui_web/live/status_live.ex:338
-#: lib/ui_web/live/status_live.ex:426
-#: lib/ui_web/live/status_live.ex:426
+#: lib/ui_web/live/status_live.ex:619
+#: lib/ui_web/live/status_live.ex:750
 #, elixir-autogen, elixir-format
 msgid "connected"
 msgstr "接続中"
 
-#: lib/ui_web/live/status_live.ex:338
-#: lib/ui_web/live/status_live.ex:338
-#: lib/ui_web/live/status_live.ex:425
-#: lib/ui_web/live/status_live.ex:425
+#: lib/ui_web/live/status_live.ex:390
+#: lib/ui_web/live/status_live.ex:619
+#: lib/ui_web/live/status_live.ex:749
+#: lib/ui_web/live/status_live.ex:761
 #, elixir-autogen, elixir-format
 msgid "unavailable"
 msgstr "利用不可"
 
-#: lib/ui_web/live/status_live.ex:236
-#: lib/ui_web/live/status_live.ex:236
+#: lib/ui_web/live/status_live.ex:517
 #, elixir-autogen, elixir-format
 msgid "Readiness"
 msgstr "Ready 状態"
 
-#: lib/ui_web/live/status_live.ex:418
-#: lib/ui_web/live/status_live.ex:418
+#: lib/ui_web/live/status_live.ex:742
 #, elixir-autogen, elixir-format
 msgid "ALLOWED"
 msgstr "可"
 
-#: lib/ui_web/live/status_live.ex:253
-#: lib/ui_web/live/status_live.ex:253
+#: lib/ui_web/live/status_live.ex:260
+#: lib/ui_web/live/status_live.ex:534
 #, elixir-autogen, elixir-format
 msgid "Halt reason"
 msgstr "停止理由"
 
-#: lib/ui_web/live/status_live.ex:298
-#: lib/ui_web/live/status_live.ex:298
+#: lib/ui_web/live/status_live.ex:579
 #, elixir-autogen, elixir-format
 msgid "Market data"
 msgstr "市場データ"
 
-#: lib/ui_web/live/status_live.ex:132
-#: lib/ui_web/live/status_live.ex:132
+#: lib/ui_web/live/status_live.ex:176
 #, elixir-autogen, elixir-format
 msgid "Orders"
 msgstr "発注"
 
-#: lib/ui_web/live/status_live.ex:146
-#: lib/ui_web/live/status_live.ex:146
+#: lib/ui_web/live/status_live.ex:190
 #, elixir-autogen, elixir-format
 msgid "Reason"
 msgstr "理由"
 
-#: lib/ui_web/live/status_live.ex:419
-#: lib/ui_web/live/status_live.ex:419
+#: lib/ui_web/live/status_live.ex:743
 #, elixir-autogen, elixir-format
 msgid "STOPPED"
 msgstr "停止"
 
-#: lib/ui_web/live/status_live.ex:319
-#: lib/ui_web/live/status_live.ex:319
-#: lib/ui_web/live/status_live.ex:421
-#: lib/ui_web/live/status_live.ex:421
+#: lib/ui_web/live/status_live.ex:600
+#: lib/ui_web/live/status_live.ex:745
 #, elixir-autogen, elixir-format
 msgid "fresh"
 msgstr "新鮮"
 
-#: lib/ui_web/live/status_live.ex:433
-#: lib/ui_web/live/status_live.ex:433
+#: lib/ui_web/live/status_live.ex:757
 #, elixir-autogen, elixir-format
 msgid "miss"
 msgstr "なし"
 
-#: lib/ui_web/live/status_live.ex:319
-#: lib/ui_web/live/status_live.ex:319
-#: lib/ui_web/live/status_live.ex:422
-#: lib/ui_web/live/status_live.ex:422
+#: lib/ui_web/live/status_live.ex:600
+#: lib/ui_web/live/status_live.ex:746
+#: lib/ui_web/live/status_live.ex:765
 #, elixir-autogen, elixir-format
 msgid "stale"
 msgstr "古い"
 
-#: lib/ui_web/live/status_live.ex:264
-#: lib/ui_web/live/status_live.ex:264
+#: lib/ui_web/live/status_live.ex:545
 #, elixir-autogen, elixir-format
 msgid "Feed"
 msgstr "Feed"
 
-#: lib/ui_web/live/status_live.ex:424
-#: lib/ui_web/live/status_live.ex:424
+#: lib/ui_web/live/status_live.ex:748
 #, elixir-autogen, elixir-format
 msgid "disabled"
 msgstr "無効"
 
-#: lib/ui_web/live/status_live.ex:427
-#: lib/ui_web/live/status_live.ex:427
+#: lib/ui_web/live/status_live.ex:751
 #, elixir-autogen, elixir-format
 msgid "disconnected"
 msgstr "切断"
 
-#: lib/ui_web/live/status_live.ex:282
-#: lib/ui_web/live/status_live.ex:282
+#: lib/ui_web/live/status_live.ex:563
 #, elixir-autogen, elixir-format
 msgid "subscribes"
 msgstr "購読回数"
 
-#: lib/ui_web/live/status_live.ex:285
-#: lib/ui_web/live/status_live.ex:285
+#: lib/ui_web/live/status_live.ex:566
 #, elixir-autogen, elixir-format
 msgid "reconnects"
 msgstr "再接続回数"
 
-#: lib/ui_web/live/status_live.ex:157
-#: lib/ui_web/live/status_live.ex:157
+#: lib/ui_web/live/status_live.ex:201
 #, elixir-autogen, elixir-format
 msgid "Authenticated controls. Kill stops orders immediately."
 msgstr "認証済みの操作。Kill は発注を即停止します。"
 
-#: lib/ui_web/live/status_live.ex:165
-#: lib/ui_web/live/status_live.ex:165
+#: lib/ui_web/live/status_live.ex:209
 #, elixir-autogen, elixir-format
 msgid "Halting…"
 msgstr "停止中…"
 
-#: lib/ui_web/live/status_live.ex:172
-#: lib/ui_web/live/status_live.ex:172
+#: lib/ui_web/live/status_live.ex:216
 #, elixir-autogen, elixir-format
 msgid "Kill switch"
 msgstr "Kill switch"
 
-#: lib/ui_web/live/status_live.ex:379
-#: lib/ui_web/live/status_live.ex:379
+#: lib/ui_web/live/status_live.ex:699
 #, elixir-autogen, elixir-format
 msgid "Kill switch applied. Orders are halted."
 msgstr "Kill switch を適用しました。発注は停止中です。"
 
-#: lib/ui_web/live/status_live.ex:391
-#: lib/ui_web/live/status_live.ex:391
+#: lib/ui_web/live/status_live.ex:711
 #, elixir-autogen, elixir-format
 msgid "Kill switch failed: %{error}"
 msgstr "Kill switch に失敗しました: %{error}"
 
-#: lib/ui_web/live/status_live.ex:154
-#: lib/ui_web/live/status_live.ex:154
+#: lib/ui_web/live/status_live.ex:198
 #, elixir-autogen, elixir-format
 msgid "Operations"
 msgstr "運用操作"
 
-#: lib/ui_web/live/status_live.ex:415
-#: lib/ui_web/live/status_live.ex:415
+#: lib/ui_web/live/status_live.ex:735
+#: lib/ui_web/live/status_live.ex:739
 #, elixir-autogen, elixir-format
 msgid "Reconcile failed: %{reason}"
 msgstr "突合に失敗しました: %{reason}"
 
-#: lib/ui_web/live/status_live.ex:411
-#: lib/ui_web/live/status_live.ex:411
+#: lib/ui_web/live/status_live.ex:731
 #, elixir-autogen, elixir-format
 msgid "Reconcile finished successfully."
 msgstr "突合が完了しました。"
 
-#: lib/ui_web/live/status_live.ex:203
-#: lib/ui_web/live/status_live.ex:203
+#: lib/ui_web/live/status_live.ex:247
 #, elixir-autogen, elixir-format
 msgid "Reconcile now"
 msgstr "今すぐ突合"
 
-#: lib/ui_web/live/status_live.ex:196
-#: lib/ui_web/live/status_live.ex:196
+#: lib/ui_web/live/status_live.ex:240
 #, elixir-autogen, elixir-format
 msgid "Reconciling…"
 msgstr "突合中…"
 
-#: lib/ui_web/live/status_live.ex:188
-#: lib/ui_web/live/status_live.ex:188
+#: lib/ui_web/live/status_live.ex:232
 #, elixir-autogen, elixir-format
 msgid "Resume"
 msgstr "再開"
 
-#: lib/ui_web/live/status_live.ex:403
-#: lib/ui_web/live/status_live.ex:403
-#: lib/ui_web/live/status_live.ex:407
-#: lib/ui_web/live/status_live.ex:407
+#: lib/ui_web/live/status_live.ex:723
+#: lib/ui_web/live/status_live.ex:727
 #, elixir-autogen, elixir-format
 msgid "Resume failed: %{reason}"
 msgstr "再開に失敗しました: %{reason}"
 
-#: lib/ui_web/live/status_live.ex:399
-#: lib/ui_web/live/status_live.ex:399
+#: lib/ui_web/live/status_live.ex:719
 #, elixir-autogen, elixir-format
 msgid "Resume failed: not halted."
 msgstr "再開に失敗しました: halted ではありません。"
 
-#: lib/ui_web/live/status_live.ex:395
-#: lib/ui_web/live/status_live.ex:395
+#: lib/ui_web/live/status_live.ex:715
 #, elixir-autogen, elixir-format
 msgid "Resume succeeded. System is ready."
 msgstr "再開に成功しました。Ready です。"
 
-#: lib/ui_web/live/status_live.ex:181
-#: lib/ui_web/live/status_live.ex:181
+#: lib/ui_web/live/status_live.ex:225
 #, elixir-autogen, elixir-format
 msgid "Resuming…"
 msgstr "再開中…"
 
-#: lib/ui_web/live/status_live.ex:386
-#: lib/ui_web/live/status_live.ex:386
+#: lib/ui_web/live/status_live.ex:706
 #, elixir-autogen, elixir-format
 msgid "Orders halted in memory, but RiskState persist failed. Restart may clear it."
 msgstr "メモリ上では発注停止済みですが、RiskState の永続化に失敗しました。再起動で解除される可能性があります。"
 
-#: lib/ui_web/live/status_live.ex:180
-#: lib/ui_web/live/status_live.ex:180
+#: lib/ui_web/live/status_live.ex:224
 #, elixir-autogen, elixir-format
 msgid "Resume after re-reconcile? Only if reconcile succeeds."
 msgstr "再突合のあと再開しますか？突合が成功したときだけ Ready になります。"
+
+#: lib/ui_web/live/status_live.ex:334
+#, elixir-autogen, elixir-format
+msgid "%{count} open"
+msgstr "%{count} 件未約定"
+
+#: lib/ui_web/live/status_live.ex:378
+#, elixir-autogen, elixir-format
+msgid "Age"
+msgstr "経過"
+
+#: lib/ui_web/live/status_live.ex:308
+#, elixir-autogen, elixir-format
+msgid "Average"
+msgstr "平均単価"
+
+#: lib/ui_web/live/status_live.ex:850
+#, elixir-autogen, elixir-format
+msgid "Check API credentials / 401, then Resume."
+msgstr "API 資格情報 / 401 を確認してから再開する。"
+
+#: lib/ui_web/live/status_live.ex:811
+#, elixir-autogen, elixir-format
+msgid "Check RiskState persist / DB."
+msgstr "RiskState の永続化と DB を確認する。"
+
+#: lib/ui_web/live/status_live.ex:823
+#, elixir-autogen, elixir-format
+msgid "Check RiskState restore on boot."
+msgstr "起動時の RiskState 復元を確認する。"
+
+#: lib/ui_web/live/status_live.ex:853
+#, elixir-autogen, elixir-format
+msgid "Check consecutive exchange error logs."
+msgstr "連続した取引所エラーのログを確認する。"
+
+#: lib/ui_web/live/status_live.ex:829
+#, elixir-autogen, elixir-format
+msgid "Check exchange connectivity and credentials."
+msgstr "取引所への接続と資格情報を確認する。"
+
+#: lib/ui_web/live/status_live.ex:820
+#, elixir-autogen, elixir-format
+msgid "Check fill pricing / last executions."
+msgstr "約定価格と直近の executions を確認する。"
+
+#: lib/ui_web/live/status_live.ex:817
+#, elixir-autogen, elixir-format
+msgid "Check recent fills and fill sync logs."
+msgstr "直近の Fill と fill sync ログを確認する。"
+
+#: lib/ui_web/live/status_live.ex:772
+#, elixir-autogen, elixir-format
+msgid "Confirm the book is safe to resume."
+msgstr "建玉・注文が再開してよい状態か確認する。"
+
+#: lib/ui_web/live/status_live.ex:435
+#, elixir-autogen, elixir-format
+msgid "Daily PnL"
+msgstr "当日損益"
+
+#: lib/ui_web/live/status_live.ex:470
+#, elixir-autogen, elixir-format
+msgid "Daily loss"
+msgstr "当日損失"
+
+#: lib/ui_web/live/status_live.ex:835
+#, elixir-autogen, elixir-format
+msgid "Do not Resume until exchange payloads decode cleanly."
+msgstr "取引所ペイロードが正しくデコードできるまで再開しない。"
+
+#: lib/ui_web/live/status_live.ex:793
+#, elixir-autogen, elixir-format
+msgid "Do not Resume while daily loss is over the limit. Resume will refuse."
+msgstr "当日損失が上限超過のあいだは再開しない。Resume は拒否する。"
+
+#: lib/ui_web/live/status_live.ex:802
+#, elixir-autogen, elixir-format
+msgid "Do not Resume while drawdown is over the limit. Resume will refuse."
+msgstr "ドローダウンが上限超過のあいだは再開しない。Resume は拒否する。"
+
+#: lib/ui_web/live/status_live.ex:461
+#, elixir-autogen, elixir-format
+msgid "Drawdown"
+msgstr "ドローダウン"
+
+#: lib/ui_web/live/status_live.ex:455
+#, elixir-autogen, elixir-format
+msgid "Equity"
+msgstr "Equity"
+
+#: lib/ui_web/live/status_live.ex:345
+#, elixir-autogen, elixir-format
+msgid "Failed to load open orders."
+msgstr "未約定注文の読み込みに失敗しました。"
+
+#: lib/ui_web/live/status_live.ex:290
+#, elixir-autogen, elixir-format
+msgid "Failed to load positions."
+msgstr "建玉の読み込みに失敗しました。"
+
+#: lib/ui_web/live/status_live.ex:841
+#, elixir-autogen, elixir-format
+msgid "Fix API key permissions (withdraw must stay disabled)."
+msgstr "API キー権限を直す（出金は無効のまま）。"
+
+#: lib/ui_web/live/status_live.ex:826
+#, elixir-autogen, elixir-format
+msgid "Fix the database, then restart and Resume."
+msgstr "DB を直して再起動し、そのあと再開する。"
+
+#: lib/ui_web/live/status_live.ex:784
+#, elixir-autogen, elixir-format
+msgid "Fix the drift, then Resume."
+msgstr "ずれを直してから再開する。"
+
+#: lib/ui_web/live/status_live.ex:847
+#, elixir-autogen, elixir-format
+msgid "Fix the host clock (NTP), then Resume."
+msgstr "ホスト時計（NTP）を直してから再開する。"
+
+#: lib/ui_web/live/status_live.ex:477
+#, elixir-autogen, elixir-format
+msgid "Headroom"
+msgstr "上限までの余裕"
+
+#: lib/ui_web/components/layouts.ex:40
+#, elixir-autogen, elixir-format
+msgid "Home"
+msgstr "ホーム"
+
+#: lib/ui_web/live/status_live.ex:371
+#, elixir-autogen, elixir-format
+msgid "Id"
+msgstr "ID"
+
+#: lib/ui_web/live/status_live.ex:838
+#, elixir-autogen, elixir-format
+msgid "Identify the underlying halt reason from logs."
+msgstr "ログから停止の根本理由を特定する。"
+
+#: lib/ui_web/live/status_live.ex:832
+#, elixir-autogen, elixir-format
+msgid "Inspect invalid payload logs."
+msgstr "不正ペイロードのログを確認する。"
+
+#: lib/ui_web/live/status_live.ex:787
+#, elixir-autogen, elixir-format
+msgid "Inspect submission_unknown orders on this page."
+msgstr "この画面の submission_unknown 注文を確認する。"
+
+#: lib/ui_web/live/status_live.ex:814
+#, elixir-autogen, elixir-format
+msgid "Kill switch again to re-persist the halt, then Resume."
+msgstr "Kill switch で halt を再永続化してから再開する。"
+
+#: lib/ui_web/live/status_live.ex:353
+#, elixir-autogen, elixir-format
+msgid "No open orders"
+msgstr "未約定注文はありません"
+
+#: lib/ui_web/live/status_live.ex:298
+#, elixir-autogen, elixir-format
+msgid "No open positions"
+msgstr "建玉はありません"
+
+#: lib/ui_web/live/status_live.ex:331
+#, elixir-autogen, elixir-format
+msgid "Open orders"
+msgstr "未約定"
+
+#: lib/ui_web/live/status_live.ex:693
+#, elixir-autogen, elixir-format
+msgid "Operation failed: %{reason}"
+msgstr "操作に失敗しました: %{reason}"
+
+#: lib/ui_web/live/status_live.ex:283
+#, elixir-autogen, elixir-format
+msgid "Positions"
+msgstr "建玉"
+
+#: lib/ui_web/live/status_live.ex:305
+#: lib/ui_web/live/status_live.ex:373
+#, elixir-autogen, elixir-format
+msgid "Product"
+msgstr "銘柄"
+
+#: lib/ui_web/live/status_live.ex:778
+#, elixir-autogen, elixir-format
+msgid "Read mismatch logs (balances / positions / orders)."
+msgstr "不一致ログ（残高 / 建玉 / 注文）を読む。"
+
+#: lib/ui_web/live/status_live.ex:443
+#, elixir-autogen, elixir-format
+msgid "Realized"
+msgstr "実現損益"
+
+#: lib/ui_web/live/status_live.ex:790
+#, elixir-autogen, elixir-format
+msgid "Recover with mix bitflyer.recover (do not Resume blindly)."
+msgstr "mix bitflyer.recover で回収する（盲目的に再開しない）。"
+
+#: lib/ui_web/live/status_live.ex:257
+#, elixir-autogen, elixir-format
+msgid "Recovery steps"
+msgstr "復帰手順"
+
+#: lib/ui_web/live/status_live.ex:856
+#, elixir-autogen, elixir-format
+msgid "Reload DailyLoss / FailureRate or restart the node, then Resume."
+msgstr "DailyLoss / FailureRate を再読するかノードを再起動してから再開する。"
+
+#: lib/ui_web/live/status_live.ex:377
+#, elixir-autogen, elixir-format
+msgid "Remaining"
+msgstr "残数量"
+
+#: lib/ui_web/live/status_live.ex:844
+#, elixir-autogen, elixir-format
+msgid "Restart, then Resume."
+msgstr "再起動してから再開する。"
+
+#: lib/ui_web/live/status_live.ex:808
+#, elixir-autogen, elixir-format
+msgid "Resume only after drawdown is under the limit."
+msgstr "ドローダウンが上限内に戻ってから再開する。"
+
+#: lib/ui_web/live/status_live.ex:799
+#, elixir-autogen, elixir-format
+msgid "Resume only after the limit is clear."
+msgstr "上限を下回ってから再開する。"
+
+#: lib/ui_web/live/status_live.ex:781
+#, elixir-autogen, elixir-format
+msgid "Run Reconcile now on this page (does not clear halt)."
+msgstr "この画面で今すぐ突合する（halt は解除されない）。"
+
+#: lib/ui_web/live/status_live.ex:361
+#, elixir-autogen, elixir-format
+msgid "Showing %{shown} of %{count}"
+msgstr "%{count} 件中 %{shown} 件を表示"
+
+#: lib/ui_web/live/status_live.ex:306
+#: lib/ui_web/live/status_live.ex:374
+#, elixir-autogen, elixir-format
+msgid "Side"
+msgstr "売買"
+
+#: lib/ui_web/live/status_live.ex:307
+#, elixir-autogen, elixir-format
+msgid "Size"
+msgstr "数量"
+
+#: lib/ui_web/live/status_live.ex:310
+#: lib/ui_web/live/status_live.ex:449
+#, elixir-autogen, elixir-format
+msgid "Unrealized"
+msgstr "含み損益"
+
+#: lib/ui_web/live/status_live.ex:775
+#, elixir-autogen, elixir-format
+msgid "Use Resume on this page after you confirm."
+msgstr "確認したあと、この画面の Resume を使う。"
+
+#: lib/ui_web/live/status_live.ex:805
+#, elixir-autogen, elixir-format
+msgid "Wait for marks to recover, or flatten so drawdown is under the limit."
+msgstr "マークが戻るか、決済してドローダウンを上限内にする。"
+
+#: lib/ui_web/live/status_live.ex:796
+#, elixir-autogen, elixir-format
+msgid "Wait for the JST day to reset, or flatten and confirm loss is under the limit."
+msgstr "JST 日付更新を待つか、決済して損失が上限内であることを確認する。"
+
+#: lib/ui_web/live/status_live.ex:764
+#, elixir-autogen, elixir-format
+msgid "available"
+msgstr "取得可"
+
+#: lib/ui_web/live/status_live.ex:481
+#, elixir-autogen, elixir-format
+msgid "drawdown"
+msgstr "ドローダウン"
+
+#: lib/ui_web/live/status_live.ex:479
+#, elixir-autogen, elixir-format
+msgid "loss"
+msgstr "損失"
+
+#: lib/ui_web/live/status_live.ex:336
+#, elixir-autogen, elixir-format
+msgid "oldest"
+msgstr "最古"
+
+#: lib/ui_web/live/status_live.ex:766
+#: lib/ui_web/live/status_live.ex:768
+#, elixir-autogen, elixir-format
+msgid "unsynced"
+msgstr "未同期"
+
+#: lib/ui_web/live/status_live.ex:408
+#, elixir-autogen, elixir-format
+msgid "Balances"
+msgstr "残高"
+
+#: lib/ui_web/live/status_live.ex:372
+#, elixir-autogen, elixir-format
+msgid "Exchange ID"
+msgstr "取引所 ID"
+
+#: lib/ui_web/live/status_live.ex:769
+#, elixir-autogen, elixir-format
+msgid "Failed to load balances."
+msgstr "残高の読み込みに失敗しました。"
+
+#: lib/ui_web/live/status_live.ex:309
+#, elixir-autogen, elixir-format
+msgid "Mark"
+msgstr "現在値"
+
+#: lib/ui_web/live/status_live.ex:376
+#, elixir-autogen, elixir-format
+msgid "Price"
+msgstr "価格"

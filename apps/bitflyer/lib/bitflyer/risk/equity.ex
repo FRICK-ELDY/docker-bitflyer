@@ -48,6 +48,9 @@ defmodule Bitflyer.Risk.Equity do
 
   @doc """
   realized net と含み損益を合成する。閾値比較はしない。
+
+  既定では当日ピーク（HWM）を更新する。表示専用は `record_peak: false`
+  （格納済み peak を読むだけ。authorize / enforce / 周期は既定のまま）。
   """
   @spec snapshot(keyword()) ::
           {:ok, snapshot()} | {:error, :stale, map()} | {:error, :unsynced, map()}
@@ -55,11 +58,12 @@ defmodule Bitflyer.Risk.Equity do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
     limits = limits(opts)
 
-    with {:ok, %{net: realized_net}} <- daily_net(trade_mode, opts),
+    with {:ok, %{net: realized_net, peak: stored_peak}} <- daily_net(trade_mode, opts),
          {:ok, positions} <- load_positions(trade_mode, opts),
          {:ok, unrealized} <- mark_unrealized(positions, limits, opts) do
       equity_pnl = Decimal.add(realized_net, unrealized)
-      {:ok, peak} = record_peak(trade_mode, equity_pnl, opts)
+      {:ok, peak} = resolve_peak(trade_mode, equity_pnl, stored_peak, opts)
+      drawdown = peak |> Decimal.sub(equity_pnl) |> Decimal.max(Decimal.new(0))
 
       {:ok,
        %{
@@ -67,9 +71,23 @@ defmodule Bitflyer.Risk.Equity do
          unrealized: unrealized,
          equity_pnl: equity_pnl,
          peak: peak,
-         drawdown: Decimal.sub(peak, equity_pnl),
+         drawdown: drawdown,
          max: limits.max_daily_drawdown
        }}
+    end
+  end
+
+  @doc """
+  建玉 1 本の mark（LTP）と含み。ピーク更新・halt はしない。
+  """
+  @spec mark_position(map(), keyword()) ::
+          {:ok, %{unrealized: Decimal.t(), mark: Decimal.t() | nil}}
+          | {:error, :stale, map()}
+          | {:error, :unsynced, map()}
+  def mark_position(position, opts \\ []) do
+    case position_unrealized(position, limits(opts), opts) do
+      {:ok, {pnl, ltp}} -> {:ok, %{unrealized: pnl, mark: ltp}}
+      {:error, _, _} = error -> error
     end
   end
 
@@ -143,8 +161,16 @@ defmodule Bitflyer.Risk.Equity do
       |> Keyword.merge(Keyword.take(opts, [:now_dt]))
 
     case DailyLoss.snapshot(trade_mode, daily_opts) do
-      {:ok, %{net: net}} -> {:ok, %{net: net}}
+      {:ok, %{net: net, peak: peak}} -> {:ok, %{net: net, peak: peak}}
       {:error, :unsynced} -> {:error, :unsynced, %{reason: :daily_loss_unsynced}}
+    end
+  end
+
+  defp resolve_peak(trade_mode, equity_pnl, stored_peak, opts) do
+    if Keyword.get(opts, :record_peak, true) do
+      record_peak(trade_mode, equity_pnl, opts)
+    else
+      {:ok, stored_peak}
     end
   end
 
@@ -189,7 +215,7 @@ defmodule Bitflyer.Risk.Equity do
   defp mark_unrealized(positions, limits, opts) do
     Enum.reduce_while(positions, {:ok, Decimal.new(0)}, fn position, {:ok, acc} ->
       case position_unrealized(position, limits, opts) do
-        {:ok, pnl} -> {:cont, {:ok, Decimal.add(acc, pnl)}}
+        {:ok, {pnl, _ltp}} -> {:cont, {:ok, Decimal.add(acc, pnl)}}
         {:error, _, _} = error -> {:halt, error}
       end
     end)
@@ -199,7 +225,7 @@ defmodule Bitflyer.Risk.Equity do
     size = Map.get(position, :size) || Decimal.new(0)
 
     if Decimal.compare(size, Decimal.new(0)) != :gt do
-      {:ok, Decimal.new(0)}
+      {:ok, {Decimal.new(0), nil}}
     else
       product_code = Map.fetch!(position, :product_code)
       key = MarketData.ticker_key(product_code)
@@ -216,7 +242,11 @@ defmodule Bitflyer.Risk.Equity do
             {:ok, ltp} ->
               avg = Map.fetch!(position, :average_price)
               side = Map.fetch!(position, :side)
-              mark_side_pnl(side, avg, ltp, size, product_code)
+
+              case mark_side_pnl(side, avg, ltp, size, product_code) do
+                {:ok, pnl} -> {:ok, {pnl, ltp}}
+                {:error, _, _} = error -> error
+              end
 
             :miss ->
               {:error, :stale,
