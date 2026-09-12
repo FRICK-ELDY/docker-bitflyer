@@ -113,7 +113,8 @@ defmodule UiWeb.StatusLive do
      |> apply_status(payload)}
   end
 
-  def handle_async(:status_refresh, {:exit, _reason}, socket) do
+  def handle_async(:status_refresh, {:exit, reason}, socket) do
+    Bitflyer.Telemetry.log(:warning, "status refresh failed", %{reason: inspect(reason)})
     {:noreply, assign(socket, :status_refreshing, false)}
   end
 

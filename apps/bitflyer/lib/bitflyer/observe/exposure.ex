@@ -164,6 +164,7 @@ defmodule Bitflyer.Observe.Exposure do
     case BalanceCache.get(trade_mode, balance_opts) do
       {:ok, map} -> {balance_rows(map), nil}
       {:error, :unsynced} -> {balance_rows(%{}), :unsynced}
+      {:error, _} -> {balance_rows(%{}), :load_failed}
     end
   rescue
     _ -> {balance_rows(%{}), :load_failed}
