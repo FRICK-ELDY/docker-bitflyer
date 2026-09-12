@@ -3,8 +3,9 @@ defmodule ClassifyDepsAuditTest do
 
   @script Path.expand("../../../../bin/classify-deps-audit.sh", __DIR__)
   @moduletag skip:
-               is_nil(System.find_executable("bash")) &&
-                 "bash is required; run via docker compose"
+               (is_nil(System.find_executable("bash")) or
+                  is_nil(System.find_executable("elixir"))) &&
+                 "bash and elixir are required; run via docker compose"
 
   test "clean json does not fail the gate" do
     {out, status} = classify(%{"pass" => true, "vulnerabilities" => []}, 0)
@@ -89,7 +90,13 @@ defmodule ClassifyDepsAuditTest do
   end
 
   test "pass false only inside a string is not an advisory" do
-    {out, status} = classify(~s({"note":"{\\"pass\\":false}"}), 0)
+    {out, status} = classify(%{"note" => ~s({"pass":false})}, 0)
+    assert status == 0
+    assert out =~ "outcome=audit_tool_or_fetch_failed"
+  end
+
+  test "nested pass is not the root gate" do
+    {out, status} = classify(%{"vulnerabilities" => [%{"pass" => false}]}, 0)
     assert status == 0
     assert out =~ "outcome=audit_tool_or_fetch_failed"
   end

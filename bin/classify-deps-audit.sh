@@ -26,22 +26,28 @@ if [[ ! "${json_exit}" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
-# pretty / 空白入りでもルート相当の "pass" を読む。jq はコンテナに無い前提。
-# Jason はキー順を保証しないので先頭一致にはしない（pass が後ろだとゲートをすり抜ける）。
-# オブジェクトキー（{ または , の直後）だけ見る。本文中の "pass":false は拾わない。
+# ルートの pass だけを Elixir 1.18 の JSON で読む。
+# 提案どおり elixir -e '... "$1"' にすると argv ではなく追加スクリプト扱いになるので -- で渡す。
 json_pass() {
   if [[ ! -f "$1" ]]; then
     echo unknown
     return
   fi
 
-  local compact
-  compact="$(tr -d '[:space:]' <"$1" 2>/dev/null || true)"
-  case "${compact}" in
-    '{"pass":false'*|*,'"pass":false'*) echo false ;;
-    '{"pass":true'*|*,'"pass":true'*) echo true ;;
-    *) echo unknown ;;
-  esac
+  elixir -e '
+    path = System.argv() |> List.first()
+
+    result =
+      with {:ok, bin} <- File.read(path),
+           {:ok, %{"pass" => pass}} <- JSON.decode(bin),
+           true <- is_boolean(pass) do
+        if pass, do: "true", else: "false"
+      else
+        _ -> "unknown"
+      end
+
+    IO.write(result)
+  ' -- "$1" 2>/dev/null || echo unknown
 }
 
 outcome="audit_tool_or_fetch_failed"
