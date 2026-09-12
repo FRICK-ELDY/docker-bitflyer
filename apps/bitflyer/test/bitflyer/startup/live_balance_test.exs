@@ -130,6 +130,37 @@ defmodule Bitflyer.Startup.LiveBalanceTest do
              )
   end
 
+  test "recorded fee advances without bps allowance" do
+    fills = [spot_buy_fill(%{fee: Decimal.new("80")})]
+    jpy = Decimal.new("949920")
+    btc = Decimal.new("0.51")
+
+    assert {:ok, plan} =
+             LiveBalance.explain(tips(), exchange(jpy, jpy, btc, btc), ["JPY", "BTC"],
+               fills: fills,
+               fee_tolerance_bps: 0
+             )
+
+    assert Enum.any?(plan.rows, & &1.changed?)
+    assert :ok = LiveBalance.advance(plan)
+    assert {:ok, rows} = BalanceSnapshot.latest_tips(:live)
+    assert Decimal.eq?(Enum.find(rows, &(&1.currency == "JPY")).amount, jpy)
+  end
+
+  test "recorded sell fee advances without bps allowance" do
+    fills = [Map.put(spot_sell_fill(), :fee, Decimal.new("80"))]
+    jpy = Decimal.new("1049920")
+    btc = Decimal.new("0.49")
+
+    assert {:ok, plan} =
+             LiveBalance.explain(tips(), exchange(jpy, jpy, btc, btc), ["JPY", "BTC"],
+               fills: fills,
+               fee_tolerance_bps: 0
+             )
+
+    assert Enum.any?(plan.rows, & &1.changed?)
+  end
+
   test "spot sell fill plus fee within tolerance advances" do
     fills = [spot_sell_fill()]
     # expected JPY 1_050_000, fee 80 → 1_049_920. BTC 0.49

@@ -3,6 +3,7 @@ defmodule Bitflyer.Exchange.Rest.Decode do
   Private REST 応答の正規化。
 
   数値は strict（不正・欠損・NaN/Inf は `:invalid_number`）。
+  execution の `commission` は必須・0 以上（欠落・負は `:invalid_number`）。
   識別子欠落・未知 side / status は snapshot/list 全体失敗
   （`:missing_identifier` / `:unknown_side` / `:unknown_status`）。
   `:skip` は明示 allowlist に載った無関係行のみ（現状は空。条件追加時はここに書く）。
@@ -245,6 +246,8 @@ defmodule Bitflyer.Exchange.Rest.Decode do
          {:ok, product_code} <- require_binary(product_code),
          {:ok, price} <- require_decimal(Map.get(row, "price") || Map.get(row, :price)),
          {:ok, size} <- require_decimal(Map.get(row, "size") || Map.get(row, :size)),
+         {:ok, commission} <-
+           require_nonneg_decimal(Map.get(row, "commission") || Map.get(row, :commission)),
          {:ok, executed_at} <- optional_execution_datetime(raw_executed_at) do
       {:ok,
        %{
@@ -254,6 +257,7 @@ defmodule Bitflyer.Exchange.Rest.Decode do
          side: side,
          price: price,
          size: size,
+         commission: commission,
          executed_at: executed_at
        }}
     end
@@ -386,6 +390,21 @@ defmodule Bitflyer.Exchange.Rest.Decode do
     case to_decimal(term) do
       {:ok, decimal} -> {:ok, decimal}
       :error -> {:error, :invalid_number}
+    end
+  end
+
+  # live 手数料。欠落・負は fail-closed（0 はプロモ無料として許す）。
+  defp require_nonneg_decimal(term) do
+    case require_decimal(term) do
+      {:ok, decimal} ->
+        if Decimal.compare(decimal, 0) == :lt do
+          {:error, :invalid_number}
+        else
+          {:ok, decimal}
+        end
+
+      {:error, _} = error ->
+        error
     end
   end
 

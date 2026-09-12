@@ -112,20 +112,24 @@ defmodule Bitflyer.Exchange.Rest.DecodeTest do
                "child_order_acceptance_id" => "JRF-1",
                "side" => "BUY",
                "price" => "100",
-               "size" => "0.01"
+               "size" => "0.01",
+               "commission" => "0"
              })
 
-    assert {:ok, %{product_code: "BTC_JPY"}} =
+    assert {:ok, %{product_code: "BTC_JPY", commission: commission}} =
              Decode.execution(
                %{
                  "id" => 1,
                  "child_order_acceptance_id" => "JRF-1",
                  "side" => "BUY",
                  "price" => "100",
-                 "size" => "0.01"
+                 "size" => "0.01",
+                 "commission" => "0"
                },
                "BTC_JPY"
              )
+
+    assert Decimal.eq?(commission, Decimal.new(0))
   end
 
   test "execution parses exec_date and rejects invalid datetime" do
@@ -134,7 +138,8 @@ defmodule Bitflyer.Exchange.Rest.DecodeTest do
       "child_order_acceptance_id" => "JRF-1",
       "side" => "BUY",
       "price" => "100",
-      "size" => "0.01"
+      "size" => "0.01",
+      "commission" => "0"
     }
 
     assert {:ok, %{id: "42", executed_at: %DateTime{}}} =
@@ -145,6 +150,23 @@ defmodule Bitflyer.Exchange.Rest.DecodeTest do
 
     assert {:error, :invalid_datetime} =
              Decode.execution(Map.put(base, "exec_date", "not-a-date"), "BTC_JPY")
+  end
+
+  test "execution rejects missing or negative commission" do
+    base = %{
+      "id" => 42,
+      "child_order_acceptance_id" => "JRF-1",
+      "side" => "BUY",
+      "price" => "100",
+      "size" => "0.01",
+      "commission" => "0"
+    }
+
+    assert {:error, :invalid_number} =
+             Decode.execution(Map.delete(base, "commission"), "BTC_JPY")
+
+    assert {:error, :invalid_number} =
+             Decode.execution(Map.put(base, "commission", "-1"), "BTC_JPY")
   end
 
   test "order_info accepts atom child_order_state like side atoms" do

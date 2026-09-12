@@ -3,7 +3,12 @@ defmodule Bitflyer.Trading.Fill do
   約定明細の正本。
 
   建玉反映と同一トランザクションで 1 行ずつ残す。
-  `realized_pnl` は決済分のみ（建増しは 0）。日次損失はここから集計する。
+  `realized_pnl` は決済の売買差から `fee` を引いた net（建増しも手数料だけ負）。
+  日次損失・Equity・Status はここから集計する。
+
+  live の `fee` は getexecutions の `commission`（spot は quote 通貨。BTC_JPY は JPY）。
+  欠落は記帳しない（Decode fail-closed）。paper は価格に fee を載せるため `fee` は 0。
+  本変更以前の行は `fee` が NULL（未記録）。残高説明は NULL 行だけ bps 許容を残す。
 
   live は取引所 execution 単位で書き、`(trade_mode, exchange_execution_id)` で二重記帳を拒む。
   paper は `exchange_execution_id` を nil のまま残す（一意制約の対象外）。
@@ -49,6 +54,7 @@ defmodule Bitflyer.Trading.Fill do
         :size,
         :price,
         :realized_pnl,
+        :fee,
         :trade_mode,
         :filled_at
       ]
@@ -100,6 +106,13 @@ defmodule Bitflyer.Trading.Fill do
       allow_nil? false
       public? true
       default Decimal.new("0")
+    end
+
+    # NULL = 未記録（レガシー）。0 は記録済みの無料。
+    attribute :fee, :decimal do
+      allow_nil? true
+      public? true
+      constraints min: 0
     end
 
     attribute :trade_mode, :atom do

@@ -110,7 +110,7 @@ Ash は永続状態（注文、建玉、残高スナップショット、リス�
 
 `paper` の起動突合は取引所の建玉ではなく、内部の仮想状態を正とする。`dry_run` では突合で建玉を書き換えない。
 
-live の当面の対象は **spot（既定 `BTC_JPY`）**。残高正本は `getbalance`。突合成功時、前回 tip からの amount 変化が内部 spot Fill 合計と **支払超過側** の手数料許容幅で説明できるときだけ新しい `BalanceSnapshot` を append して比較基準を前進させる。想定より増える差分（入金）は幅内でも `balance_mismatch`。Fill が無いときの絶対床は使わない。説明不能（外部入出金など）は halt。初期 tip は承認付き `Baseline.import`、強制上書きは承認付き `--rebaseline`。`getpositions` は spot では呼ばず、内部 `Position` も建玉突合から外す（Risk 上限用の補助）。したがって **同一 API キーに残る手動 FX/CFD 建玉は監視外**（live 解禁前に口座を spot 専用にするか建玉を解消する）。FX 証拠金正本は backlog（`fx-collateral-adapter`）。
+live の当面の対象は **spot（既定 `BTC_JPY`）**。残高正本は `getbalance`。突合成功時、前回 tip からの amount 変化が内部 spot Fill 合計と **支払超過側** の手数料許容幅で説明できるときだけ新しい `BalanceSnapshot` を append して比較基準を前進させる。`Fill.fee`（getexecutions の `commission`）が揃っていれば quote 側に織り込み、許容は絶対床。未記録（NULL）の Fill だけ 20bps。想定より増える差分（入金）は幅内でも `balance_mismatch`。Fill が無いときの絶対床は使わない。説明不能（外部入出金など）は halt。初期 tip は承認付き `Baseline.import`、強制上書きは承認付き `--rebaseline`。`getpositions` は spot では呼ばず、内部 `Position` も建玉突合から外す（Risk 上限用の補助）。したがって **同一 API キーに残る手動 FX/CFD 建玉は監視外**（live 解禁前に口座を spot 専用にするか建玉を解消する）。FX 証拠金正本は backlog（`fx-collateral-adapter`）。
 
 ## データと状態
 

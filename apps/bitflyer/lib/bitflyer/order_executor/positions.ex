@@ -15,6 +15,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
   - `:exchange_execution_id` — live の取引所 execution id（string）
   - `:filled_at` — 取引所時刻優先。未指定時は `DateTime.utc_now/0`
   - `:order_id` — Order FK。未指定時は `order.id`
+  - `:fee` — quote 通貨の手数料（`Decimal`、0 以上。省略時 0。paper は価格に含む）
   """
   @spec apply_fill(Order.t(), Decimal.t(), keyword()) ::
           {:ok, list(), %{realized_pnl: Decimal.t()}} | {:error, atom(), map()}
@@ -24,24 +25,38 @@ defmodule Bitflyer.OrderExecutor.Positions do
     side = order.side
     size = order.size
 
+    with {:ok, fee} <- normalize_fee(opts) do
+      apply_fill_with_fee(order, fill_price, size, side, product_code, trade_mode, fee, opts)
+    end
+  end
+
+  defp apply_fill_with_fee(order, fill_price, size, side, product_code, trade_mode, fee, opts) do
     case find_position(product_code, trade_mode) do
       {:ok, nil} ->
         case create_position(product_code, trade_mode, side, size, fill_price) do
           {:ok, notifications} ->
             with {:ok, fill_notifications} <-
-                   insert_fill(order, fill_price, size, Decimal.new(0), opts) do
-              {:ok, notifications ++ fill_notifications, %{realized_pnl: Decimal.new(0)}}
+                   insert_fill(
+                     order,
+                     fill_price,
+                     size,
+                     net_realized(Decimal.new(0), fee),
+                     fee,
+                     opts
+                   ) do
+              {:ok, notifications ++ fill_notifications,
+               %{realized_pnl: net_realized(Decimal.new(0), fee)}}
             end
 
           {:race, %Position{} = position} ->
-            merge_position(position, order, side, size, fill_price, opts)
+            merge_position(position, order, side, size, fill_price, fee, opts)
 
           {:error, _, _} = error ->
             error
         end
 
       {:ok, %Position{} = position} ->
-        merge_position(position, order, side, size, fill_price, opts)
+        merge_position(position, order, side, size, fill_price, fee, opts)
 
       {:error, error} ->
         {:error, :persist_failed, %{error: error}}
@@ -79,7 +94,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
     end
   end
 
-  defp merge_position(%Position{} = position, %Order{} = order, side, size, fill_price, opts) do
+  defp merge_position(%Position{} = position, %Order{} = order, side, size, fill_price, fee, opts) do
     cond do
       position.side == side ->
         new_size = Decimal.add(position.size, size)
@@ -93,32 +108,52 @@ defmodule Bitflyer.OrderExecutor.Positions do
         with {:ok, notifications} <-
                update_position(position, %{size: new_size, average_price: new_avg}),
              {:ok, fill_notifications} <-
-               insert_fill(order, fill_price, size, Decimal.new(0), opts) do
-          {:ok, notifications ++ fill_notifications, %{realized_pnl: Decimal.new(0)}}
+               insert_fill(order, fill_price, size, net_realized(Decimal.new(0), fee), fee, opts) do
+          {:ok, notifications ++ fill_notifications,
+           %{realized_pnl: net_realized(Decimal.new(0), fee)}}
         end
 
       Decimal.compare(size, position.size) == :lt ->
         closed = size
-        realized = realized_pnl(position.side, position.average_price, fill_price, closed)
+
+        realized =
+          net_realized(
+            realized_pnl(position.side, position.average_price, fill_price, closed),
+            fee
+          )
+
         new_size = Decimal.sub(position.size, size)
 
         with {:ok, notifications} <- update_position(position, %{size: new_size}),
-             {:ok, fill_notifications} <- insert_fill(order, fill_price, size, realized, opts) do
+             {:ok, fill_notifications} <-
+               insert_fill(order, fill_price, size, realized, fee, opts) do
           {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
         end
 
       Decimal.equal?(size, position.size) ->
         closed = position.size
-        realized = realized_pnl(position.side, position.average_price, fill_price, closed)
+
+        realized =
+          net_realized(
+            realized_pnl(position.side, position.average_price, fill_price, closed),
+            fee
+          )
 
         with {:ok, notifications} <- destroy_position(position),
-             {:ok, fill_notifications} <- insert_fill(order, fill_price, size, realized, opts) do
+             {:ok, fill_notifications} <-
+               insert_fill(order, fill_price, size, realized, fee, opts) do
           {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
         end
 
       true ->
         closed = position.size
-        realized = realized_pnl(position.side, position.average_price, fill_price, closed)
+
+        realized =
+          net_realized(
+            realized_pnl(position.side, position.average_price, fill_price, closed),
+            fee
+          )
+
         remainder = Decimal.sub(size, position.size)
 
         with {:ok, notifications} <-
@@ -127,7 +162,8 @@ defmodule Bitflyer.OrderExecutor.Positions do
                  size: remainder,
                  average_price: fill_price
                }),
-             {:ok, fill_notifications} <- insert_fill(order, fill_price, size, realized, opts) do
+             {:ok, fill_notifications} <-
+               insert_fill(order, fill_price, size, realized, fee, opts) do
           {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
         end
     end
@@ -162,7 +198,23 @@ defmodule Bitflyer.OrderExecutor.Positions do
     |> Decimal.mult(closed_size)
   end
 
-  defp insert_fill(%Order{} = order, fill_price, size, realized_pnl, opts) do
+  defp net_realized(gross, fee), do: Decimal.sub(gross, fee)
+
+  defp normalize_fee(opts) do
+    case Keyword.get(opts, :fee, Decimal.new(0)) do
+      %Decimal{} = fee ->
+        if Decimal.compare(fee, 0) == :lt do
+          {:error, :persist_failed, %{reason: :negative_fee}}
+        else
+          {:ok, fee}
+        end
+
+      _ ->
+        {:error, :persist_failed, %{reason: :invalid_fee}}
+    end
+  end
+
+  defp insert_fill(%Order{} = order, fill_price, size, realized_pnl, fee, opts) do
     filled_at =
       case Keyword.get(opts, :filled_at) do
         %DateTime{} = dt -> DateTime.truncate(dt, :microsecond)
@@ -178,6 +230,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
       size: size,
       price: fill_price,
       realized_pnl: realized_pnl,
+      fee: fee,
       trade_mode: order.trade_mode,
       filled_at: filled_at
     }

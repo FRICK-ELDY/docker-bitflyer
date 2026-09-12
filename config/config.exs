@@ -52,7 +52,7 @@ config :bitflyer, Bitflyer.Risk.OpenOrderPolicy,
 # live 突合で必須の残高 baseline（内部 BalanceSnapshot が無いと Ready にしない）
 # amount 差分は Fill 合計 + 支払超過側の手数料許容だけで前進。増加は入金として halt。
 # 絶対床は Fill があるときの丸め専用。Fill が無い通貨では 0（1 JPY の入出金も halt）。
-# 20bps は実手数料の見積り上限。大口直後の帯域内出金は P1 #4（fee 記帳）まで区別できない。
+# 20bps は fee 未記録（NULL）Fill だけの見積り上限。記録済みは絶対床。
 config :bitflyer, Bitflyer.Startup.Reconcile,
   required_balance_currencies: ["JPY", "BTC"],
   balance_fee_tolerance_bps: "20",
