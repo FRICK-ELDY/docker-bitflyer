@@ -193,7 +193,8 @@ config :logger, :default_formatter,
     :snapshot_hash,
     :skew_ms,
     :max_ms,
-    :strategy_parameter_revision_id
+    :strategy_parameter_revision_id,
+    :trading_day
   ]
 
 # Use Jason for JSON parsing in Phoenix

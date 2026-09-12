@@ -67,6 +67,9 @@
 - 注文サイズ、建玉、日次損失、日次ドローダウン（realized+含み）、発注回数にハードリミットを置く
 - 含み損ゲート（`Risk.Equity` / `max_daily_drawdown` / live は `BITFLYER_MAX_DAILY_DRAWDOWN_JPY`）:
   `drawdown = 当日 equity ピーク（HWM） − 現在 equity`（日始ピーク 0）。
+  ピーク上昇は認可では `DailyLoss` ETS のみ。`DailyEquityPeak`
+  （`trade_mode` × JST 取引日）への upsert は Fill 後 / 突合 / resume。
+  `DailyLoss.init` / `reload` / `reinit` が当日行を読む。読取・永続化失敗は unsynced。
   建玉の mark が stale / 欠落なら **認可と resume は fail-closed**。周期 enforce
   （boot / `run_now` / periodic / Fill 後）は **halt しない**（切断だけで永続停止にしない）。
   超過時は `daily_drawdown_exceeded` で halt。新規注文は未実現に投影しない

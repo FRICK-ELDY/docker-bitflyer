@@ -10,7 +10,7 @@ defmodule Bitflyer.Risk.EquityTest do
   alias Bitflyer.Readiness
   alias Bitflyer.Risk.{DailyLoss, Equity}
   alias Bitflyer.Startup.Reconciler
-  alias Bitflyer.Trading.{Position, RiskState}
+  alias Bitflyer.Trading.{Fill, Position, RiskState}
 
   setup do
     reset_readiness()
@@ -137,6 +137,116 @@ defmodule Bitflyer.Risk.EquityTest do
     assert Decimal.eq?(snap.equity_pnl, Decimal.new("20000"))
     assert Decimal.eq?(snap.peak, Decimal.new("100000"))
     assert Decimal.eq?(snap.drawdown, Decimal.new("80000"))
+  end
+
+  test "reinit after realized profit keeps drawdown from persisted HWM" do
+    filled_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, _} =
+             Fill
+             |> Ash.Changeset.for_create(:create, %{
+               internal_order_id: "hwm-reinit-1",
+               product_code: "BTC_JPY",
+               side: :sell,
+               size: Decimal.new("0.02"),
+               price: Decimal.new("5000000"),
+               realized_pnl: Decimal.new("100000"),
+               trade_mode: :dry_run,
+               filled_at: filled_at
+             })
+             |> Ash.create()
+
+    assert :ok = DailyLoss.reload(trade_mode: :dry_run)
+    assert put_fresh_ticker({:ticker, "BTC_JPY"}, Decimal.new("5000000")) == :ok
+
+    assert {:ok, peak_snap} =
+             Equity.snapshot(
+               trade_mode: :dry_run,
+               positions: [],
+               limits: %{max_daily_drawdown: "50000"}
+             )
+
+    assert Decimal.eq?(peak_snap.peak, Decimal.new("100000"))
+
+    {:ok, position} = create_long("0.02", "5000000")
+    assert put_fresh_ticker({:ticker, "BTC_JPY"}, Decimal.new("1000000")) == :ok
+
+    assert :ok = DailyLoss.reset()
+    assert :ok = DailyLoss.reinit()
+
+    assert {:ok, snap} =
+             Equity.snapshot(
+               trade_mode: :dry_run,
+               positions: [position],
+               record_peak: false,
+               limits: %{max_daily_drawdown: "50000"}
+             )
+
+    assert Decimal.eq?(snap.realized_net, Decimal.new("100000"))
+    assert Decimal.eq?(snap.unrealized, Decimal.new("-80000"))
+    assert Decimal.eq?(snap.peak, Decimal.new("100000"))
+    assert Decimal.eq?(snap.drawdown, Decimal.new("80000"))
+  end
+
+  test "reload after realized profit keeps drawdown from persisted HWM" do
+    filled_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, _} =
+             Fill
+             |> Ash.Changeset.for_create(:create, %{
+               internal_order_id: "hwm-reload-1",
+               product_code: "BTC_JPY",
+               side: :sell,
+               size: Decimal.new("0.02"),
+               price: Decimal.new("5000000"),
+               realized_pnl: Decimal.new("100000"),
+               trade_mode: :dry_run,
+               filled_at: filled_at
+             })
+             |> Ash.create()
+
+    assert :ok = DailyLoss.reload(trade_mode: :dry_run)
+    assert put_fresh_ticker({:ticker, "BTC_JPY"}, Decimal.new("5000000")) == :ok
+
+    assert {:ok, peak_snap} =
+             Equity.snapshot(
+               trade_mode: :dry_run,
+               positions: [],
+               limits: %{max_daily_drawdown: "50000"}
+             )
+
+    assert Decimal.eq?(peak_snap.peak, Decimal.new("100000"))
+
+    {:ok, position} = create_long("0.02", "5000000")
+    assert put_fresh_ticker({:ticker, "BTC_JPY"}, Decimal.new("1000000")) == :ok
+
+    assert :ok = DailyLoss.reset()
+    assert :ok = DailyLoss.reload(trade_mode: :dry_run)
+
+    assert {:ok, snap} =
+             Equity.snapshot(
+               trade_mode: :dry_run,
+               positions: [position],
+               record_peak: false,
+               limits: %{max_daily_drawdown: "50000"}
+             )
+
+    assert Decimal.eq?(snap.realized_net, Decimal.new("100000"))
+    assert Decimal.eq?(snap.unrealized, Decimal.new("-80000"))
+    assert Decimal.eq?(snap.peak, Decimal.new("100000"))
+    assert Decimal.eq?(snap.drawdown, Decimal.new("80000"))
+  end
+
+  test "snapshot persist failure is unsynced" do
+    assert :ok = DailyLoss.seed_net(:dry_run, Decimal.new("100000"))
+    assert put_fresh_ticker({:ticker, "BTC_JPY"}, Decimal.new("5000000")) == :ok
+
+    assert {:error, :unsynced, %{reason: :hwm_persist_failed}} =
+             Equity.snapshot(
+               trade_mode: :dry_run,
+               positions: [],
+               persist: fn _mode, _day, _peak -> {:error, :forced} end
+             )
   end
 
   test "snapshot rejects unknown position side" do

@@ -2,7 +2,15 @@ defmodule Bitflyer.Trading.ResourcesTest do
   use Bitflyer.DataCase, async: true
 
   alias Bitflyer.Trading
-  alias Bitflyer.Trading.{BalanceSnapshot, Order, Position, RiskState, StrategyParameterRevision}
+
+  alias Bitflyer.Trading.{
+    BalanceSnapshot,
+    DailyEquityPeak,
+    Order,
+    Position,
+    RiskState,
+    StrategyParameterRevision
+  }
 
   describe "Order" do
     test "creates with decimal size/price and unique internal_order_id" do
@@ -404,6 +412,36 @@ defmodule Bitflyer.Trading.ResourcesTest do
     end
   end
 
+  describe "DailyEquityPeak" do
+    test "upserts unique peak per trade_mode and trading_day" do
+      day = ~D[2026-09-12]
+
+      assert {:ok, row} =
+               DailyEquityPeak
+               |> Ash.Changeset.for_create(:create, %{
+                 trade_mode: :live,
+                 trading_day: day,
+                 peak: Decimal.new("100000")
+               })
+               |> Ash.create()
+
+      assert Decimal.eq?(row.peak, Decimal.new("100000"))
+
+      assert {:error, %Ash.Error.Invalid{}} =
+               DailyEquityPeak
+               |> Ash.Changeset.for_create(:create, %{
+                 trade_mode: :live,
+                 trading_day: day,
+                 peak: Decimal.new("200000")
+               })
+               |> Ash.create()
+
+      assert :ok = DailyEquityPeak.upsert(:live, day, Decimal.new("150000"))
+      assert {:ok, [updated]} = DailyEquityPeak.fetch_day(day)
+      assert Decimal.eq?(updated.peak, Decimal.new("150000"))
+    end
+  end
+
   test "Trading domain registers core resources" do
     resources = Ash.Domain.Info.resources(Trading)
 
@@ -414,5 +452,6 @@ defmodule Bitflyer.Trading.ResourcesTest do
     assert Bitflyer.Trading.BaselineImport in resources
     assert Bitflyer.Trading.StrategyParameterRevision in resources
     assert Bitflyer.Trading.RiskState in resources
+    assert Bitflyer.Trading.DailyEquityPeak in resources
   end
 end

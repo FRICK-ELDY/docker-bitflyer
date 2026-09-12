@@ -80,7 +80,8 @@ defmodule Bitflyer.TelemetryTest do
           :snapshot_hash,
           :skew_ms,
           :max_ms,
-          :strategy_parameter_revision_id
+          :strategy_parameter_revision_id,
+          :trading_day
         ] do
       assert MapSet.member?(allowlist, key)
       assert key in logger_metadata
