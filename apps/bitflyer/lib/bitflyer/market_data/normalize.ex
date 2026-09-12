@@ -34,14 +34,27 @@ defmodule Bitflyer.MarketData.Normalize do
   def from_ticker(_), do: :error
 
   @doc """
+  WS フレームを 1 回だけ JSON デコードする。
+  """
+  @spec decode_ws_frame(binary()) :: {:ok, term()} | :error
+  def decode_ws_frame(raw) when is_binary(raw) do
+    case Jason.decode(raw) do
+      {:ok, decoded} -> {:ok, decoded}
+      {:error, _} -> :error
+    end
+  end
+
+  def decode_ws_frame(_), do: :error
+
+  @doc """
   Lightstream JSON-RPC の `channelMessage` 包を正規化する。
   """
   @spec from_ws_frame(binary() | map()) ::
           {:ok, {:ticker, String.t()}, ticker_value()} | :ignore | :error
   def from_ws_frame(raw) when is_binary(raw) do
-    case Jason.decode(raw) do
-      {:ok, map} -> from_ws_frame(map)
-      {:error, _} -> :error
+    case decode_ws_frame(raw) do
+      {:ok, decoded} -> from_ws_frame(decoded)
+      :error -> :error
     end
   end
 
@@ -81,9 +94,9 @@ defmodule Bitflyer.MarketData.Normalize do
   @spec rpc_response(binary() | map()) ::
           {:ok, pos_integer()} | {:error, term(), term()} | :not_rpc
   def rpc_response(raw) when is_binary(raw) do
-    case Jason.decode(raw) do
-      {:ok, map} -> rpc_response(map)
-      {:error, _} -> :not_rpc
+    case decode_ws_frame(raw) do
+      {:ok, decoded} -> rpc_response(decoded)
+      :error -> :not_rpc
     end
   end
 

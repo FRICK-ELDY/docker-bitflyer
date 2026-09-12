@@ -178,22 +178,25 @@ defmodule Bitflyer.MarketData.Feed do
   end
 
   def handle_info({:socket_frame, frame}, state) do
-    case Normalize.rpc_response(frame) do
-      {:ok, id} ->
-        {:noreply, handle_subscribe_ack(state, id)}
+    case Normalize.decode_ws_frame(frame) do
+      {:ok, decoded} ->
+        case Normalize.rpc_response(decoded) do
+          {:ok, id} ->
+            {:noreply, handle_subscribe_ack(state, id)}
 
-      {:error, _id, _reason} ->
-        {:noreply, handle_disconnect(state, :subscribe_error)}
+          {:error, _id, _reason} ->
+            {:noreply, handle_disconnect(state, :subscribe_error)}
 
-      :not_rpc ->
-        # 正規化結果に関わらずフレーム到着＝ソケット生存。薄商いでも無通信誤認を避ける
-        _ = ingest_frame(frame)
-
-        if state.connected? do
-          {:noreply, arm_stall_watchdog(state)}
-        else
-          {:noreply, state}
+          :not_rpc ->
+            # 正規化結果に関わらずフレーム到着＝ソケット生存。薄商いでも無通信誤認を避ける
+            _ = ingest_frame(decoded)
+            {:noreply, maybe_refresh_stall(state)}
         end
+
+      :error ->
+        # 不正 JSON でもフレーム到着＝ソケット生存
+        log_ws_frame_failed()
+        {:noreply, maybe_refresh_stall(state)}
     end
   end
 
@@ -456,15 +459,21 @@ defmodule Bitflyer.MarketData.Feed do
         :ignore
 
       :error ->
-        # フレーム全文はログに載せない（肥大・ノイズ回避）
-        Bitflyer.Telemetry.log(
-          :warning,
-          "market_data ws frame normalization failed",
-          %{reason: :normalization_failed, status: :ws_frame_failed}
-        )
-
+        log_ws_frame_failed()
         :error
     end
+  end
+
+  defp maybe_refresh_stall(%{connected?: true} = state), do: arm_stall_watchdog(state)
+  defp maybe_refresh_stall(state), do: state
+
+  defp log_ws_frame_failed do
+    # フレーム全文はログに載せない（肥大・ノイズ回避）
+    Bitflyer.Telemetry.log(
+      :warning,
+      "market_data ws frame normalization failed",
+      %{reason: :normalization_failed, status: :ws_frame_failed}
+    )
   end
 
   defp put_tick(key, value, product_code, opts \\ []) do

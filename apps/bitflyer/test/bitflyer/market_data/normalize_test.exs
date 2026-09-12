@@ -71,6 +71,13 @@ defmodule Bitflyer.MarketData.NormalizeTest do
     assert :error = Normalize.from_ws_frame(frame)
   end
 
+  test "decode_ws_frame decodes JSON once" do
+    assert {:ok, %{"id" => 1, "result" => true}} =
+             Normalize.decode_ws_frame(~s({"id":1,"result":true}))
+
+    assert :error = Normalize.decode_ws_frame("not-json")
+  end
+
   test "from_ws_frame ignores non channelMessage" do
     assert :ignore = Normalize.from_ws_frame(~s({"id":1,"result":true}))
   end
