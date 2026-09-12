@@ -9,8 +9,13 @@ defmodule Mix.Tasks.Bitflyer.Baseline do
       BITFLYER_BASELINE_OPERATOR=alice mix bitflyer.baseline --dry-run
       BITFLYER_BASELINE_OPERATOR=alice mix bitflyer.baseline --confirm --hash=<dry-run hash>
 
+  既存 tip を取引所残高で上書きするときは `--rebaseline`（初期化とは別経路）:
+
+      BITFLYER_BASELINE_OPERATOR=alice mix bitflyer.baseline --rebaseline --dry-run
+      BITFLYER_BASELINE_OPERATOR=alice mix bitflyer.baseline --rebaseline --confirm --hash=<dry-run hash>
+
   confirm しても Ready にはしない。続いて起動突合または `mix bitflyer.resume`
-  が成功したときだけ Ready になる。必須通貨のうち tip が無いものだけを書く。
+  が成功したときだけ Ready になる。通常 import は必須通貨のうち tip が無いものだけを書く。
   """
 
   use Mix.Task
@@ -21,7 +26,7 @@ defmodule Mix.Tasks.Bitflyer.Baseline do
   def run(args) do
     {parsed, _argv, invalid} =
       OptionParser.parse(args,
-        strict: [dry_run: :boolean, confirm: :boolean, hash: :string],
+        strict: [dry_run: :boolean, confirm: :boolean, hash: :string, rebaseline: :boolean],
         aliases: []
       )
 
@@ -37,6 +42,7 @@ defmodule Mix.Tasks.Bitflyer.Baseline do
     opts = [
       dry_run?: Keyword.get(parsed, :dry_run, false),
       confirm?: Keyword.get(parsed, :confirm, false),
+      rebaseline?: Keyword.get(parsed, :rebaseline, false),
       expected_hash: Keyword.get(parsed, :hash),
       operator: operator
     ]
@@ -46,15 +52,16 @@ defmodule Mix.Tasks.Bitflyer.Baseline do
         Mix.shell().info(format_preview(preview))
         Mix.shell().info("dry-run only: no BalanceSnapshot written; readiness unchanged")
 
-        Mix.shell().info(
-          "To confirm this exact snapshot: mix bitflyer.baseline --confirm --hash=#{preview.snapshot_hash}"
-        )
+        Mix.shell().info("To confirm this exact snapshot: #{confirm_command(preview)}")
 
         :ok
 
       {:ok, %{dry_run?: false} = result} ->
         Mix.shell().info(format_preview(result))
-        Mix.shell().info("baseline import ok: snapshots written; readiness NOT marked ready")
+
+        Mix.shell().info(
+          "#{persist_label(result)} ok: snapshots written; readiness NOT marked ready"
+        )
 
         Mix.shell().info(
           "Next: boot reconcile or mix bitflyer.resume after exchange matches baseline."
@@ -95,7 +102,20 @@ defmodule Mix.Tasks.Bitflyer.Baseline do
           Decimal.to_string(row.available, :normal)
       end)
 
-    "operator=#{preview.operator} trade_mode=#{preview.trade_mode} " <>
+    kind = if Map.get(preview, :rebaseline?), do: "rebaseline", else: "import"
+
+    "kind=#{kind} operator=#{preview.operator} trade_mode=#{preview.trade_mode} " <>
       "hash=#{preview.snapshot_hash} balances=[#{rows}]"
   end
+
+  defp confirm_command(%{rebaseline?: true, snapshot_hash: hash}) do
+    "mix bitflyer.baseline --rebaseline --confirm --hash=#{hash}"
+  end
+
+  defp confirm_command(%{snapshot_hash: hash}) do
+    "mix bitflyer.baseline --confirm --hash=#{hash}"
+  end
+
+  defp persist_label(%{rebaseline?: true}), do: "baseline rebaseline"
+  defp persist_label(_), do: "baseline import"
 end

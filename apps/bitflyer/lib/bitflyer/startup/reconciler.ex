@@ -212,7 +212,18 @@ defmodule Bitflyer.Startup.Reconciler do
   defp apply_result({:error, reason, details}, state) do
     detail_meta =
       if is_map(details) do
-        Map.take(details, [:product_code, :currency, :kind, :internal_order_id, :reason])
+        Map.take(details, [
+          :product_code,
+          :currency,
+          :currencies,
+          :kind,
+          :internal_order_id,
+          :reason,
+          :expected,
+          :actual,
+          :unexplained,
+          :allowance
+        ])
       else
         %{}
       end

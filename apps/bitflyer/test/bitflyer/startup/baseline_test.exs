@@ -34,6 +34,27 @@ defmodule Bitflyer.Startup.BaselineTest do
     def place_order(_request), do: {:error, :not_used}
   end
 
+  defmodule ShiftedExchange do
+    @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
+
+    @impl true
+    def fetch_reconcile_snapshot do
+      {:ok,
+       %{
+         positions: [],
+         balances: [
+           %{currency: "JPY", amount: Decimal.new("900000"), available: Decimal.new("900000")},
+           %{currency: "BTC", amount: Decimal.new("0.6"), available: Decimal.new("0.6")}
+         ],
+         open_orders: []
+       }}
+    end
+
+    @impl true
+    def place_order(_request), do: {:error, :not_used}
+  end
+
   defmodule IncompleteExchange do
     @behaviour Bitflyer.Exchange.Client
     use Bitflyer.TestSupport.ExchangeClientStubs
@@ -160,6 +181,7 @@ defmodule Bitflyer.Startup.BaselineTest do
     assert %BaselineImport{} = result.import
     assert result.import.operator == "bob"
     assert result.import.snapshot_hash == result.snapshot_hash
+    assert result.import.payload["kind"] == "import"
     assert result.import.payload["balances"] |> length() == 2
 
     assert {:ok, snaps} =
@@ -254,6 +276,123 @@ defmodule Bitflyer.Startup.BaselineTest do
                trade_mode: :live,
                exchange: IncompleteExchange
              )
+  end
+
+  test "rebaseline refuses when required tips are missing" do
+    assert {:error, :baseline_incomplete, %{missing: ["JPY", "BTC"]}} =
+             Baseline.import(
+               dry_run?: true,
+               rebaseline?: true,
+               operator: "alice",
+               trade_mode: :live,
+               exchange: MatchingExchange
+             )
+  end
+
+  test "rebaseline appends exchange balances as new tips without marking ready" do
+    captured_at =
+      DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
+
+    for {currency, amount} <- [{"JPY", @jpy}, {"BTC", @btc}] do
+      assert {:ok, _} =
+               BalanceSnapshot
+               |> Ash.Changeset.for_create(:create, %{
+                 currency: currency,
+                 amount: amount,
+                 available: amount,
+                 captured_at: captured_at,
+                 trade_mode: :live
+               })
+               |> Ash.create()
+    end
+
+    {:ok, preview} =
+      Baseline.import(
+        dry_run?: true,
+        rebaseline?: true,
+        operator: "dana",
+        trade_mode: :live,
+        exchange: MatchingExchange
+      )
+
+    assert preview.rebaseline? == true
+    assert preview.currencies == ["JPY", "BTC"]
+
+    assert {:ok, result} =
+             Baseline.import(
+               confirm?: true,
+               rebaseline?: true,
+               operator: "dana",
+               trade_mode: :live,
+               exchange: MatchingExchange,
+               expected_hash: preview.snapshot_hash
+             )
+
+    assert result.import.payload["kind"] == "rebaseline"
+    assert result.import.payload["balances"] |> length() == 2
+
+    assert {:ok, snaps} =
+             BalanceSnapshot
+             |> Ash.Query.filter(trade_mode == :live)
+             |> Ash.read()
+
+    assert length(snaps) == 4
+    assert {:ok, tips} = BalanceSnapshot.latest_tips(:live)
+    assert Decimal.eq?(Enum.find(tips, &(&1.currency == "JPY")).amount, @jpy)
+    refute Readiness.ready?()
+  end
+
+  test "rebaseline accepts unexplained exchange amounts so later reconcile can ready" do
+    captured_at =
+      DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
+
+    for {currency, amount} <- [{"JPY", @jpy}, {"BTC", @btc}] do
+      assert {:ok, _} =
+               BalanceSnapshot
+               |> Ash.Changeset.for_create(:create, %{
+                 currency: currency,
+                 amount: amount,
+                 available: amount,
+                 captured_at: captured_at,
+                 trade_mode: :live
+               })
+               |> Ash.create()
+    end
+
+    assert {:error, :reconcile_mismatch, %{kind: :balance_mismatch}} =
+             Reconcile.run(trade_mode: :live, exchange: ShiftedExchange)
+
+    {:ok, preview} =
+      Baseline.import(
+        dry_run?: true,
+        rebaseline?: true,
+        operator: "erin",
+        trade_mode: :live,
+        exchange: ShiftedExchange
+      )
+
+    assert {:ok, _} =
+             Baseline.import(
+               confirm?: true,
+               rebaseline?: true,
+               operator: "erin",
+               trade_mode: :live,
+               exchange: ShiftedExchange,
+               expected_hash: preview.snapshot_hash
+             )
+
+    previous = Application.get_env(:bitflyer, :trade_mode)
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, ShiftedExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+    end)
+
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: ShiftedExchange)
+    assert Reconciler.run_now() == :ok
+    assert Readiness.ready?()
   end
 
   test "after confirm, matching reconcile can become ready via reconciler" do

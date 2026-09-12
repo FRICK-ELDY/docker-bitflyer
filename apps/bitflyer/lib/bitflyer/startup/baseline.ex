@@ -5,6 +5,12 @@ defmodule Bitflyer.Startup.Baseline do
   承認付き（`--confirm` / `confirm?: true`）でのみ書き込む。
   confirm 時は dry-run で見た `expected_hash` と再取得結果の hash が一致すること。
   必須通貨のうち tip が無いものだけを書く（欠落分の補完可）。
+  全必須 tip がある場合は `:baseline_already_complete`（初期化専用）。
+
+  運用中の強制上書きは `rebaseline?: true`（Mix `--rebaseline`）。
+  必須 tip が揃っているときだけ、取引所残高から全必須通貨を append する。
+  欠落がある場合は通常 import を使う（`:baseline_incomplete`）。
+
   dry-run / confirm とも Ready にはしない。
   Ready は通常の起動・定期突合（または `resume`）成功時のみ。
   """
@@ -23,6 +29,7 @@ defmodule Bitflyer.Startup.Baseline do
 
   @type preview :: %{
           dry_run?: boolean(),
+          rebaseline?: boolean(),
           trade_mode: Bitflyer.TradeMode.t(),
           operator: String.t(),
           snapshot_hash: String.t(),
@@ -32,6 +39,7 @@ defmodule Bitflyer.Startup.Baseline do
 
   @type confirm_result :: %{
           dry_run?: false,
+          rebaseline?: boolean(),
           trade_mode: Bitflyer.TradeMode.t(),
           operator: String.t(),
           snapshot_hash: String.t(),
@@ -57,11 +65,13 @@ defmodule Bitflyer.Startup.Baseline do
   - `:trade_mode` — 既定は `TradeMode.current/0`。`:live` 以外は拒否
   - `:exchange` — 既定 `Bitflyer.Exchange`
   - `:required_balance_currencies` — 既定は Reconcile 設定（JPY / BTC）
+  - `:rebaseline?` — true なら既存 tip を取引所残高で上書き append（初期化は拒否）
   """
   @spec import(keyword()) :: result()
   def import(opts \\ []) do
     dry_run? = Keyword.get(opts, :dry_run?, false) == true
     confirm? = Keyword.get(opts, :confirm?, false) == true
+    rebaseline? = Keyword.get(opts, :rebaseline?, false) == true
 
     with :ok <- validate_mode_flags(dry_run?, confirm?),
          {:ok, operator} <- normalize_operator(Keyword.get(opts, :operator)),
@@ -70,13 +80,14 @@ defmodule Bitflyer.Startup.Baseline do
          required <-
            Keyword.get_lazy(opts, :required_balance_currencies, &required_balance_currencies/0),
          exchange <- Keyword.get(opts, :exchange, Bitflyer.Exchange),
-         {:ok, missing} <- missing_required_currencies(trade_mode, required),
-         {:ok, balances} <- fetch_required_balances(exchange, missing),
+         {:ok, target} <- target_currencies(trade_mode, required, rebaseline?),
+         {:ok, balances} <- fetch_required_balances(exchange, target),
          snapshot_hash <- snapshot_hash(balances),
          :ok <-
            maybe_verify_expected_hash(dry_run?, snapshot_hash, Keyword.get(opts, :expected_hash)),
          preview <- %{
            dry_run?: dry_run?,
+           rebaseline?: rebaseline?,
            trade_mode: trade_mode,
            operator: operator,
            snapshot_hash: snapshot_hash,
@@ -84,9 +95,11 @@ defmodule Bitflyer.Startup.Baseline do
            currencies: Enum.map(balances, & &1.currency)
          } do
       if dry_run? do
+        kind = if rebaseline?, do: :baseline_rebaseline_dry_run, else: :baseline_import_dry_run
+
         Bitflyer.Telemetry.log(:info, "baseline import dry-run", %{
           trade_mode: trade_mode,
-          kind: :baseline_import_dry_run,
+          kind: kind,
           operator: operator,
           snapshot_hash: snapshot_hash
         })
@@ -151,6 +164,27 @@ defmodule Bitflyer.Startup.Baseline do
   defp required_balance_currencies do
     Application.get_env(:bitflyer, Reconcile, [])
     |> Keyword.get(:required_balance_currencies, ["JPY", "BTC"])
+  end
+
+  defp target_currencies(trade_mode, required, true = _rebaseline?) do
+    case existing_tip_currencies(trade_mode) do
+      {:ok, existing} ->
+        missing = Enum.reject(required, &MapSet.member?(existing, &1))
+
+        if missing == [] do
+          {:ok, required}
+        else
+          {:error, :baseline_incomplete,
+           %{trade_mode: trade_mode, missing: missing, required: required}}
+        end
+
+      {:error, _, _} = error ->
+        error
+    end
+  end
+
+  defp target_currencies(trade_mode, required, false = _rebaseline?) do
+    missing_required_currencies(trade_mode, required)
   end
 
   defp missing_required_currencies(trade_mode, required) do
@@ -246,15 +280,16 @@ defmodule Bitflyer.Startup.Baseline do
 
   defp persist(%{dry_run?: false} = preview, required) do
     imported_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    payload = payload_from_balances(preview.balances)
+    payload = payload_from_balances(preview.balances, preview.rebaseline?)
 
     case Bitflyer.Repo.transaction(fn ->
            with :ok <- acquire_baseline_lock(preview.trade_mode),
                 :ok <-
-                  assert_currencies_still_missing(
+                  assert_persist_targets(
                     preview.trade_mode,
                     preview.currencies,
-                    required
+                    required,
+                    preview.rebaseline?
                   ) do
              notifications =
                Enum.reduce(preview.balances, [], fn row, acc ->
@@ -293,17 +328,19 @@ defmodule Bitflyer.Startup.Baseline do
            else
              {:error, reason, details} when is_atom(reason) and is_map(details) ->
                Bitflyer.Repo.rollback({reason, details})
-
-             {:error, reason} when is_atom(reason) ->
-               Bitflyer.Repo.rollback(reason)
            end
          end) do
       {:ok, {import_row, notifications}} ->
         _ = Ash.Notifier.notify(notifications)
 
+        kind =
+          if preview.rebaseline?,
+            do: :baseline_rebaseline_confirmed,
+            else: :baseline_import_confirmed
+
         Bitflyer.Telemetry.log(:info, "baseline import confirmed", %{
           trade_mode: preview.trade_mode,
-          kind: :baseline_import_confirmed,
+          kind: kind,
           operator: preview.operator,
           snapshot_hash: preview.snapshot_hash
         })
@@ -336,6 +373,33 @@ defmodule Bitflyer.Startup.Baseline do
     end
   end
 
+  defp assert_persist_targets(trade_mode, planned_currencies, required, true = _rebaseline?) do
+    case existing_tip_currencies(trade_mode) do
+      {:ok, existing} ->
+        missing = Enum.reject(required, &MapSet.member?(existing, &1))
+
+        cond do
+          missing != [] ->
+            {:error, :baseline_incomplete,
+             %{trade_mode: trade_mode, missing: missing, required: required}}
+
+          MapSet.equal?(MapSet.new(planned_currencies), MapSet.new(required)) ->
+            :ok
+
+          true ->
+            {:error, :baseline_race,
+             %{planned: Enum.sort(planned_currencies), required: Enum.sort(required)}}
+        end
+
+      {:error, _, _} = error ->
+        error
+    end
+  end
+
+  defp assert_persist_targets(trade_mode, planned_currencies, required, false = _rebaseline?) do
+    assert_currencies_still_missing(trade_mode, planned_currencies, required)
+  end
+
   defp assert_currencies_still_missing(trade_mode, planned_currencies, required) do
     case missing_required_currencies(trade_mode, required) do
       {:ok, missing} ->
@@ -362,8 +426,9 @@ defmodule Bitflyer.Startup.Baseline do
     end
   end
 
-  defp payload_from_balances(balances) do
+  defp payload_from_balances(balances, rebaseline?) do
     %{
+      "kind" => if(rebaseline?, do: "rebaseline", else: "import"),
       "balances" =>
         Enum.map(balances, fn row ->
           %{

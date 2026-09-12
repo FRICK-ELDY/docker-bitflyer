@@ -229,7 +229,25 @@ live で必須通貨（既定: JPY / BTC）の `BalanceSnapshot` が無いと起
    bin/docker_bitflyer rpc 'Bitflyer.Release.import_baseline(confirm: true, operator: "alice", expected_hash: "<hash>")'
    ```
 
-必須通貨のうち tip が無いものだけを書く（欠落分の補完可）。全必須通貨に tip がある場合は `baseline_already_complete`。live 運用中の残高更新は引き続き紙の append ではなく取引所突合が正本。
+必須通貨のうち tip が無いものだけを書く（欠落分の補完可）。全必須通貨に tip がある場合は `baseline_already_complete`。
+
+live 運用中の残高 tip は定期／起動突合が、内部 Fill 合計と **支払超過側** の手数料許容幅で説明できる差分だけ取引所 `getbalance` から append する。想定より増える差分（入金）は幅内でも halt。Fill が無いときの 1 JPY 床は使わない。説明不能な差分（外部入出金など）は `balance_mismatch` で halt する。人手で正本を切り直すときは承認付き `--rebaseline`（初期化とは別経路）:
+
+```bash
+docker compose exec -e BITFLYER_BASELINE_OPERATOR=alice app \
+  mix bitflyer.baseline --rebaseline --dry-run
+docker compose exec -e BITFLYER_BASELINE_OPERATOR=alice app \
+  mix bitflyer.baseline --rebaseline --confirm --hash=<dry-run の hash>
+```
+
+release なら:
+
+```bash
+bin/docker_bitflyer rpc 'Bitflyer.Release.import_baseline(dry_run: true, rebaseline: true, operator: "alice")'
+bin/docker_bitflyer rpc 'Bitflyer.Release.import_baseline(confirm: true, rebaseline: true, operator: "alice", expected_hash: "<hash>")'
+```
+
+`--rebaseline` は必須 tip が揃っているときだけ書く。欠落がある場合は通常の初回 import を使う。
 
 ### submission_unknown 回収（`mix bitflyer.recover`）
 
