@@ -475,7 +475,8 @@ defmodule Bitflyer.Startup.ReconcileTest do
 
     seed_live_balance_baseline!()
 
-    # spot 内部 Position があっても getpositions 空なら建玉不一致にしない（正本は getbalance）
+    # getpositions 空でも FX 建玉不一致にしない。spot 在庫は amount 超過だけ見る。
+    # 0.01 < 取引所 0.5 なので膨張ではない。
     assert {:ok, _} =
              Position
              |> Ash.Changeset.for_create(:create, %{
@@ -488,6 +489,109 @@ defmodule Bitflyer.Startup.ReconcileTest do
              |> Ash.create()
 
     assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: MatchingBalancesExchange)
+  end
+
+  test "live spot position larger than getbalance amount is position_mismatch" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, MatchingBalancesExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+    end)
+
+    seed_live_balance_baseline!()
+
+    assert {:ok, _} =
+             Position
+             |> Ash.Changeset.for_create(:create, %{
+               product_code: "BTC_JPY",
+               trade_mode: :live,
+               side: :buy,
+               size: Decimal.new("0.6"),
+               average_price: Decimal.new("5000000")
+             })
+             |> Ash.create()
+
+    assert {:error, :reconcile_mismatch,
+            %{kind: :position_mismatch, reason: :spot_inventory_inflated, currency: "BTC"}} =
+             Reconcile.run(trade_mode: :live, exchange: MatchingBalancesExchange)
+  end
+
+  test "live spot open sell larger than position is position_mismatch" do
+    alias Bitflyer.Trading.Order
+
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, MatchingBalancesExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+    end)
+
+    seed_live_balance_baseline!()
+
+    assert {:ok, _} =
+             Position
+             |> Ash.Changeset.for_create(:create, %{
+               product_code: "BTC_JPY",
+               trade_mode: :live,
+               side: :buy,
+               size: Decimal.new("0.01"),
+               average_price: Decimal.new("5000000")
+             })
+             |> Ash.create()
+
+    assert {:ok, _} =
+             Order
+             |> Ash.Changeset.for_create(:create, %{
+               internal_order_id: "ord-spot-over-sell",
+               exchange_order_id: "ex-spot-over-sell",
+               product_code: "BTC_JPY",
+               side: :sell,
+               price: Decimal.new("5000000"),
+               size: Decimal.new("0.02"),
+               filled_size: Decimal.new("0"),
+               trade_mode: :live
+             })
+             |> Ash.create()
+
+    assert {:error, :reconcile_mismatch,
+            %{kind: :position_mismatch, reason: :spot_sell_exceeds_position, currency: "BTC"}} =
+             Reconcile.run(trade_mode: :live, exchange: MatchingBalancesExchange)
+  end
+
+  test "live spot short position after flip is position_mismatch" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, MatchingBalancesExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+    end)
+
+    seed_live_balance_baseline!()
+
+    assert {:ok, _} =
+             Position
+             |> Ash.Changeset.for_create(:create, %{
+               product_code: "BTC_JPY",
+               trade_mode: :live,
+               side: :sell,
+               size: Decimal.new("0.01"),
+               average_price: Decimal.new("5000000")
+             })
+             |> Ash.create()
+
+    assert {:error, :reconcile_mismatch,
+            %{kind: :position_mismatch, reason: :spot_short_position, currency: "BTC"}} =
+             Reconcile.run(trade_mode: :live, exchange: MatchingBalancesExchange)
   end
 
   test "live open order attribute mismatch is detected" do

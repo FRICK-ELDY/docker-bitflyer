@@ -56,7 +56,8 @@ config :bitflyer, Bitflyer.Risk.OpenOrderPolicy,
 config :bitflyer, Bitflyer.Startup.Reconcile,
   required_balance_currencies: ["JPY", "BTC"],
   balance_fee_tolerance_bps: "20",
-  balance_fee_tolerance_abs: %{"JPY" => "1", "BTC" => "0.00000001"}
+  balance_fee_tolerance_abs: %{"JPY" => "1", "BTC" => "0.00000001"},
+  position_size_tolerance_abs: %{"JPY" => "1", "BTC" => "0.00000001"}
 
 config :bitflyer, Bitflyer.MarketData.Cache, default_max_age_ms: 5_000
 

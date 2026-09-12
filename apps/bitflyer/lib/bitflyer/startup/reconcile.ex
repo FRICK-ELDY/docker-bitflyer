@@ -15,7 +15,10 @@ defmodule Bitflyer.Startup.Reconcile do
   `balance_mismatch`。説明できたら取引所 `getbalance` から新しい tip を append する
   （`LiveBalance`）。Fill 記帳直後に `getbalance` が未反映なら 1 回だけ再取得する。
 
-  取引所建玉は `{product_code, side}` で両建て並存しうるが、内部 Position は
+  spot 在庫は `getpositions` ではなく `getbalance` の base amount と内部の
+  買い Position.size を比べる（`LiveInventory`。平均単価は対象外。未約定売りは
+  Position に残るので加算しない。売り残 > 建玉は mismatch）。
+  FX 建玉は `{product_code, side}` で両建て並存しうるが、内部 Position は
   銘柄×モードのネット1行。突合前に外部を net（buy−sell）へ正規化する。
   不正な side / 平均単価は mismatch。両建て net 時は side+size を必須比較し、
   平均は単一路線のみ厳密比較（ドテン fill 単価との偽差異を避ける）。
@@ -25,7 +28,7 @@ defmodule Bitflyer.Startup.Reconcile do
 
   require Ash.Query
 
-  alias Bitflyer.Startup.LiveBalance
+  alias Bitflyer.Startup.{LiveBalance, LiveInventory}
   alias Bitflyer.Trading.{BalanceSnapshot, Order, Position, Product, RiskState}
   alias Bitflyer.Exchange.Permissions
   alias Bitflyer.MarketData
@@ -64,6 +67,7 @@ defmodule Bitflyer.Startup.Reconcile do
   - `:market_data_rest` — live 時計検査用 ticker REST（既定は MarketData 設定）
   - `:now_utc` — 時計検査の壁時計注入
   - `:skip_permissions?` / `:skip_clock_skew?` — テスト用スキップ
+  - `:position_size_tolerance_abs` — live spot 在庫の絶対床（`LiveInventory`）
   """
   @spec run(keyword()) :: result()
   def run(opts \\ []) do
@@ -324,6 +328,13 @@ defmodule Bitflyer.Startup.Reconcile do
              required,
              live_balance_opts(opts)
            ),
+         :ok <-
+           LiveInventory.compare(
+             internal.positions,
+             internal.open_orders,
+             balances,
+             inventory_opts(opts)
+           ),
          :ok <- compare_open_orders(internal.open_orders, Map.get(snapshot, :open_orders, [])),
          :ok <- LiveBalance.advance(plan, opts) do
       :ok
@@ -341,9 +352,14 @@ defmodule Bitflyer.Startup.Reconcile do
     |> Keyword.put(:trade_mode, :live)
   end
 
+  defp inventory_opts(opts) do
+    Keyword.take(opts, [:position_size_tolerance_abs])
+  end
+
   defp compare_positions(internal, external) do
-    # spot は getpositions 対象外。内部 Position は Risk 用の補助で、突合正本は getbalance。
-    # したがって product_codes が spot のみのとき、同一 API キー口座の手動 FX/CFD 建玉は
+    # spot は getpositions 対象外（平均単価が取引所に無い）。FX 建玉だけここを通す。
+    # spot 在庫は compare 後の LiveInventory（getbalance amount）。
+    # product_codes が spot のみのとき、同一 API キー口座の手動 FX/CFD 建玉は
     # 取得も比較もしない（案 B の射程外。live 解禁前提は README / overview）。
     internal = Enum.reject(internal, &spot_position_row?/1)
     external = Enum.reject(external, &spot_position_row?/1)

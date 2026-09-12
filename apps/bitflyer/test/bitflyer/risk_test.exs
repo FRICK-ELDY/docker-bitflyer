@@ -762,6 +762,91 @@ defmodule Bitflyer.RiskTest do
              )
   end
 
+  test "live rejects sell without a covering long position" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :limit_exceeded, %{limit: :spot_sell_exceeds_position}} =
+             Risk.authorize(
+               valid_command(%{side: :sell, size: Decimal.new("0.01")}),
+               positions: [],
+               open_orders: [],
+               trade_mode: :live,
+               balances: %{
+                 "JPY" => %{available: Decimal.new("1000000")},
+                 "BTC" => %{available: Decimal.new("0.5")}
+               }
+             )
+  end
+
+  test "live accepts sell covered by long position" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(
+               valid_command(%{side: :sell, size: Decimal.new("0.01")}),
+               positions: [
+                 %{
+                   product_code: "BTC_JPY",
+                   side: :buy,
+                   size: Decimal.new("0.01"),
+                   average_price: Decimal.new("5000000")
+                 }
+               ],
+               open_orders: [],
+               trade_mode: :live,
+               balances: %{
+                 "JPY" => %{available: Decimal.new("1000000")},
+                 "BTC" => %{available: Decimal.new("0.5")}
+               }
+             )
+  end
+
+  test "live rejects sell that exceeds long minus open sells" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :limit_exceeded, %{limit: :spot_sell_exceeds_position}} =
+             Risk.authorize(
+               valid_command(%{side: :sell, size: Decimal.new("0.01")}),
+               positions: [
+                 %{
+                   product_code: "BTC_JPY",
+                   side: :buy,
+                   size: Decimal.new("0.01"),
+                   average_price: Decimal.new("5000000")
+                 }
+               ],
+               open_orders: [
+                 %{
+                   product_code: "BTC_JPY",
+                   side: :sell,
+                   size: Decimal.new("0.01"),
+                   filled_size: Decimal.new(0)
+                 }
+               ],
+               trade_mode: :live,
+               balances: %{
+                 "JPY" => %{available: Decimal.new("1000000")},
+                 "BTC" => %{available: Decimal.new("0.5")}
+               }
+             )
+  end
+
+  test "paper still allows sell without a position when base balance is enough" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(
+               valid_command(%{side: :sell, size: Decimal.new("0.01")}),
+               positions: [],
+               trade_mode: :paper,
+               balances: %{"BTC" => %{available: Decimal.new("0.5")}}
+             )
+  end
+
   test "live rejects FX product before other checks" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
