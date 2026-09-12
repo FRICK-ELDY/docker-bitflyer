@@ -18,6 +18,36 @@ config :bitflyer, Bitflyer.Startup.Reconciler,
   boot?: true,
   interval_ms: 60_000
 
+# 未約定期限 / halt 時 cancel-all（P1 #10）。詳細は OpenOrderPolicy / prod.md。
+# 自前 TIF は持たず、期限は max_open_age_ms（inserted_at）。未記載の halt 理由は取消しない。
+config :bitflyer, Bitflyer.Risk.OpenOrderPolicy,
+  max_open_age_ms: :infinity,
+  # 本番は非同期 cancel（Task.Supervisor）。test.exs は false。
+  async_default: true,
+  # 取消失敗／open 残留後の再試行間隔（CircuitSync 2s より長くして連打を防ぐ）
+  halt_cancel_retry_backoff_ms: 30_000,
+  # in-flight ロック失効（大量 open の逐次 cancel が長くても二重起動しにくくする）
+  halt_cancel_in_flight_stale_ms: 600_000,
+  cancel_on_halt: %{
+    manual_halt: true,
+    daily_loss_exceeded: true,
+    consecutive_exchange_errors: true,
+    auth_failed: true,
+    fill_sync_failed: true,
+    fill_price_unavailable: true,
+    # reconcile_mismatch / submission_unknown / persist_failed 等は既定 false（証拠・recover 優先）
+    reconcile_mismatch: false,
+    submission_unknown: false,
+    persist_failed: false,
+    restore_failed: false,
+    exchange_unavailable: false,
+    invalid_exchange_payload: false,
+    unsafe_api_permissions: false,
+    clock_skew: false,
+    risk_halted: false,
+    failure_rate_unsynced: false
+  }
+
 # live 突合で必須の残高 baseline（内部 BalanceSnapshot が無いと Ready にしない）
 config :bitflyer, Bitflyer.Startup.Reconcile, required_balance_currencies: ["JPY", "BTC"]
 

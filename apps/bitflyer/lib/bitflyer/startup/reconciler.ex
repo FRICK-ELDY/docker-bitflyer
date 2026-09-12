@@ -4,6 +4,7 @@ defmodule Bitflyer.Startup.Reconciler do
 
   - 成功 → `Readiness.mark_ready/0`（halted 中は拒否される）
   - 失敗 → `Readiness.halt/1` と RiskState 永続化。Ready にはしない
+  - 定期 tick 前に `OpenOrderPolicy.cancel_aged_opens/1`（`max_open_age_ms`）
 
   起動時の重い突合は `handle_continue/2` で行い、`init/1` はすぐ返す。
   テストでは `boot?: false` にして明示的に `run_now/0` する
@@ -63,6 +64,10 @@ defmodule Bitflyer.Startup.Reconciler do
 
   @impl true
   def handle_continue(:boot_reconcile, state) do
+    # 起動直後にも age 超過と（halt 済みなら）cancel-all を一度試す
+    _ = Bitflyer.Risk.OpenOrderPolicy.cancel_aged_opens(exchange: state.exchange)
+    _ = maybe_ensure_halt_cancels(state)
+
     state =
       state
       |> then(&apply_result(run_reconcile(&1), &1))
@@ -92,8 +97,21 @@ defmodule Bitflyer.Startup.Reconciler do
 
   @impl true
   def handle_info(:periodic_reconcile, state) do
+    # 突合前に open age 超過・halt 中 cancel-all を試す
+    _ = Bitflyer.Risk.OpenOrderPolicy.cancel_aged_opens(exchange: state.exchange)
+    _ = maybe_ensure_halt_cancels(state)
     state = apply_result(run_reconcile(state), state)
     {:noreply, schedule_periodic(state)}
+  end
+
+  defp maybe_ensure_halt_cancels(state) do
+    case state.readiness.get() do
+      {:halted, reason} ->
+        Bitflyer.Risk.OpenOrderPolicy.ensure_halt_cancels(reason, exchange: state.exchange)
+
+      _ ->
+        :ok
+    end
   end
 
   defp run_reconcile(state) do
@@ -212,6 +230,9 @@ defmodule Bitflyer.Startup.Reconciler do
 
     case persist_risk_halt(reason) do
       :ok ->
+        _ =
+          Bitflyer.Risk.OpenOrderPolicy.ensure_halt_cancels(reason, exchange: state.exchange)
+
         :ok
 
       {:error, error} ->
@@ -220,6 +241,12 @@ defmodule Bitflyer.Startup.Reconciler do
           "Failed to persist risk halt after readiness halt: #{inspect(error)}",
           %{reason: reason, trade_mode: Bitflyer.TradeMode.current()}
         )
+
+        # persist 失敗でもポリシー対象なら取消は試す
+        _ =
+          Bitflyer.Risk.OpenOrderPolicy.ensure_halt_cancels(reason, exchange: state.exchange)
+
+        :ok
     end
 
     state

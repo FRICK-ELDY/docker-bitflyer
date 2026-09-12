@@ -20,6 +20,7 @@ defmodule Bitflyer.Application do
         Bitflyer.Risk.OrderRate,
         Bitflyer.Risk.FailureRate,
         Bitflyer.Risk.AuthorizedOrder,
+        Bitflyer.Risk.OpenOrderPolicy.HaltCancelGate,
         Bitflyer.Risk.CircuitSync,
         Bitflyer.OrderExecutor.InFlight,
         Bitflyer.OrderExecutor.LiveFills.Gate,

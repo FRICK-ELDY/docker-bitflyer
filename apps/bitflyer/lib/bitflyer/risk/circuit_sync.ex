@@ -7,6 +7,10 @@ defmodule Bitflyer.Risk.CircuitSync do
   ETS を halt し fail-closed にする（即停止の正本は StatusLive / Release rpc）。
 
   永続側が clear でも ETS halt は自動解除しない（resume 手順を要する）。
+
+  永続 halt を ETS に載せた／既に halted のとき、`OpenOrderPolicy.ensure_halt_cancels/2`
+  で理由別 cancel-all を再実行する（再起動耐性）。周期 tick の再試行は
+  OpenOrderPolicy 側の in-flight／バックオフで背圧する。
   """
 
   use GenServer
@@ -66,6 +70,8 @@ defmodule Bitflyer.Risk.CircuitSync do
       {:halted, reason} ->
         case Readiness.get() do
           {:halted, _} ->
+            # 未完了 cancel の再試行（in-flight / backoff は OpenOrderPolicy 側）
+            _ = Bitflyer.Risk.OpenOrderPolicy.ensure_halt_cancels(reason)
             :ok
 
           _ ->
@@ -79,6 +85,9 @@ defmodule Bitflyer.Risk.CircuitSync do
                     trade_mode: Bitflyer.TradeMode.current()
                   }
                 )
+
+                _ =
+                  Bitflyer.Risk.OpenOrderPolicy.ensure_halt_cancels(reason, force: true)
 
                 {:ok, :synced}
 
