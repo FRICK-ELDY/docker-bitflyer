@@ -20,7 +20,7 @@
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
 | 1 | live 残高正本の前進 | 突合成功時に取引所 `getbalance` から新しい `BalanceSnapshot` を append し比較基準を進める。厳密一致をやめ、内部 Fill 合計 + 手数料許容幅で説明できる差分だけ前進。説明不能は `balance_mismatch`。`Baseline` は初期化専用、承認付き `--rebaseline` を別経路 | 1 回以上の約定のあと周期突合と再起動の双方で Ready を維持できる。外部入出金では halt |
-| 2 | 縦貫通回帰 | 擬似取引所ハーネス（`Exchange.Client`）で「発注 → 部分約定 2 回 → 残高変動 → 定期突合 → Ready → 再起動 → Ready」をテスト化する | fixture だけで tip 不前進を再現・防止できる |
+| 2 | 縦貫通回帰 | 擬似取引所ハーネス（`Exchange.Client`）で「発注 → 部分約定 2 回 → 残高変動 → 定期突合 → Ready → 再起動 → Ready」をテスト化する。実装: `LiveExchangeHarness` + `regression/live_balance_advance_test.exs` | fixture だけで tip 不前進を再現・防止できる |
 
 ---
 
