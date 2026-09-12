@@ -14,9 +14,11 @@ defmodule Bitflyer.Risk do
   短時間は Status STOPPED / `/health/ready` 503 でも authorize が通りうる
   （`OperationalStatus.market_feed_gate/2` との残差。観測ゲートと発注ゲートの段階差）。
 
-  発注ホットパスでは RiskState・発注頻度・日次損失・残高のために DB 往復しない。
+  発注ホットパスでは RiskState・発注頻度・日次損失・残高・HWM 永続化のために DB 往復しない。
   頻度は `Risk.OrderRate.reserve/3`（authorize 時に原子的予約）、取引所エラー連続は `Risk.FailureRate`
   （起動 warm 失敗時は unsynced で認可拒否）、日次損失は `Risk.DailyLoss`、残高は `Risk.BalanceCache`（ETS）。
+  ドローダウン HWM の上昇は認可では ETS のみ。`DailyEquityPeak` への upsert は Fill 後 /
+  突合 / resume の `Equity.enforce`。
   """
 
   require Ash.Query
@@ -472,7 +474,12 @@ defmodule Bitflyer.Risk do
   end
 
   defp check_daily_drawdown(limits, opts) do
-    case Equity.enforce(Keyword.put(opts, :limits, limits)) do
+    enforce_opts =
+      opts
+      |> Keyword.put(:limits, limits)
+      |> Keyword.put_new(:persist, false)
+
+    case Equity.enforce(enforce_opts) do
       {:ok, _} ->
         :ok
 

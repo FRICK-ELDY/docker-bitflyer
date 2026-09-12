@@ -12,8 +12,8 @@ defmodule Bitflyer.RiskTest do
   alias Bitflyer.MarketData.Cache
   alias Bitflyer.Readiness
   alias Bitflyer.Risk
-  alias Bitflyer.Risk.AuthorizedOrder
-  alias Bitflyer.Trading.{Position, RiskState}
+  alias Bitflyer.Risk.{AuthorizedOrder, DailyLoss}
+  alias Bitflyer.Trading.{DailyEquityPeak, Position, RiskState}
 
   @market_key {:ticker, "BTC_JPY"}
 
@@ -142,6 +142,22 @@ defmodule Bitflyer.RiskTest do
     put_fresh_market()
 
     assert {:ok, %AuthorizedOrder{}} = Risk.authorize(valid_command(), positions: [])
+  end
+
+  test "authorize raises HWM in ETS without persisting DailyEquityPeak" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    assert :ok = DailyLoss.seed_net(:dry_run, Decimal.new("100000"))
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(valid_command(), positions: [], trade_mode: :dry_run)
+
+    assert {:ok, %{peak: peak}} = DailyLoss.snapshot(:dry_run)
+    assert Decimal.eq?(peak, Decimal.new("100000"))
+
+    day = DailyLoss.trading_day(DateTime.utc_now())
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    refute Enum.any?(rows, &(&1.trade_mode == :dry_run))
   end
 
   test "authorize rejects when circuit is open and open_circuit persists RiskState" do

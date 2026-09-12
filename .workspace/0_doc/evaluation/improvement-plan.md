@@ -28,7 +28,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 3 | HWM 永続化 | `(trade_mode, trading_day, peak)` を Resource または RiskState に upsert。`DailyLoss.init/1` で読み戻す。失敗は unsynced fail-closed | 実現益後の含み損状態で再起動しても drawdown が消えない |
+| 3 | HWM 永続化 | `(trade_mode, trading_day, peak)` を `DailyEquityPeak` に upsert（認可は ETS のみ。persist は Fill 後 / 突合 / resume。Ash は DailyLoss GenServer の外）。`DailyLoss.init` / `reload` / `reinit` で当日行を読む。同日は ETS と DB の高い方。失敗は unsynced fail-closed。実装: `daily_equity_peak.ex` + `daily_loss.ex` | 実現益後の含み損状態で再起動・突合 reload しても drawdown が消えない |
 | 4 | live 手数料 | execution ごと、または説明可能な残高差分から fee を永続化し Fill / DailyLoss / Equity / Status を同一 net へ | 口座残高の変化と内部 equity が許容幅で一致 |
 | 5 | spot 在庫突合 | `getbalance` の base `amount` と「内部 Position + 未約定売り拘束」を許容幅付きで比較。平均単価は対象外と明記 | 手動売買や記帳ずれで内部 Position だけが膨らんだら halt |
 | 6 | 認可に Feed 接続 | `Risk.authorize` が `market_feed_gate` 相当を見る。切断直後は Cache 鮮度に依存しない | Status STOPPED / ready 503 のとき認可しない |

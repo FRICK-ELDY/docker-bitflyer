@@ -3,6 +3,9 @@ defmodule Bitflyer.Risk.Equity do
   当日 realized net + 建玉含み損益のドローダウン判定。
 
   `DailyLoss` ETS は実現 net と当日 equity ピーク（HWM）を持つ。
+  ピーク上昇の persist は Fill 後 / 突合 / resume。認可は `persist: false` で
+  ETS だけ上げ、ホットパスから Ash を呼ばない。再起動後は `DailyLoss.init` /
+  `reload` が当日行を読む。
   未実現は判定時に `MarketData.Cache` の LTP と `Position.average_price` から計算する。
 
   `drawdown = peak − equity_pnl`。日始 peak は 0 なので、一度もプラスにならなければ
@@ -62,18 +65,24 @@ defmodule Bitflyer.Risk.Equity do
          {:ok, positions} <- load_positions(trade_mode, opts),
          {:ok, unrealized} <- mark_unrealized(positions, limits, opts) do
       equity_pnl = Decimal.add(realized_net, unrealized)
-      {:ok, peak} = resolve_peak(trade_mode, equity_pnl, stored_peak, opts)
-      drawdown = peak |> Decimal.sub(equity_pnl) |> Decimal.max(Decimal.new(0))
 
-      {:ok,
-       %{
-         realized_net: realized_net,
-         unrealized: unrealized,
-         equity_pnl: equity_pnl,
-         peak: peak,
-         drawdown: drawdown,
-         max: limits.max_daily_drawdown
-       }}
+      case resolve_peak(trade_mode, equity_pnl, stored_peak, opts) do
+        {:ok, peak} ->
+          drawdown = peak |> Decimal.sub(equity_pnl) |> Decimal.max(Decimal.new(0))
+
+          {:ok,
+           %{
+             realized_net: realized_net,
+             unrealized: unrealized,
+             equity_pnl: equity_pnl,
+             peak: peak,
+             drawdown: drawdown,
+             max: limits.max_daily_drawdown
+           }}
+
+        {:error, _, _} = error ->
+          error
+      end
     end
   end
 
@@ -168,7 +177,13 @@ defmodule Bitflyer.Risk.Equity do
 
   defp resolve_peak(trade_mode, equity_pnl, stored_peak, opts) do
     if Keyword.get(opts, :record_peak, true) do
-      record_peak(trade_mode, equity_pnl, opts)
+      case record_peak(trade_mode, equity_pnl, opts) do
+        {:ok, peak} ->
+          {:ok, peak}
+
+        {:error, :unsynced} ->
+          {:error, :unsynced, %{reason: :hwm_persist_failed}}
+      end
     else
       {:ok, stored_peak}
     end
@@ -205,7 +220,7 @@ defmodule Bitflyer.Risk.Equity do
         {:ok, server} -> [server: server]
         :error -> []
       end
-      |> Keyword.merge(Keyword.take(opts, [:now_dt]))
+      |> Keyword.merge(Keyword.take(opts, [:now_dt, :persist]))
 
     DailyLoss.record_peak(trade_mode, equity_pnl, daily_opts)
   end
