@@ -3,7 +3,8 @@ defmodule Bitflyer.MarketData.Feed do
   市場データ購読のオーケストレータ。
 
   - 接続時: チャネル再購読 + REST 穴埋め
-  - 切断時: telemetry → backoff 再接続（古い Cache のままなので risk は stale 拒否）
+  - 切断時: telemetry → backoff 再接続。接続フラグは `:persistent_term`
+    （`connection_snapshot/0`）。Risk は Cache 鮮度を待たず拒否する
   - フレーム: 正規化 → Cache.put → tick telemetry
   - socket は link + trap_exit（Feed 終了時のリーク防止、切断は EXIT で検知）
   - サイレントストール: 最終フレーム（または接続）から
@@ -20,7 +21,7 @@ defmodule Bitflyer.MarketData.Feed do
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, @name)
-    GenServer.start_link(__MODULE__, opts, name: name)
+    GenServer.start_link(__MODULE__, Keyword.put(opts, :name, name), name: name)
   end
 
   @doc """
@@ -39,12 +40,42 @@ defmodule Bitflyer.MarketData.Feed do
     GenServer.call(server, :status)
   end
 
+  @doc """
+  既定 Feed の接続スナップショット。
+
+  `status/0` の `GenServer.call` はしない（認可ホットパス・gap_fill 待ち回避）。
+  プロセス不在は `available?: false`。接続フラグは `{pid, connected?}` を
+  `:persistent_term` に置く。`:kill` 後の名前再登録〜`init` 公開の隙間や
+  `whereis` と `get` のずれは、pid 不一致として切断扱い（fail-closed）。
+  名前付きテスト Feed はここへ書かない。
+  """
+  @spec connection_snapshot() :: %{available?: boolean(), connected?: boolean()}
+  def connection_snapshot do
+    case Process.whereis(@name) do
+      nil ->
+        %{available?: false, connected?: false}
+
+      pid when is_pid(pid) ->
+        connected? =
+          case :persistent_term.get(connection_key(), :missing) do
+            {^pid, true} -> true
+            _ -> false
+          end
+
+        %{available?: true, connected?: connected?}
+    end
+  end
+
+  @doc false
+  def connection_key, do: {__MODULE__, :connected}
+
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
     cfg = MarketData.config()
 
     state = %{
+      name: Keyword.get(opts, :name, @name),
       product_codes: Keyword.get(opts, :product_codes, MarketData.product_codes()),
       rest_client:
         Keyword.get(opts, :rest_client, Keyword.get(cfg, :rest_client, Bitflyer.MarketData.Rest)),
@@ -82,6 +113,7 @@ defmodule Bitflyer.MarketData.Feed do
       subscribe_count: 0
     }
 
+    publish_connection(state)
     {:ok, state, {:continue, :connect}}
   end
 
@@ -110,11 +142,17 @@ defmodule Bitflyer.MarketData.Feed do
   end
 
   @impl true
+  def terminate(_reason, state) do
+    publish_connection(%{state | connected?: false})
+    :ok
+  end
+
+  @impl true
   def handle_info(:socket_connected, state) do
     state =
       state
       |> cancel_reconnect_timer()
-      |> Map.put(:connected?, true)
+      |> set_connected(true)
       |> Map.put(:reconnect_attempt, 0)
       |> subscribe_all()
 
@@ -196,7 +234,7 @@ defmodule Bitflyer.MarketData.Feed do
     state
     |> cancel_stall_timer()
     |> stop_socket()
-    |> Map.put(:connected?, false)
+    |> set_connected(false)
     |> schedule_reconnect()
   end
 
@@ -214,11 +252,11 @@ defmodule Bitflyer.MarketData.Feed do
         # 既存 socket は別 Feed PID 向けのままなので捨てて張り直す
         if is_pid(pid), do: Process.exit(pid, :shutdown)
         emit_disconnected({:already_started, pid})
-        schedule_reconnect(%{state | connected?: false, socket: nil})
+        schedule_reconnect(set_connected(%{state | socket: nil}, false))
 
       {:error, reason} ->
         emit_disconnected(reason)
-        schedule_reconnect(%{state | connected?: false, socket: nil})
+        schedule_reconnect(set_connected(%{state | socket: nil}, false))
     end
   end
 
@@ -397,4 +435,17 @@ defmodule Bitflyer.MarketData.Feed do
     |> Keyword.get(:market_data_max_age_ms, 5_000)
     |> Kernel.*(3)
   end
+
+  defp set_connected(state, connected?) do
+    state = %{state | connected?: connected?}
+    publish_connection(state)
+    state
+  end
+
+  defp publish_connection(%{name: @name, connected?: connected?}) do
+    :persistent_term.put(connection_key(), {self(), connected?})
+    :ok
+  end
+
+  defp publish_connection(_state), do: :ok
 end

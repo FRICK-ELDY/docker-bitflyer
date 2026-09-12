@@ -5,6 +5,7 @@ defmodule Bitflyer.OperationalStatusTest do
 
   alias Bitflyer.Health
   alias Bitflyer.MarketData.Cache
+  alias Bitflyer.MarketData.Feed
   alias Bitflyer.OperationalStatus
   alias Bitflyer.Readiness
 
@@ -238,6 +239,18 @@ defmodule Bitflyer.OperationalStatusTest do
     assert status.orders_reason == :stale_market_data
     refute status.market_data.all_fresh?
     assert hd(status.market_data.entries).age_ms == 10_000
+  end
+
+  test "feed_snapshot gate fields follow connection_snapshot when feed is down" do
+    refute is_pid(Process.whereis(Feed))
+
+    feed = OperationalStatus.feed_snapshot(feed_enabled?: true)
+
+    assert feed.enabled?
+    refute feed.available?
+    refute feed.connected?
+    assert feed.subscribe_count == 0
+    assert feed.reconnect_attempt == 0
   end
 
   test "feed_snapshot reports disabled when market data is off" do

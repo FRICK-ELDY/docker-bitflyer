@@ -17,6 +17,12 @@ defmodule Bitflyer.RiskTest do
 
   @market_key {:ticker, "BTC_JPY"}
 
+  @connected_feed %{available?: true, connected?: true}
+  @disconnected_feed %{available?: true, connected?: false}
+  @unavailable_feed %{available?: false, connected?: false}
+  @enabled_fresh_market %{enabled?: true, all_fresh?: true}
+  @enabled_stale_market %{enabled?: true, all_fresh?: false}
+
   setup do
     reset_readiness()
     reset_market_data_cache()
@@ -142,6 +148,112 @@ defmodule Bitflyer.RiskTest do
     put_fresh_market()
 
     assert {:ok, %AuthorizedOrder{}} = Risk.authorize(valid_command(), positions: [])
+  end
+
+  test "authorize rejects disconnected feed while cache is still fresh" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :stale, %{reason: :feed_disconnected}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               market_data: @enabled_fresh_market,
+               feed: @disconnected_feed
+             )
+  end
+
+  test "authorize rejects unavailable feed while cache is still fresh" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :stale, %{reason: :feed_unavailable}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               market_data: @enabled_fresh_market,
+               feed: @unavailable_feed
+             )
+  end
+
+  test "authorize rejects stale_market_data from market_feed_gate even if command key is fresh" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :stale, %{reason: :stale_market_data}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               market_data: @enabled_stale_market,
+               feed: @connected_feed
+             )
+  end
+
+  test "authorize accepts when market_feed_gate is connected and all fresh" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               market_data: @enabled_fresh_market,
+               feed: @connected_feed
+             )
+  end
+
+  test "authorize ignores product_codes opt so all configured products stay in the gate" do
+    previous_md = Application.get_env(:bitflyer, Bitflyer.MarketData, [])
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, Bitflyer.MarketData, previous_md)
+    end)
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.MarketData,
+      previous_md
+      |> Keyword.put(:enabled, true)
+      |> Keyword.put(:product_codes, ["BTC_JPY", "ETH_JPY"])
+    )
+
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :stale, %{reason: :stale_market_data}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               product_codes: ["BTC_JPY"],
+               feed: @connected_feed
+             )
+  end
+
+  test "authorize ignores injected feed snapshots when test injections are off" do
+    previous_risk = Application.get_env(:bitflyer, Bitflyer.Risk, [])
+    previous_md = Application.get_env(:bitflyer, Bitflyer.MarketData, [])
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, Bitflyer.Risk, previous_risk)
+      Application.put_env(:bitflyer, Bitflyer.MarketData, previous_md)
+    end)
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.Risk,
+      Keyword.put(previous_risk, :allow_test_injections, false)
+    )
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.MarketData,
+      Keyword.put(previous_md, :enabled, true)
+    )
+
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :stale, %{reason: :feed_unavailable}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               market_data: @enabled_fresh_market,
+               feed: @connected_feed
+             )
   end
 
   test "authorize raises HWM in ETS without persisting DailyEquityPeak" do

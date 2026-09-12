@@ -6,15 +6,21 @@ defmodule Bitflyer.Risk do
   上限超過・stale・未同期は必ず拒否する。
   サーキットは `open_circuit/1` / `clear_circuit/1`。
 
-  検査: 同期 → FailureRate 同期 → 鮮度 → 時計ずれ → 注文サイズ → 建玉 →
+  検査: 同期 → FailureRate 同期 → Feed 接続（`market_feed_gate`）→ 鮮度 →
+  時計ずれ → 注文サイズ → 建玉 →
   live spot 売りカバー（買い建玉 − 未約定売り） → 価格逸脱 →
   発注頻度予約 → 日次損失 → 日次ドローダウン（realized+unrealized） → 残高。
   live は先に銘柄種別を検査し、spot 以外（FX/CFD）を拒否する。
   live spot の売りは Position なしのベースライン在庫を対象にしない。
 
-  鮮度は `Cache.fresh?/3` のみ。Feed 切断そのものは見ないため、切断直後〜stale までの
-  短時間は Status STOPPED / `/health/ready` 503 でも authorize が通りうる
-  （`OperationalStatus.market_feed_gate/2` との残差。観測ゲートと発注ゲートの段階差）。
+  MarketData 有効時は Status / `/health/ready` と同じ
+  `OperationalStatus.market_feed_gate/2` を鮮度の前に見る。接続入力は
+  `Feed.connection_snapshot/0`（Health / Status の `feed_snapshot` も同じ）。
+  無効時はスキップ。`:market_data` / `:feed` 注入は `allow_test_injections` のみ。
+
+  ゲート拒否は `{:error, :stale, %{reason: ...}}`。`reason` が
+  `feed_disconnected` / `feed_unavailable` / `stale_market_data`。
+  コードは鮮度と切断を分けない（市場データが使えない＝発注しない）。
 
   発注ホットパスでは RiskState・発注頻度・日次損失・残高・HWM 永続化のために DB 往復しない。
   頻度は `Risk.OrderRate.reserve/3`（authorize 時に原子的予約）、取引所エラー連続は `Risk.FailureRate`
@@ -25,7 +31,9 @@ defmodule Bitflyer.Risk do
 
   require Ash.Query
 
-  alias Bitflyer.MarketData.Cache
+  alias Bitflyer.MarketData
+  alias Bitflyer.MarketData.{Cache, Feed}
+  alias Bitflyer.OperationalStatus
 
   alias Bitflyer.Risk.{
     AuthorizedOrder,
@@ -61,6 +69,8 @@ defmodule Bitflyer.Risk do
     未指定／本番は trade_mode 全建玉を **1 回** 読み、建玉上限と Equity で共有する）
   - `:open_orders` — 未約定リスト（テスト注入。live spot 売りカバー用。未指定時は DB）
   - `:now` / `:server` — Cache.fresh?/3・LTP 取得へ転送
+  - `:market_data` / `:feed` — `market_feed_gate` 用スナップショット
+    （テスト注入。`allow_test_injections: true` のときのみ）
   - `:authorized_order_server` — `AuthorizedOrder` GenServer（Cache の `:server` とは別）
   - `:failure_rate` / `:failure_rate_server` — FailureRate モジュールと GenServer 名（テスト注入）
   - `:now_utc` — 時計ずれ検査用の壁時計（既定 `DateTime.utc_now/0`）
@@ -85,6 +95,7 @@ defmodule Bitflyer.Risk do
            :ok <- check_live_product(command, opts),
            :ok <- check_sync(opts),
            :ok <- check_failure_rate(opts),
+           :ok <- check_market_feed(limits, opts),
            :ok <- check_freshness(command, limits, opts),
            :ok <- check_clock_skew(command, limits, opts),
            :ok <- check_order_size(command, limits),
@@ -278,6 +289,59 @@ defmodule Bitflyer.Risk do
       :ok
     else
       {:error, :unsynced, %{reason: :failure_rate_unsynced}}
+    end
+  end
+
+  defp check_market_feed(limits, opts) do
+    market_data = resolve_market_data(limits, opts)
+    feed = resolve_feed(opts)
+
+    case OperationalStatus.market_feed_gate(market_data, feed) do
+      :ok ->
+        :ok
+
+      {:halted, reason} ->
+        {:error, :stale, %{reason: reason}}
+    end
+  end
+
+  defp resolve_market_data(limits, opts) do
+    case injected_map(opts, :market_data) do
+      %{} = snapshot ->
+        snapshot
+
+      nil ->
+        OperationalStatus.market_data_snapshot(
+          [
+            max_age_ms: limits.market_data_max_age_ms,
+            enabled?: MarketData.enabled?()
+          ] ++ Keyword.take(opts, [:now, :server])
+        )
+    end
+  end
+
+  defp resolve_feed(opts) do
+    case injected_map(opts, :feed) do
+      %{} = snapshot ->
+        snapshot
+
+      nil ->
+        if MarketData.enabled?() do
+          Feed.connection_snapshot()
+          |> Map.put(:enabled?, true)
+        else
+          %{enabled?: false, available?: false, connected?: false}
+        end
+    end
+  end
+
+  defp injected_map(opts, key) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} when is_map(value) ->
+        if test_injections_allowed?(), do: value, else: nil
+
+      _ ->
+        nil
     end
   end
 

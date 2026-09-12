@@ -1,6 +1,6 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-12
+最終更新: 2026-09-13
 根拠: [evaluation-2026-09-12.md](./evaluation-2026-09-12.md) / [specific-weaknesses-2026-09-12.md](./specific-weaknesses-2026-09-12.md)
 
 方針: **利益機能より資金保全・復帰・観測を先に直す。** live 実発注は下記 P0 の完了まで禁止。戦略の高度化は縦貫通の安全化の後。
@@ -31,7 +31,7 @@
 | 3 | HWM 永続化 | `(trade_mode, trading_day, peak)` を `DailyEquityPeak` に upsert（認可は ETS のみ。persist は Fill 後 / 突合 / resume。Ash は DailyLoss GenServer の外）。`DailyLoss.init` / `reload` / `reinit` で当日行を読む。同日は ETS と DB の高い方。失敗は unsynced fail-closed。実装: `daily_equity_peak.ex` + `daily_loss.ex` | 実現益後の含み損状態で再起動・突合 reload しても drawdown が消えない |
 | 4 | live 手数料 | getexecutions の `commission` を `Fill.fee` に残し `realized_pnl = gross − fee`（建増しも手数料だけ負）。Decode 欠落・負は fail-closed。LiveBalance は記録済み fee を quote デルタから引き、NULL 行だけ 20bps。paper は価格内で `fee=0`。ハーネスは約定時に quote 残高から commission を引く。実装: `fill.ex` + `positions.ex` + `live_fills.ex` + `live_balance.ex` + `decode.ex` + `live_exchange_harness.ex`。回帰: `regression/live_balance_advance_test.exs`（非 0 commission → 突合 → DailyLoss / Equity） | 口座残高の変化と内部 equity が許容幅で一致 |
 | 5 | spot 在庫突合 | `getbalance` の base **amount** と買い `Position.size` を通貨ごとに比較（絶対床のみ。平均単価は対象外）。live 売りは買い建玉 − 未約定売りまで（認可と突合で同じ `SpotInventory`）。Position なしのベースラインは売らない。売建玉は `spot_short_position`。超過（内部 > 取引所）だけ在庫膨張 halt。実装: `spot_inventory.ex` + `live_inventory.ex` + `risk.ex` + `reconcile.ex` | 手動売買や記帳ずれで内部 Position だけが膨らんだら halt。ベースライン売りとドテン short も拒否 |
-| 6 | 認可に Feed 接続 | `Risk.authorize` が `market_feed_gate` 相当を見る。切断直後は Cache 鮮度に依存しない | Status STOPPED / ready 503 のとき認可しない |
+| 6 | 認可に Feed 接続 | `Risk.authorize` が鮮度の前に `market_feed_gate` を見る。切断は `Feed.connection_snapshot/0`（`:persistent_term`。`status/0` は呼ばない）。MarketData 無効時はスキップ。注入は `allow_test_injections` のみ。実装: `feed.ex` + `risk.ex` | Status STOPPED / ready 503 のとき認可しない |
 
 ---
 
