@@ -240,7 +240,7 @@ defmodule Bitflyer.MarketData.FeedTest do
          reconnect_max_ms: 50}
       )
 
-    _ = Feed.status(feed)
+    await_connected(feed)
 
     started_at = Cache.monotonic_ms()
     newer = started_at + 10
@@ -284,7 +284,7 @@ defmodule Bitflyer.MarketData.FeedTest do
          gap_fill_on_connect?: true,
          reconnect_base_ms: 20,
          reconnect_max_ms: 20,
-         stall_timeout_ms: 40}
+         stall_timeout_ms: 80}
       )
 
     assert_receive {:fetch_ticker, @product}, 500
@@ -292,7 +292,7 @@ defmodule Bitflyer.MarketData.FeedTest do
 
     status = Feed.status(feed)
     assert status.connected?
-    assert status.stall_timeout_ms == 40
+    assert status.stall_timeout_ms == 80
     refute is_nil(status.last_frame_at)
 
     assert_receive {:telemetry, [:bitflyer, :market_data, :disconnected], %{count: 1},
@@ -301,6 +301,7 @@ defmodule Bitflyer.MarketData.FeedTest do
 
     # 再接続で再購読 + 穴埋め（人手再起動なし）
     assert_receive {:fetch_ticker, @product}, 500
+    await_connected(feed)
     assert FakeRest.fetch_count() > fetches_after_connect
 
     status = Feed.status(feed)
@@ -336,7 +337,7 @@ defmodule Bitflyer.MarketData.FeedTest do
          stall_timeout_ms: 5_000}
       )
 
-    _ = Feed.status(feed)
+    await_connected(feed)
     %{stall_ref: old_ref} = :sys.get_state(feed)
     socket = Feed.status(feed).socket
 
@@ -521,5 +522,354 @@ defmodule Bitflyer.MarketData.FeedTest do
                now: now,
                check_persisted_circuit: false
              )
+  end
+
+  test "write success alone does not mark feed connected" do
+    feed =
+      start_supervised!(
+        {Feed,
+         name: :"feed-#{System.unique_integer([:positive])}",
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         subscribe_ack: :never,
+         subscribe_ack_timeout_ms: 30_000,
+         gap_fill_on_connect?: false,
+         reconnect_base_ms: 30_000,
+         reconnect_max_ms: 30_000}
+      )
+
+    await_pending_subscribe(feed)
+    status = Feed.status(feed)
+    refute status.connected?
+    assert status.pending_ack_count == 1
+    assert status.subscribe_count == 0
+    assert MarketData.ticker_channel(@product) in Socket.Local.subscribed(status.socket)
+  end
+
+  test "subscribe ACK marks connected and increments subscribe_count" do
+    feed =
+      start_supervised!(
+        {Feed,
+         name: :"feed-#{System.unique_integer([:positive])}",
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         subscribe_ack: :never,
+         subscribe_ack_timeout_ms: 30_000,
+         gap_fill_on_connect?: false,
+         reconnect_base_ms: 30_000,
+         reconnect_max_ms: 30_000}
+      )
+
+    await_pending_subscribe(feed)
+    socket = Feed.status(feed).socket
+    assert :ok = Socket.Local.ack(socket, 1)
+    await_connected(feed)
+
+    status = Feed.status(feed)
+    assert status.connected?
+    assert status.pending_ack_count == 0
+    assert status.subscribe_count == 1
+  end
+
+  test "string id ACK matches integer pending request" do
+    feed =
+      start_supervised!(
+        {Feed,
+         name: :"feed-#{System.unique_integer([:positive])}",
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         subscribe_ack: :never,
+         subscribe_ack_timeout_ms: 30_000,
+         gap_fill_on_connect?: false,
+         reconnect_base_ms: 30_000,
+         reconnect_max_ms: 30_000}
+      )
+
+    await_pending_subscribe(feed)
+    socket = Feed.status(feed).socket
+
+    assert :ok =
+             Socket.Local.push_frame(
+               socket,
+               Jason.encode!(%{"id" => "1", "result" => true})
+             )
+
+    await_connected(feed)
+    assert Feed.status(feed).connected?
+    assert Feed.status(feed).pending_ack_count == 0
+  end
+
+  test "one of two subscribe ACKs does not mark connected" do
+    feed =
+      start_supervised!(
+        {Feed,
+         name: :"feed-#{System.unique_integer([:positive])}",
+         product_codes: [@product, "ETH_JPY"],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         subscribe_ack: :never,
+         subscribe_ack_timeout_ms: 30_000,
+         gap_fill_on_connect?: false,
+         reconnect_base_ms: 30_000,
+         reconnect_max_ms: 30_000}
+      )
+
+    await_pending_subscribe(feed, 2)
+    socket = Feed.status(feed).socket
+    assert :ok = Socket.Local.ack(socket, 1)
+    _ = :sys.get_state(feed)
+
+    status = Feed.status(feed)
+    refute status.connected?
+    assert status.pending_ack_count == 1
+    assert status.subscribe_count == 1
+
+    assert :ok = Socket.Local.ack(socket, 2)
+    await_connected(feed)
+    status = Feed.status(feed)
+    assert status.connected?
+    assert status.pending_ack_count == 0
+    assert status.subscribe_count == 2
+  end
+
+  test "result false subscribe response reconnects" do
+    parent = self()
+    disc_id = "md-ack-false-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        disc_id,
+        [:bitflyer, :market_data, :disconnected],
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(disc_id) end)
+
+    feed =
+      start_supervised!(
+        {Feed,
+         name: :"feed-#{System.unique_integer([:positive])}",
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         subscribe_ack: :never,
+         subscribe_ack_timeout_ms: 30_000,
+         gap_fill_on_connect?: false,
+         reconnect_base_ms: 30_000,
+         reconnect_max_ms: 30_000}
+      )
+
+    await_pending_subscribe(feed)
+    socket = Feed.status(feed).socket
+
+    assert :ok =
+             Socket.Local.push_frame(
+               socket,
+               Jason.encode!(%{"id" => 1, "result" => false})
+             )
+
+    assert_receive {:telemetry, [:bitflyer, :market_data, :disconnected], %{count: 1},
+                    %{reason: :subscribe_error}},
+                   500
+
+    refute Feed.status(feed).connected?
+  end
+
+  test "channelError reconnects" do
+    parent = self()
+    disc_id = "md-ch-err-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        disc_id,
+        [:bitflyer, :market_data, :disconnected],
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(disc_id) end)
+
+    feed =
+      start_supervised!(
+        {Feed,
+         name: :"feed-#{System.unique_integer([:positive])}",
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         subscribe_ack: :never,
+         subscribe_ack_timeout_ms: 30_000,
+         gap_fill_on_connect?: false,
+         reconnect_base_ms: 30_000,
+         reconnect_max_ms: 30_000}
+      )
+
+    await_pending_subscribe(feed)
+    socket = Feed.status(feed).socket
+
+    assert :ok =
+             Socket.Local.push_frame(
+               socket,
+               Jason.encode!(%{"method" => "channelError", "params" => %{"channel" => "x"}})
+             )
+
+    assert_receive {:telemetry, [:bitflyer, :market_data, :disconnected], %{count: 1},
+                    %{reason: :subscribe_error}},
+                   500
+  end
+
+  test "subscribe ACK timeout reconnects" do
+    parent = self()
+    disc_id = "md-ack-timeout-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        disc_id,
+        [:bitflyer, :market_data, :disconnected],
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(disc_id) end)
+
+    feed =
+      start_supervised!(
+        {Feed,
+         name: :"feed-#{System.unique_integer([:positive])}",
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         subscribe_ack: :never,
+         subscribe_ack_timeout_ms: 40,
+         gap_fill_on_connect?: false,
+         reconnect_base_ms: 20,
+         reconnect_max_ms: 20}
+      )
+
+    await_pending_subscribe(feed)
+
+    assert_receive {:telemetry, [:bitflyer, :market_data, :disconnected], %{count: 1},
+                    %{reason: :subscribe_ack_timeout}},
+                   500
+
+    _ = :sys.get_state(feed)
+    refute Feed.status(feed).connected?
+  end
+
+  test "subscribe RPC error reconnects" do
+    parent = self()
+    disc_id = "md-ack-err-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        disc_id,
+        [:bitflyer, :market_data, :disconnected],
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(disc_id) end)
+
+    _feed =
+      start_supervised!(
+        {Feed,
+         name: :"feed-#{System.unique_integer([:positive])}",
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Socket.Local,
+         subscribe_ack: :error,
+         subscribe_ack_timeout_ms: 30_000,
+         gap_fill_on_connect?: false,
+         reconnect_base_ms: 30_000,
+         reconnect_max_ms: 30_000}
+      )
+
+    assert_receive {:telemetry, [:bitflyer, :market_data, :disconnected], %{count: 1},
+                    %{reason: :subscribe_error}},
+                   500
+  end
+
+  test "subscribe write failure reconnects" do
+    parent = self()
+    disc_id = "md-ack-write-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        disc_id,
+        [:bitflyer, :market_data, :disconnected],
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(disc_id) end)
+
+    _feed =
+      start_supervised!(
+        {Feed,
+         name: :"feed-#{System.unique_integer([:positive])}",
+         product_codes: [@product],
+         rest_client: FakeRest,
+         socket_client: Bitflyer.TestSupport.WriteFailSocket,
+         gap_fill_on_connect?: false,
+         reconnect_base_ms: 30_000,
+         reconnect_max_ms: 30_000}
+      )
+
+    assert_receive {:telemetry, [:bitflyer, :market_data, :disconnected], %{count: 1},
+                    %{reason: :subscribe_failed}},
+                   500
+  end
+
+  defp await_connected(feed) do
+    connected? =
+      Enum.any?(1..50, fn _ ->
+        _ = :sys.get_state(feed)
+
+        if Feed.status(feed).connected? do
+          true
+        else
+          pause_ms(1)
+          false
+        end
+      end)
+
+    assert connected?, "feed did not become connected"
+  end
+
+  defp await_pending_subscribe(feed, count \\ 1) do
+    pending? =
+      Enum.any?(1..50, fn _ ->
+        _ = :sys.get_state(feed)
+        status = Feed.status(feed)
+
+        if status.pending_ack_count >= count and not is_nil(status.socket) do
+          true
+        else
+          pause_ms(1)
+          false
+        end
+      end)
+
+    assert pending?, "feed did not start a pending subscribe"
+  end
+
+  defp pause_ms(ms) do
+    receive do
+    after
+      ms -> :ok
+    end
   end
 end

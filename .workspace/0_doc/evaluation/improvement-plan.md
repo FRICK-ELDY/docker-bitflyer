@@ -39,7 +39,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 7 | 購読 ACK | request id ごとの ACK/error/timeout。未 ACK なら再接続 | 書込み成功だけで connected にしない |
+| 7 | 購読 ACK | JSON-RPC request id ごとに ACK / error / timeout。ACK は公式どおり `result: true` のみ。`false` / `null` / 欠落 / `channelError` は再接続。全 ACK まで `connected?` にしない。実装: `feed.ex` + `socket.ex` + `normalize.ex` + `socket/local.ex` | 書込み成功や失敗 ACK だけでは connected にしない |
 | 8 | live 未約定期限 | `BITFLYER_MAX_OPEN_AGE_MS` を live で有限必須。期限→取消→終端確認→hold 解放 | ソース変更なしに GTC が無期限放置されない |
 | 9 | executions ページング | `before` カーソルで取り切り。ページ数上限超過のみ fail-closed | 500 分割でも記帳できる |
 | 10 | 別ホスト監視の実配備 | `watch-ready.sh` を取引ホスト外で常駐させた証跡。非 ready 検知を人が確認 | 同一ホスト死を外部が検知した記録がある |

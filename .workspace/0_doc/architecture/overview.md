@@ -169,7 +169,7 @@ strategy から API を直接叩かない。market-data の遅延や欠損があ
 
 - コンテナは `restart: unless-stopped` 相当で自動再起動する
 - ヘルスチェックは「プロセス生存」だけでなく「データ鮮度」と「取引所との同期」を見る
-- WebSocket 切断時は再接続し、必要なら REST で穴埋めする
+- WebSocket 切断時は再接続し、必要なら REST で穴埋めする。購読は JSON-RPC request id の ACK（`result: true`）を待ち、書込み成功だけでは connected にしない。未 ACK / error / 失敗 ACK / timeout は再接続する
 - 時計ずれは注文や署名に影響するため、ホストの時刻同期を前提にする。ticker `source_timestamp` とホスト壁時計の差が `max_clock_skew_ms` を超えると Risk が拒否し、live 起動突合でも halt する。`source_timestamp` 欠落も発注拒否（fail-closed）
 - グレースフルシャットダウンでは、新規発注を止め、進行中の書き込みを終えてから終了する
 
