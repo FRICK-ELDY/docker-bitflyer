@@ -66,7 +66,7 @@ VLAN3（作業用）→ VLAN1（本番）の到達は最小ポートのみ（Vis
 ## CI / CD が保証しないこと
 
 - 本番PC への自動実弾デプロイ（人が pull / 入れ替えする）
-- bitFlyer / Discord など外部 API への実呼び出し
+- bitFlyer / Discord など外部 API への実呼び出し（公開 GET 契約も CI では叩かない。人が `mix bitflyer.contract`。オフライン意味論は `mix bitflyer.contract --corpus` / `Contract.check_corpus`）
 - 依存の既知脆弱性が無いこと（deps audit は可視化のみ。現状 fail させない）
 - GitHub 依存（`heroicons` / `daisyui` 等）の脆弱性スキャン
 - Credo / Dialyzer（後続で足してよい）

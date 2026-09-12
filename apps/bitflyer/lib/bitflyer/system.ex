@@ -67,6 +67,20 @@ defmodule Bitflyer.System do
   end
 
   @doc """
+  bitFlyer の read-only 契約検査。発注・取消はしない。
+  """
+  def contract_probe(opts \\ []) do
+    Bitflyer.Observe.Contract.run(opts)
+  end
+
+  @doc """
+  記録済み匿名 corpus の意味論検証（ネット不要）。
+  """
+  def contract_corpus(opts \\ []) do
+    Bitflyer.Observe.Contract.check_corpus(opts)
+  end
+
+  @doc """
   Ready 状態の正本（`:not_ready` / `:ready` / `{:halted, reason}`）。
   """
   def readiness do

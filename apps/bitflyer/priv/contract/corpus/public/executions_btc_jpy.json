@@ -1,0 +1,29 @@
+[
+  {
+    "id": 2651205071,
+    "side": "BUY",
+    "price": 11881858.0,
+    "size": 0.001168,
+    "exec_date": "2026-09-12T07:00:20.543",
+    "buy_child_order_acceptance_id": "JRF-REDACTED-BUY",
+    "sell_child_order_acceptance_id": "JRF-REDACTED-SELL"
+  },
+  {
+    "id": 2651205067,
+    "side": "SELL",
+    "price": 11881858.0,
+    "size": 0.001206,
+    "exec_date": "2026-09-12T06:58:29.26",
+    "buy_child_order_acceptance_id": "JRF-REDACTED-BUY",
+    "sell_child_order_acceptance_id": "JRF-REDACTED-SELL"
+  },
+  {
+    "id": 2651205065,
+    "side": "SELL",
+    "price": 11881826.0,
+    "size": 0.0055861,
+    "exec_date": "2026-09-12T06:56:36.737",
+    "buy_child_order_acceptance_id": "JRF-REDACTED-BUY",
+    "sell_child_order_acceptance_id": "JRF-REDACTED-SELL"
+  }
+]
