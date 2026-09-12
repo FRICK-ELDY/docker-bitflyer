@@ -214,6 +214,23 @@ defmodule Bitflyer.Risk.DailyLossTest do
     assert Decimal.eq?(paper.peak, Decimal.new("100000"))
   end
 
+  test "concurrent upserts keep the higher peak" do
+    day = DailyLoss.trading_day(DateTime.utc_now())
+    assert :ok = DailyEquityPeak.upsert(:dry_run, day, Decimal.new("100000"))
+
+    results =
+      [Decimal.new("150000"), Decimal.new("120000")]
+      |> Enum.map(fn peak ->
+        Task.async(fn -> DailyEquityPeak.upsert(:dry_run, day, peak) end)
+      end)
+      |> Enum.map(&Task.await/1)
+
+    assert Enum.all?(results, &(&1 == :ok))
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    dry_run = Enum.find(rows, &(&1.trade_mode == :dry_run))
+    assert Decimal.eq?(dry_run.peak, Decimal.new("150000"))
+  end
+
   test "same-day lower peak does not persist" do
     assert {:ok, _} = DailyLoss.record_peak(:paper, Decimal.new("50000"))
     assert {:ok, peak} = DailyLoss.record_peak(:paper, Decimal.new("10000"))

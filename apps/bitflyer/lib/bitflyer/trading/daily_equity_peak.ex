@@ -79,6 +79,9 @@ defmodule Bitflyer.Trading.DailyEquityPeak do
 
   @doc """
   ピークが正で、既存より高いときだけ書く。0 や同値は何もしない。
+
+  更新は `peak < 新値` の条件付きなので、並行 upsert で低い値が
+  高い値を上書きしない（HWM は単調増加）。
   """
   @spec upsert(atom(), Date.t(), Decimal.t()) :: :ok | {:error, term()}
   def upsert(trade_mode, %Date{} = day, %Decimal{} = peak)
@@ -179,11 +182,18 @@ defmodule Bitflyer.Trading.DailyEquityPeak do
   defp error_leaves(other), do: [other]
 
   defp update_peak(row, peak) do
-    case row
-         |> Ash.Changeset.for_update(:update, %{peak: peak})
-         |> Ash.update() do
-      {:ok, _} -> :ok
-      {:error, error} -> {:error, error}
+    # 無条件 update だと 150 の直後に 120 が書き戻り、再起動後の drawdown が緩む。
+    case __MODULE__
+         |> Ash.Query.filter(id == ^row.id and peak < ^peak)
+         |> Ash.bulk_update(:update, %{peak: peak}, return_errors?: true, stop_on_error?: true) do
+      %Ash.BulkResult{status: :success} ->
+        :ok
+
+      %Ash.BulkResult{status: :error, errors: errors} ->
+        {:error, errors}
+
+      other ->
+        {:error, other}
     end
   end
 end
