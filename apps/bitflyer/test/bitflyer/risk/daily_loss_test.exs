@@ -198,6 +198,22 @@ defmodule Bitflyer.Risk.DailyLossTest do
     refute Enum.any?(rows, &(&1.trade_mode == :live))
   end
 
+  test "concurrent first persist retries unique collision instead of unsynced" do
+    day = DailyLoss.trading_day(DateTime.utc_now())
+
+    results =
+      1..2
+      |> Enum.map(fn _ ->
+        Task.async(fn -> DailyEquityPeak.upsert(:paper, day, Decimal.new("100000")) end)
+      end)
+      |> Enum.map(&Task.await/1)
+
+    assert Enum.all?(results, &(&1 == :ok))
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    paper = Enum.find(rows, &(&1.trade_mode == :paper))
+    assert Decimal.eq?(paper.peak, Decimal.new("100000"))
+  end
+
   test "same-day lower peak does not persist" do
     assert {:ok, _} = DailyLoss.record_peak(:paper, Decimal.new("50000"))
     assert {:ok, peak} = DailyLoss.record_peak(:paper, Decimal.new("10000"))

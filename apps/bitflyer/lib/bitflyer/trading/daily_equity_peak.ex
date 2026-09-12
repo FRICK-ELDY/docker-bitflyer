@@ -91,11 +91,15 @@ defmodule Bitflyer.Trading.DailyEquityPeak do
   end
 
   defp do_upsert(trade_mode, day, peak) do
+    do_upsert(trade_mode, day, peak, false)
+  end
+
+  defp do_upsert(trade_mode, day, peak, retried?) do
     case __MODULE__
          |> Ash.Query.filter(trade_mode == ^trade_mode and trading_day == ^day)
          |> Ash.read_one() do
       {:ok, nil} ->
-        create_peak(trade_mode, day, peak)
+        create_peak(trade_mode, day, peak, retried?)
 
       {:ok, row} ->
         if Decimal.compare(peak, row.peak) == :gt do
@@ -109,7 +113,7 @@ defmodule Bitflyer.Trading.DailyEquityPeak do
     end
   end
 
-  defp create_peak(trade_mode, day, peak) do
+  defp create_peak(trade_mode, day, peak, retried?) do
     case __MODULE__
          |> Ash.Changeset.for_create(:create, %{
            trade_mode: trade_mode,
@@ -117,10 +121,62 @@ defmodule Bitflyer.Trading.DailyEquityPeak do
            peak: peak
          })
          |> Ash.create() do
-      {:ok, _} -> :ok
-      {:error, error} -> {:error, error}
+      {:ok, _} ->
+        :ok
+
+      {:error, error} ->
+        # 同時 insert の一意制約だけ読み直す。Invalid 全体を再試行すると
+        # 検証エラーで do_upsert が再帰し続ける。
+        if not retried? and unique_mode_day_taken?(error) do
+          do_upsert(trade_mode, day, peak, true)
+        else
+          {:error, error}
+        end
     end
   end
+
+  defp unique_mode_day_taken?(error) do
+    unique_mode_day_name?(inspect(error)) or
+      error |> error_leaves() |> Enum.any?(&identity_collision?/1)
+  end
+
+  defp identity_collision?(%{identity: :unique_mode_day}), do: true
+
+  defp identity_collision?(%{vars: %{key: :unique_mode_day}}), do: true
+
+  defp identity_collision?(%{constraint: constraint}) when is_binary(constraint) do
+    unique_mode_day_name?(constraint)
+  end
+
+  defp identity_collision?(%{postgres: %{constraint: constraint}}) when is_binary(constraint) do
+    unique_mode_day_name?(constraint)
+  end
+
+  defp identity_collision?(%{private_vars: vars}) when is_list(vars) do
+    Enum.any?(vars, fn
+      {:constraint, name} when is_binary(name) -> unique_mode_day_name?(name)
+      _ -> false
+    end)
+  end
+
+  defp identity_collision?(other) do
+    other
+    |> Exception.message()
+    |> unique_mode_day_name?()
+  rescue
+    _ -> false
+  end
+
+  defp unique_mode_day_name?(text) when is_binary(text) do
+    String.contains?(text, "unique_mode_day") or
+      String.contains?(text, "daily_equity_peaks_unique_mode_day")
+  end
+
+  defp error_leaves(%{errors: errors}) when is_list(errors) do
+    Enum.flat_map(errors, &error_leaves/1)
+  end
+
+  defp error_leaves(other), do: [other]
 
   defp update_peak(row, peak) do
     case row
