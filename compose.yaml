@@ -38,6 +38,8 @@ services:
       PHX_HOST: ${PHX_HOST:-localhost}
       TRADE_MODE: ${TRADE_MODE:-dry_run}
       BITFLYER_LIVE_CONFIRM: ${BITFLYER_LIVE_CONFIRM:-}
+      # 空なら公式 Lightstream。Feed 断ドリルだけ。live で非空だと起動失敗。
+      BITFLYER_WS_URL: ${BITFLYER_WS_URL:-}
       # MIX_ENV は注入しない。未設定時は Mix 既定の dev。
       # 固定すると preferred_envs（例: mix precommit → test）が効かなくなる。
       DB_HOST: db

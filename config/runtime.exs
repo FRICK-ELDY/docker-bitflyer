@@ -176,6 +176,28 @@ if trade_mode == :live and config_env() != :test do
          Keyword.put(open_order_cfg, :max_open_age_ms, max_open_age_ms)
 end
 
+# Game Day の Feed 断注入。live では残っていても公式 Lightstream を上書きしない（起動停止）。
+# :test は無視（Socket.Local）。空なら config.exs の既定。
+case Bitflyer.Config.WsUrl.resolve(
+       System.get_env("BITFLYER_WS_URL"),
+       trade_mode,
+       config_env()
+     ) do
+  {:override, url} ->
+    md = Application.get_env(:bitflyer, Bitflyer.MarketData, [])
+    config :bitflyer, Bitflyer.MarketData, Keyword.put(md, :ws_url, url)
+
+    IO.warn(
+      "BITFLYER_WS_URL overrides MarketData ws_url host=#{Bitflyer.Config.WsUrl.host_label(url)}; official Lightstream unused"
+    )
+
+  :unchanged ->
+    :ok
+
+  :ignored_in_test ->
+    :ok
+end
+
 config :bitflyer, Bitflyer.Exchange.Rest,
   base_url: "https://api.bitflyer.com",
   http_client: Bitflyer.Exchange.Rest.HTTP,

@@ -93,7 +93,7 @@ defmodule Mix.Tasks.Bitflyer.Contract do
     rendered =
       Enum.map_join(checks, "\n", fn check ->
         case check.status do
-          :ok -> "  ok   #{check.name}"
+          :ok -> "  ok   #{check.name}#{Bitflyer.Observe.Contract.format_ok_detail(check)}"
           :error -> "  fail #{check.name} reason=#{inspect(check.reason)}"
         end
       end)

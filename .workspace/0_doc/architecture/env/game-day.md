@@ -132,3 +132,21 @@ P0 #1–#5 がコード上で閉じるまで Stage 3 以降は実施しない。
 | 復帰 | 対象外（開発サーバは config 変更後の再起動が必要） |
 | 次アクション | `READY_URL` を VLAN1 本番に差し替え `register-watch-ready-task.ps1` |
 | 詳細 | [watch-ready-evidence.md](./watch-ready-evidence.md) |
+
+### 実施記録（2026-09-13）— P2 #11 Game Day Stage 2
+
+| 項目 | 記入 |
+| --- | --- |
+| 実施日 (UTC) | 2026-09-13 |
+| 実施者 | 開発（作業 PC `FRICK`） |
+| Stage | 1 + 2 |
+| モード | paper（終了後に開発 Compose を dry_run へ戻し、ready 200 / `trade_mode=dry_run` を確認） |
+| product_code | BTC_JPY |
+| 公開 contract | ok（ticker / executions / markets） |
+| `--private` | ok。permissions count=33 withdraw=false sendcoin=false。snapshot balances=41 positions=0 open_orders=0。パス一覧・金額・キーは残していない |
+| 注入 | paper 仮想建玉（BTC_JPY buy 0.01、SQL で内部正）。`BITFLYER_WS_URL=wss://127.0.0.1:1/json-rpc` で Feed 断。`mix bitflyer.halt` → CircuitSync 後 manual_halt |
+| ready | paper 初期 200 / watch-ready 0。Feed 断 503 `feed_disconnected` / watch-ready 1。halt 503 `halted:manual_halt` / watch-ready 1。`mix bitflyer.resume` + restart 後 200 / watch-ready 0 |
+| Discord | Webhook 設定あり。チャンネル到達は**未確認**（手順 4 は未閉じ。ログに URL は出していない） |
+| 復帰 | ready 復帰は手順どおり。Mix は別 BEAM のため resume 後に `docker compose restart app` |
+| 次アクション | Stage 3 は P0 後。Discord HEARTBEAT / halt の目視。halt 後のホスト認可拒否と paper executor 経路での建玉は未実施 |
+| 備考 | FixedOnce の internal_order_id は dry_run pending と衝突したため、paper 建玉は SQL 投入（paper executor は `order_executor_test` のみ）。halt 後の新規発注停止は ready 503 で代替し、ホスト上の `submit` は試していない。発注・取消 REST は呼んでいない |
