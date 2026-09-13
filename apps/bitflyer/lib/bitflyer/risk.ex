@@ -11,6 +11,7 @@ defmodule Bitflyer.Risk do
   live spot 売りカバー（買い建玉 − 未約定売り） → 価格逸脱 →
   発注頻度予約 → 日次損失 → 日次ドローダウン（realized+unrealized） → 残高。
   live は先に銘柄種別を検査し、spot 以外（FX/CFD）を拒否する。
+  live は `max_open_age_ms` が有限でないと認可しない（GTC 無期限を防ぐ）。
   live spot の売りは Position なしのベースライン在庫を対象にしない。
 
   MarketData 有効時は Status / `/health/ready` と同じ
@@ -43,6 +44,7 @@ defmodule Bitflyer.Risk do
     Equity,
     FailureRate,
     Limits,
+    OpenOrderPolicy,
     OrderRate
   }
 
@@ -93,6 +95,7 @@ defmodule Bitflyer.Risk do
       with :ok <- validate_command(command),
            {:ok, opts} <- attach_positions(opts),
            :ok <- check_live_product(command, opts),
+           :ok <- check_live_open_age(opts),
            :ok <- check_sync(opts),
            :ok <- check_failure_rate(opts),
            :ok <- check_market_feed(limits, opts),
@@ -249,6 +252,21 @@ defmodule Bitflyer.Risk do
            product_code: product_code,
            market_type: Product.market_type(product_code)
          }}
+    end
+  end
+
+  defp check_live_open_age(opts) do
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+
+    cond do
+      trade_mode != :live ->
+        :ok
+
+      match?(ms when is_integer(ms) and ms > 0, OpenOrderPolicy.max_open_age_ms()) ->
+        :ok
+
+      true ->
+        {:error, :unsynced, %{reason: :max_open_age_required}}
     end
   end
 

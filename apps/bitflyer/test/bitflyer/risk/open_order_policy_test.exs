@@ -3,6 +3,7 @@ defmodule Bitflyer.Risk.OpenOrderPolicyTest do
 
   require Ash.Query
 
+  import Bitflyer.TestSupport.BalanceCacheHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
   alias Bitflyer.OrderExecutor
@@ -105,6 +106,7 @@ defmodule Bitflyer.Risk.OpenOrderPolicyTest do
 
   setup do
     reset_readiness()
+    reset_balance_cache()
     clear_default_risk_state()
     OpenOrderPolicy.reset_halt_cancel_gate!()
     previous = Application.get_env(:bitflyer, OpenOrderPolicy, [])
@@ -132,6 +134,7 @@ defmodule Bitflyer.Risk.OpenOrderPolicyTest do
     on_exit(fn ->
       Application.put_env(:bitflyer, OpenOrderPolicy, previous)
       OpenOrderPolicy.reset_halt_cancel_gate!()
+      reset_balance_cache()
       reset_readiness()
       clear_default_risk_state()
     end)
@@ -218,6 +221,70 @@ defmodule Bitflyer.Risk.OpenOrderPolicyTest do
     {:ok, reloaded_fresh} = Order |> Ash.Query.filter(id == ^fresh_id) |> Ash.read_one()
     assert reloaded_old.status == :cancelled
     assert reloaded_fresh.status == :pending
+  end
+
+  test "cancel_aged_opens releases hold after terminal cancel" do
+    Application.put_env(
+      :bitflyer,
+      OpenOrderPolicy,
+      Keyword.put(Application.get_env(:bitflyer, OpenOrderPolicy, []), :max_open_age_ms, 60_000)
+    )
+
+    seed_balance_cache!(:live, %{
+      "JPY" => Decimal.new("100000"),
+      "BTC" => Decimal.new("0")
+    })
+
+    {:ok, old} = create_live_open("age-hold-1", "JRF-age-hold-1")
+
+    assert :ok =
+             Bitflyer.Risk.BalanceCache.reserve(
+               :live,
+               "JPY",
+               Decimal.new("50000"),
+               hold_id: old.internal_order_id
+             )
+
+    assert {:ok, held} = Bitflyer.Risk.BalanceCache.get(:live)
+    assert Decimal.equal?(held["JPY"], Decimal.new("50000"))
+
+    old_at =
+      DateTime.utc_now()
+      |> DateTime.add(-120, :second)
+      |> DateTime.truncate(:microsecond)
+
+    assert {:ok, _} =
+             old
+             |> Ash.Changeset.for_update(:update, %{})
+             |> Ash.Changeset.force_change_attribute(:inserted_at, old_at)
+             |> Ash.update()
+
+    assert {:ok, _} = OpenOrderPolicy.cancel_aged_opens(exchange: SpyCancelExchange)
+
+    {:ok, reloaded} = Order |> Ash.Query.filter(id == ^old.id) |> Ash.read_one()
+    assert reloaded.status == :cancelled
+
+    assert {:ok, released} = Bitflyer.Risk.BalanceCache.get(:live)
+    assert Decimal.equal?(released["JPY"], Decimal.new("100000"))
+  end
+
+  test "live unbounded max_open_age cancels all live opens" do
+    previous_mode = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous_mode)
+    end)
+
+    {:ok, order} = create_live_open("age-unbounded-1", "JRF-age-unbounded-1")
+    order_id = order.id
+
+    assert {:ok, results} = OpenOrderPolicy.cancel_aged_opens(exchange: SpyCancelExchange)
+    assert Enum.any?(results, fn {id, _} -> id == "age-unbounded-1" end)
+
+    {:ok, reloaded} = Order |> Ash.Query.filter(id == ^order_id) |> Ash.read_one()
+    assert reloaded.status == :cancelled
   end
 
   test "cancel_open_orders is no-op when none open" do

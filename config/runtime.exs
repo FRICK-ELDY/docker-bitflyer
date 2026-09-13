@@ -167,6 +167,13 @@ if trade_mode == :live and config_env() != :test do
 
   config :bitflyer, Bitflyer.Strategy, strategy_cfg
   config :bitflyer, Bitflyer.Risk, risk_cfg
+
+  max_open_age_ms = Bitflyer.Config.LiveSafety.require_max_open_age_ms!(&System.get_env/1)
+  open_order_cfg = Application.get_env(:bitflyer, Bitflyer.Risk.OpenOrderPolicy, [])
+
+  config :bitflyer,
+         Bitflyer.Risk.OpenOrderPolicy,
+         Keyword.put(open_order_cfg, :max_open_age_ms, max_open_age_ms)
 end
 
 config :bitflyer, Bitflyer.Exchange.Rest,

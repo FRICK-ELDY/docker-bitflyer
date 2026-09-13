@@ -95,8 +95,8 @@ defmodule Bitflyer.OrderExecutor.Live.Cancel do
     end
   end
 
-  # 取消 REST 成功後: 先に取引所の fill/状態を取り込む。
-  # まだ open の場合は即 cancelled に落とさず、後続同期で遅延約定を回収できるように維持する。
+  # 取消 REST 成功後: fill/状態を 1 回同期する。待ちループはしない。
+  # 未終端なら hold を残し、突合 tick の再同期 / aged 再取消に任せる。
   defp finalize_after_cancel(%Order{} = order, exchange) do
     case LiveFills.sync_order(order, exchange: exchange) do
       {:ok, %Order{} = updated} ->

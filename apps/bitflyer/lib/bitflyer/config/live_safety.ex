@@ -9,6 +9,9 @@ defmodule Bitflyer.Config.LiveSafety do
   `config/runtime.exs` から呼ぶ（Application 起動前でもモジュールは利用可）。
   """
 
+  # 有限だが実質無期限（年単位）を拒否する。7 日。
+  @max_open_age_ms_limit 7 * 24 * 60 * 60 * 1000
+
   @risk_env_keys [
     {"BITFLYER_MAX_ORDER_SIZE", :max_order_size, :positive_decimal},
     {"BITFLYER_MAX_POSITION_SIZE", :max_position_size, :positive_decimal},
@@ -99,6 +102,37 @@ defmodule Bitflyer.Config.LiveSafety do
   def assert_strategy_allowed!(false, _module), do: :ok
 
   @doc """
+  live 未約定 TTL の上限（ミリ秒）。7 日。
+  """
+  @spec max_open_age_ms_limit() :: pos_integer()
+  def max_open_age_ms_limit, do: @max_open_age_ms_limit
+
+  @doc """
+  live 必須の未約定 TTL（ミリ秒）。欠落・空・`:infinity`・非正・上限超過は起動停止。
+  """
+  @spec require_max_open_age_ms!((String.t() -> String.t() | nil)) :: pos_integer()
+  def require_max_open_age_ms!(getenv) when is_function(getenv, 1) do
+    ms =
+      parse_risk_value!(
+        "BITFLYER_MAX_OPEN_AGE_MS",
+        :positive_integer,
+        getenv.("BITFLYER_MAX_OPEN_AGE_MS")
+      )
+
+    limit = max_open_age_ms_limit()
+
+    if ms > limit do
+      raise_invalid_risk_env!(
+        "BITFLYER_MAX_OPEN_AGE_MS",
+        Integer.to_string(ms),
+        "positive integer milliseconds <= #{limit} (7 days)"
+      )
+    else
+      ms
+    end
+  end
+
+  @doc """
   live 必須の Risk 上限を環境変数から読む。欠落・空・不正形式は起動停止。
 
   `getenv` は `System.get_env/1` 互換（テスト注入用）。
@@ -155,6 +189,22 @@ defmodule Bitflyer.Config.LiveSafety do
       int
     else
       raise_invalid_risk_env!(env_key, trimmed, "non-negative integer")
+    end
+  end
+
+  defp parse_risk_trimmed!(env_key, :positive_integer, trimmed) do
+    int =
+      try do
+        String.to_integer(trimmed)
+      rescue
+        ArgumentError ->
+          raise_invalid_risk_env!(env_key, trimmed, "positive integer milliseconds")
+      end
+
+    if int > 0 do
+      int
+    else
+      raise_invalid_risk_env!(env_key, trimmed, "positive integer milliseconds")
     end
   end
 
