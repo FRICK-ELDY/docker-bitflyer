@@ -44,7 +44,11 @@ $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument (
     "-NoProfile -WindowStyle Hidden -File `"$wrapper`""
 )
 $trigger = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+$settings = New-ScheduledTaskSettingsSet `
+    -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries
 
 Register-ScheduledTask -TaskName "BitflyerWatchReady" -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
 Write-Output "registered BitflyerWatchReady evidence=$evidence"

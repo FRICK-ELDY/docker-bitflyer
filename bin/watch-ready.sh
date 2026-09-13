@@ -51,11 +51,11 @@ record_evidence() {
 }
 
 probe_once() {
-  local tmp code
+  local tmp code curl_err=0
   tmp="$(mktemp)"
-  code="$(curl -sS -o "${tmp}" -w '%{http_code}' --max-time "${TIMEOUT}" "${URL}" || true)"
+  code="$(curl -sS -o "${tmp}" -w '%{http_code}' --max-time "${TIMEOUT}" "${URL}")" || curl_err=$?
 
-  if [[ -z "${code}" ]]; then
+  if [[ "${curl_err}" -ne 0 ]] || [[ -z "${code}" ]]; then
     code="000"
   fi
 

@@ -57,38 +57,43 @@ function Write-Evidence([string]$Result, [string]$HttpCode, [string]$Extra = "")
 function Invoke-ReadyProbe {
     $tmp = [System.IO.Path]::GetTempFileName()
     $code = "000"
+    $success = $false
 
     try {
-        $args = @(
+        $curlArgs = @(
             "-sS",
             "-o", $tmp,
             "-w", "%{http_code}",
             "--max-time", "$Timeout",
             $Url
         )
-        $code = & curl.exe @args 2>$null
-        if ($LASTEXITCODE -ne 0 -and [string]::IsNullOrWhiteSpace($code)) {
+        $code = & curl.exe @curlArgs 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($code)) {
             $code = "000"
+        }
+
+        if ($code -eq "200" -and (Test-ReadyBody $tmp)) {
+            Write-Evidence "ok" $code
+            $success = $true
+        }
+        else {
+            [Console]::Error.WriteLine("ready probe failed http=$code")
+            if ((Test-Path -LiteralPath $tmp) -and ((Get-Item -LiteralPath $tmp).Length -gt 0)) {
+                [Console]::Error.WriteLine((Get-Content -LiteralPath $tmp -Raw))
+            }
+            Write-Evidence "fail" $code
         }
     }
     catch {
         $code = "000"
+        [Console]::Error.WriteLine("ready probe failed http=$code")
+        Write-Evidence "fail" $code
     }
-
-    if ($code -eq "200" -and (Test-ReadyBody $tmp)) {
+    finally {
         Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-        Write-Evidence "ok" $code
-        return $true
     }
 
-    [Console]::Error.WriteLine("ready probe failed http=$code")
-    if ((Test-Path -LiteralPath $tmp) -and ((Get-Item -LiteralPath $tmp).Length -gt 0)) {
-        [Console]::Error.WriteLine((Get-Content -LiteralPath $tmp -Raw))
-    }
-
-    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-    Write-Evidence "fail" $code
-    return $false
+    return $success
 }
 
 if ($Loop -ne "1") {
