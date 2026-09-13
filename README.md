@@ -34,7 +34,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | Readiness / 突合 / resume / baseline / recover | implemented | boot・定期突合。live は権限（出金禁止）・ticker 時計検査あり。`mix bitflyer.resume` / baseline / recover。`prep_stop` はゲート閉鎖＋ drain |
 | observe — telemetry / 構造化ログ | implemented | allowlist（`:kind` / `:currency` / `:limit` 含む）。prod は ConsoleReporter 既定オン（低頻度ドメインのみ） |
 | observe — Discord 通知 | implemented | Incoming Webhook。halt / mismatch / disconnect + 起動直後 HEARTBEAT。未設定でも起動。発注は止めない |
-| observe — health | implemented | `/health/live`・`/health/ready`・`/health`。外部監視は別ホストから ready を pull（[prod.md](.workspace/0_doc/architecture/env/prod.md)） |
+| observe — health | implemented | `/health/live`・`/health/ready`・`/health`。外部監視は別ホストから ready を pull（[prod.md](.workspace/0_doc/architecture/env/prod.md)）。実施記録は [watch-ready-evidence.md](.workspace/0_doc/architecture/env/watch-ready-evidence.md) |
 | observe — LiveDashboard | implemented | BasicAuth 配下 `/ops/dashboard`（prod/dev）。Ecto/RequestLogger オフ |
 | UI StatusLive | implemented | 発注可否・建玉・未約定・当日損益・halt 復帰手順・Feed・鮮度・モード色分け。BasicAuth 付き kill / resume / reconcile |
 | observe — 実 API contract / Game Day | implemented | 匿名公開 corpus の意味論（`mix bitflyer.contract --corpus`）。公開 GET 探針は人手。`--private` は署名 GET のみ（発注しない）。手順は [game-day.md](.workspace/0_doc/architecture/env/game-day.md) |
