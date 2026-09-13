@@ -419,7 +419,7 @@ docker compose -f compose.prod.yaml --env-file .env.prod exec app \
 - [ ] 別ホストが VLAN1 本番の `/health/ready` を 60s で pull する
 - [ ] ホスト exporter（Linux 9100 / Windows 9182）を別ホストが scrape する
 - [ ] `DISCORD_WEBHOOK_URL` を置き、起動直後の HEARTBEAT と 2 間隔欠落を人が検知できる
-- [ ] `mix bitflyer.contract`（公開 GET）が緑。必要なら `--private`（署名 GET のみ。発注しない）
-- [ ] [game-day.md](./game-day.md) の paper 障害注入と Stage 記録がある
+- [x] `mix bitflyer.contract` 公開 GET が緑。`--private` は件数と出金有無のみ（[game-day.md](./game-day.md) 2026-09-13）
+- [x] paper 障害注入（Feed 断 / halt / resume）の記録がある（[game-day.md](./game-day.md)。手順 2 のホスト発注停止と手順 4 Discord 目視は未。Stage 3 は P0 後）
 - [ ] 最小ロット・厳しい risk 上限（Stage 3 以降は **P0 完了後**。現状は live 実発注禁止）
 - [ ] `BITFLYER_LIVE_CONFIRM` に UTC 当日を明示したうえで `live` に切り替える

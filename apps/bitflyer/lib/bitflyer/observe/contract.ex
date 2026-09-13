@@ -81,6 +81,21 @@ defmodule Bitflyer.Observe.Contract do
   @spec forbidden_private_paths() :: [String.t()]
   def forbidden_private_paths, do: @forbidden_private_paths
 
+  @doc """
+  成功行の標準出力。秘密・権限パス一覧は出さない。件数と出金有無だけ。
+  """
+  @spec format_ok_detail(check()) :: String.t()
+  def format_ok_detail(%{name: :permissions, detail: %{result: result}}) when is_map(result) do
+    " count=#{result[:count]} withdraw=#{result[:withdraw]} sendcoin=#{result[:sendcoin]}"
+  end
+
+  def format_ok_detail(%{name: :reconcile_snapshot, detail: %{result: result}})
+      when is_map(result) do
+    " balances=#{result[:balances]} positions=#{result[:positions]} open_orders=#{result[:open_orders]}"
+  end
+
+  def format_ok_detail(_), do: ""
+
   defp public_checks(product_code, opts) do
     http = Keyword.get(opts, :http, HTTP)
     base = String.trim_trailing(Keyword.get(opts, :base_url, @default_base_url), "/")
@@ -137,7 +152,13 @@ defmodule Bitflyer.Observe.Contract do
     end
   end
 
-  defp summarize_private(:permissions, list) when is_list(list), do: %{count: length(list)}
+  defp summarize_private(:permissions, list) when is_list(list) do
+    %{
+      count: length(list),
+      withdraw: "/v1/me/withdraw" in list,
+      sendcoin: "/v1/me/sendcoin" in list
+    }
+  end
 
   defp summarize_private(:reconcile_snapshot, snap) when is_map(snap) do
     %{

@@ -81,6 +81,23 @@ defmodule Bitflyer.Observe.ContractTest do
     end
   end
 
+  defmodule WithdrawExchange do
+    @moduledoc false
+
+    def get_permissions do
+      {:ok,
+       [
+         "/v1/me/getbalance",
+         "/v1/me/withdraw",
+         "/v1/me/sendcoin"
+       ]}
+    end
+
+    def fetch_reconcile_snapshot do
+      {:ok, %{balances: [%{}, %{}], positions: [%{}], open_orders: []}}
+    end
+  end
+
   setup do
     Process.register(self(), :contract_probe)
 
@@ -140,6 +157,12 @@ defmodule Bitflyer.Observe.ContractTest do
              {:reconcile_snapshot, :ok}
            ]
 
+    perm = Enum.find(report.private, &(&1.name == :permissions))
+    assert perm.detail.result == %{count: 2, withdraw: false, sendcoin: false}
+
+    snap = Enum.find(report.private, &(&1.name == :reconcile_snapshot))
+    assert snap.detail.result == %{balances: 1, positions: 0, open_orders: 0}
+
     assert_received {:exchange, :get_permissions}
     assert_received {:exchange, :fetch_reconcile_snapshot}
     refute_received {:exchange, :place_order}
@@ -147,6 +170,26 @@ defmodule Bitflyer.Observe.ContractTest do
 
     assert "/v1/me/sendchildorder" in Contract.forbidden_private_paths()
     assert "/v1/me/cancelchildorder" in Contract.forbidden_private_paths()
+  end
+
+  test "permissions summary flags withdraw and sendcoin without printing paths" do
+    assert {:ok, report} =
+             Contract.run(http: StubHTTP, exchange: WithdrawExchange, private?: true)
+
+    perm = Enum.find(report.private, &(&1.name == :permissions))
+    assert perm.detail.result == %{count: 3, withdraw: true, sendcoin: true}
+
+    snap = Enum.find(report.private, &(&1.name == :reconcile_snapshot))
+    assert snap.detail.result == %{balances: 2, positions: 1, open_orders: 0}
+
+    perm_line = Contract.format_ok_detail(perm)
+    snap_line = Contract.format_ok_detail(snap)
+
+    assert perm_line == " count=3 withdraw=true sendcoin=true"
+    assert snap_line == " balances=2 positions=1 open_orders=0"
+    refute perm_line =~ "/v1/me/"
+    refute snap_line =~ "/v1/me/"
+    refute inspect(perm.detail.result) =~ "/v1/me/"
   end
 
   test "write_corpus? anonymizes execution ids into a temp dir" do
