@@ -874,6 +874,56 @@ defmodule Bitflyer.RiskTest do
              )
   end
 
+  test "live authorize refuses max_open_age_ms above the 7 day limit" do
+    previous = Application.get_env(:bitflyer, Bitflyer.Risk.OpenOrderPolicy, [])
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.Risk.OpenOrderPolicy,
+      Keyword.put(
+        previous,
+        :max_open_age_ms,
+        Bitflyer.Config.LiveSafety.max_open_age_ms_limit() + 1
+      )
+    )
+
+    on_exit(fn -> Application.put_env(:bitflyer, Bitflyer.Risk.OpenOrderPolicy, previous) end)
+
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :unsynced, %{reason: :max_open_age_required}} =
+             Risk.authorize(
+               valid_command(),
+               positions: [],
+               trade_mode: :live,
+               balances: %{"JPY" => %{available: Decimal.new("10000000")}}
+             )
+  end
+
+  test "live authorize refuses unbounded max_open_age_ms" do
+    previous = Application.get_env(:bitflyer, Bitflyer.Risk.OpenOrderPolicy, [])
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.Risk.OpenOrderPolicy,
+      Keyword.put(previous, :max_open_age_ms, :infinity)
+    )
+
+    on_exit(fn -> Application.put_env(:bitflyer, Bitflyer.Risk.OpenOrderPolicy, previous) end)
+
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :unsynced, %{reason: :max_open_age_required}} =
+             Risk.authorize(
+               valid_command(),
+               positions: [],
+               trade_mode: :live,
+               balances: %{"JPY" => %{available: Decimal.new("10000000")}}
+             )
+  end
+
   test "live rejects sell without a covering long position" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()

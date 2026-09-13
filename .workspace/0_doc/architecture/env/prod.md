@@ -24,7 +24,8 @@
 | UI 認証 | `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` 必須（`:browser` のみ。`/health*` は認証なし）。`/ops/dashboard` も同じ保護 |
 | HTTP bind | 既定 `PHX_HTTP_IP=127.0.0.1`。VLAN 越しに出すときだけ明示変更 |
 | API キー | `BITFLYER_API_KEY` / `BITFLYER_API_SECRET`。`TRADE_MODE=live` 時必須（欠落は起動停止） |
-| Risk 上限 | `BITFLYER_MAX_ORDER_SIZE` / `POSITION_SIZE` / `DAILY_LOSS` / `ORDERS_PER_MINUTE` / `PRICE_DEVIATION_PCT` を明示（開発既定は live で拒否） |
+| Risk 上限 | `BITFLYER_MAX_ORDER_SIZE` / `POSITION_SIZE` / `DAILY_LOSS` / `DAILY_DRAWDOWN_JPY` / `ORDERS_PER_MINUTE` / `PRICE_DEVIATION_PCT` を明示（開発既定は live で拒否） |
+| 未約定 TTL | `BITFLYER_MAX_OPEN_AGE_MS`（正の整数 ms、上限 7 日）。live 必須。欠落・`infinity`・上限超過は起動停止 |
 | 取引所エラー | 401/403 は即 `:auth_failed` サーキット。その他の確定拒否は窓内 N 回（既定 60s / 5 回）で `:consecutive_exchange_errors`。鍵を直したあとは突合→`mix bitflyer.resume` |
 | Strategy | 既定無効。`BITFLYER_STRATEGY_ENABLED=true` が必要。`FixedOnce` は live で有効化不可 |
 
@@ -90,7 +91,7 @@
 | 項目 | 方針 |
 | --- | --- |
 | 自前 TIF | **未実装。** 取引所既定（実質 GTC）。注文ごとの `expires_at` は持たない |
-| open age | `max_open_age_ms`（既定 `:infinity`）。定期突合 tick で `inserted_at` 超過の live open を `cancel/2` |
+| open age | live は `BITFLYER_MAX_OPEN_AGE_MS`（有限必須）。定期突合 tick で `inserted_at` 超過の live open を `cancel/2` → fill 同期で終端確認 → hold 解放。未設定の live は全 open 取消＋認可拒否 |
 | halt cancel-all | 理由ごと boolean。`true` のとき halt 成功後に live open を best-effort 逐次取消（失敗しても halt 維持） |
 | 取消する理由（既定 true） | `manual_halt`, `daily_loss_exceeded`, `daily_drawdown_exceeded`, `consecutive_exchange_errors`, `auth_failed`, `fill_sync_failed`, `fill_price_unavailable` |
 | 取消しない理由（既定 false） | `reconcile_mismatch`, `submission_unknown`, `persist_failed`, `restore_failed`, `exchange_unavailable`, `invalid_exchange_payload`, `unsafe_api_permissions`, `clock_skew`, `risk_halted`, `failure_rate_unsynced`（証拠保全・recover 優先） |
@@ -99,7 +100,7 @@
 | open age 実行 | 突合 GenServer 上では非同期 Task。halt cancel の Gate とは共有しない |
 | ID 無し / ACTIVE 残 | 既存 `cancel/2` と同じ（ローカル終端 or fill 同期後に終端。取引所 ACTIVE なら pending 維持） |
 
-運用で TTL を有効にする例: `max_open_age_ms: 3_600_000`（1 時間）。live 解禁前に理由マップを環境に合わせて見直す。
+運用例: `BITFLYER_MAX_OPEN_AGE_MS=3600000`（1 時間）。dry_run / paper はソース既定 `:infinity` のまま。live 解禁前に理由マップを環境に合わせて見直す。
 
 ## 監視とアラート
 

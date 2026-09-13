@@ -18,8 +18,9 @@ config :bitflyer, Bitflyer.Startup.Reconciler,
   boot?: true,
   interval_ms: 60_000
 
-# 未約定期限 / halt 時 cancel-all（P1 #10）。詳細は OpenOrderPolicy / prod.md。
-# 自前 TIF は持たず、期限は max_open_age_ms（inserted_at）。未記載の halt 理由は取消しない。
+# 未約定期限 / halt 時 cancel-all。詳細は OpenOrderPolicy / prod.md。
+# 自前 TIF は持たず、期限は max_open_age_ms（inserted_at）。
+# dry_run/paper 既定は infinity。live は runtime で BITFLYER_MAX_OPEN_AGE_MS 必須。
 config :bitflyer, Bitflyer.Risk.OpenOrderPolicy,
   max_open_age_ms: :infinity,
   # 本番は非同期 cancel（Task.Supervisor）。test.exs は false。

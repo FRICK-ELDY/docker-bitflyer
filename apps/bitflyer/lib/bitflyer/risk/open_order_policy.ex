@@ -5,7 +5,8 @@ defmodule Bitflyer.Risk.OpenOrderPolicy do
   ## 方針（正本は prod.md も参照）
 
   - **自前 TIF は未実装。** 取引所の既定（実質 GTC）に任せ、内部の期限は
-    `max_open_age_ms`（`inserted_at` 基準）で表す。
+    `max_open_age_ms`（`inserted_at` 基準）で表す。live は
+    `BITFLYER_MAX_OPEN_AGE_MS` が有限必須（runtime）。欠落時は全 live open を取消。
   - **halt 時:** 理由ごとに未約定 live を `OrderExecutor.cancel/2` で逐次取消するか選ぶ。
     証拠保全・recover が必要な理由は既定で取消しない。
   - 取消失敗でも halt 自体は維持する（best-effort）。
@@ -20,7 +21,7 @@ defmodule Bitflyer.Risk.OpenOrderPolicy do
 
   ## Config（`:bitflyer, Bitflyer.Risk.OpenOrderPolicy`）
 
-  - `:max_open_age_ms` — `:infinity`（既定）または正の整数 ms
+  - `:max_open_age_ms` — dry_run/paper は `:infinity` 可。live は正の整数 ms 必須
   - `:cancel_on_halt` — `%{halt_reason => boolean()}`。未記載理由は `false`
   - `:async_default` — `ensure` の `:async` 省略時（本番 true、test false）
   - `:halt_cancel_retry_backoff_ms` — 取消失敗／open 残留後の再試行間隔（既定 30_000）
@@ -48,25 +49,14 @@ defmodule Bitflyer.Risk.OpenOrderPolicy do
   end
 
   @doc """
-  未約定の最大滞留。`:infinity` のとき定期 TTL 取消はしない。
+  未約定の最大滞留。`:infinity` のとき dry_run/paper は定期 TTL 取消をしない。
+  live で有限でない場合は `cancel_aged_opens/1` が全件取消する。
   """
   @spec max_open_age_ms() :: pos_integer() | :infinity
   def max_open_age_ms do
-    case Keyword.get(config(), :max_open_age_ms, :infinity) do
-      :infinity ->
-        :infinity
-
-      ms when is_integer(ms) and ms > 0 ->
-        ms
-
-      other ->
-        Bitflyer.Telemetry.log(
-          :warning,
-          "invalid OpenOrderPolicy max_open_age_ms; treating as infinity",
-          %{value: other}
-        )
-
-        :infinity
+    case normalize_max_open_age_ms() do
+      {:ok, ms} -> ms
+      _ -> :infinity
     end
   end
 
@@ -138,12 +128,12 @@ defmodule Bitflyer.Risk.OpenOrderPolicy do
   """
   @spec cancel_aged_opens(keyword()) :: :ok | {:ok, list()} | {:error, atom(), map()}
   def cancel_aged_opens(opts \\ []) do
-    case max_open_age_ms() do
-      :infinity ->
+    case aged_open_cutoff() do
+      :skip ->
         :ok
 
-      ms ->
-        run = fn -> run_cancel_aged_opens(ms, opts) end
+      %DateTime{} = older_than ->
+        run = fn -> run_cancel_aged_opens(older_than, opts) end
 
         if Keyword.get(opts, :async, false) do
           _ = start_cancel_task(run)
@@ -232,12 +222,52 @@ defmodule Bitflyer.Risk.OpenOrderPolicy do
     end
   end
 
-  defp run_cancel_aged_opens(ms, opts) do
-    older_than =
-      DateTime.utc_now()
-      |> DateTime.add(-ms, :millisecond)
-      |> DateTime.truncate(:microsecond)
+  defp normalize_max_open_age_ms do
+    limit = Bitflyer.Config.LiveSafety.max_open_age_ms_limit()
 
+    case Keyword.get(config(), :max_open_age_ms, :infinity) do
+      :infinity ->
+        :infinity
+
+      ms when is_integer(ms) and ms > 0 and ms <= limit ->
+        {:ok, ms}
+
+      other ->
+        {:invalid, other}
+    end
+  end
+
+  defp aged_open_cutoff do
+    case {Bitflyer.TradeMode.current(), normalize_max_open_age_ms()} do
+      {_, {:ok, ms}} ->
+        DateTime.utc_now()
+        |> DateTime.add(-ms, :millisecond)
+        |> DateTime.truncate(:microsecond)
+
+      {:live, _} ->
+        Bitflyer.Telemetry.log(
+          :error,
+          "live max_open_age_ms is missing, invalid, or above the 7 day limit; cancelling all live opens",
+          %{trade_mode: :live}
+        )
+
+        DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      {_, :infinity} ->
+        :skip
+
+      {_, {:invalid, other}} ->
+        Bitflyer.Telemetry.log(
+          :warning,
+          "invalid OpenOrderPolicy max_open_age_ms; treating as infinity",
+          %{value: other}
+        )
+
+        :skip
+    end
+  end
+
+  defp run_cancel_aged_opens(older_than, opts) do
     try do
       Bitflyer.OrderExecutor.cancel_open_orders(
         Keyword.merge(opts,

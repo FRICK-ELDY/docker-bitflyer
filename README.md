@@ -130,7 +130,7 @@ Hex の既知 advisory が対象。`heroicons` / `daisyui` など GitHub タグ�
 | `TRADE_MODE` | `dry_run` |
 | `BITFLYER_LIVE_CONFIRM` | live 時のみ。UTC 当日 `YYYY-MM-DD` |
 | `BITFLYER_API_KEY` / `BITFLYER_API_SECRET` | Private API。`TRADE_MODE=live` 時のみ必須。出金権限は付けない |
-| `BITFLYER_MAX_*` / `BITFLYER_STRATEGY_ENABLED` | live 専用。上限 5 項目は必須。戦略は既定オフ（FixedOnce 不可） |
+| `BITFLYER_MAX_*` / `BITFLYER_STRATEGY_ENABLED` | live 専用。Risk 上限と `BITFLYER_MAX_OPEN_AGE_MS` は必須。戦略は既定オフ（FixedOnce 不可） |
 | `DISCORD_WEBHOOK_URL` | 任意。Discord Incoming Webhook。未設定でも起動する |
 | `DISCORD_HEARTBEAT_INTERVAL_MS` | 通知 HEARTBEAT 間隔（既定 900000 = 15 分）。`0` / `infinity` でオフ |
 | `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` | Status UI・`/ops/dashboard`。prod 必須。dev は両方揃ったときだけ有効 |

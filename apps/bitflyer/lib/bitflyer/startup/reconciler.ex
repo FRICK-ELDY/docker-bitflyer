@@ -4,7 +4,7 @@ defmodule Bitflyer.Startup.Reconciler do
 
   - 成功 → `Readiness.mark_ready/0`（halted 中は拒否される）
   - 失敗 → `Readiness.halt/1` と RiskState 永続化。Ready にはしない
-  - 定期 tick 前に `OpenOrderPolicy.cancel_aged_opens/1`（`max_open_age_ms`）
+  - boot / `run_now` / 定期 tick の前に `OpenOrderPolicy.cancel_aged_opens/1`
 
   起動時の重い突合は `handle_continue/2` で行い、`init/1` はすぐ返す。
   テストでは `boot?: false` にして明示的に `run_now/0` する
@@ -65,9 +65,7 @@ defmodule Bitflyer.Startup.Reconciler do
   @impl true
   def handle_continue(:boot_reconcile, state) do
     # 起動直後にも age 超過と（halt 済みなら）cancel-all を一度試す。
-    # aged 取消の REST は Task に逃がし、boot 突合を止めない。
-    _ = Bitflyer.Risk.OpenOrderPolicy.cancel_aged_opens(exchange: state.exchange, async: true)
-    _ = maybe_ensure_halt_cancels(state)
+    _ = sweep_open_orders(state)
 
     state =
       state
@@ -81,6 +79,7 @@ defmodule Bitflyer.Startup.Reconciler do
 
   @impl true
   def handle_call(:run_now, _from, state) do
+    _ = sweep_open_orders(state)
     result = run_reconcile(state)
 
     state =
@@ -104,10 +103,7 @@ defmodule Bitflyer.Startup.Reconciler do
 
   @impl true
   def handle_info(:periodic_reconcile, state) do
-    # 突合前に open age 超過・halt 中 cancel-all を試す。
-    # aged 取消は Task（同期 REST 連打で tick / run_now を止めない）。
-    _ = Bitflyer.Risk.OpenOrderPolicy.cancel_aged_opens(exchange: state.exchange, async: true)
-    _ = maybe_ensure_halt_cancels(state)
+    _ = sweep_open_orders(state)
 
     state =
       state
@@ -120,6 +116,12 @@ defmodule Bitflyer.Startup.Reconciler do
   defp maybe_enforce_drawdown(state) do
     _ = Bitflyer.Risk.Equity.enforce()
     state
+  end
+
+  # aged 取消は Task。同期 REST 連打で boot / tick / run_now を止めない。
+  defp sweep_open_orders(state) do
+    _ = Bitflyer.Risk.OpenOrderPolicy.cancel_aged_opens(exchange: state.exchange, async: true)
+    maybe_ensure_halt_cancels(state)
   end
 
   defp maybe_ensure_halt_cancels(state) do

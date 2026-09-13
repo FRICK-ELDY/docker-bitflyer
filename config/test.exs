@@ -55,7 +55,8 @@ config :bitflyer, Bitflyer.Risk, allow_test_injections: true
 # テスト既定では halt cancel-all を無効化（Exchange スタブ解体後の非同期 cancel を避ける）。
 # 有効化は OpenOrderPolicyTest が個別に put_env する。
 config :bitflyer, Bitflyer.Risk.OpenOrderPolicy,
-  max_open_age_ms: :infinity,
+  # live 認可は有限 TTL 必須。24h ならテスト中の fresh open は aged 取消されない
+  max_open_age_ms: 86_400_000,
   cancel_on_halt: %{},
   # テストは同期 cancel（Exchange スタブ解体後の孤児 Task を避ける）
   async_default: false,

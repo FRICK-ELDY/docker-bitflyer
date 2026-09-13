@@ -32,6 +32,40 @@ defmodule Bitflyer.Config.LiveSafetyTest do
     assert :ok = LiveSafety.assert_strategy_allowed!(true, Bitflyer.Strategy)
   end
 
+  test "require_max_open_age_ms! demands a finite positive integer" do
+    assert LiveSafety.require_max_open_age_ms!(getenv(%{"BITFLYER_MAX_OPEN_AGE_MS" => "3600000"})) ==
+             3_600_000
+
+    assert_raise ArgumentError, ~r/BITFLYER_MAX_OPEN_AGE_MS/, fn ->
+      LiveSafety.require_max_open_age_ms!(fn _ -> nil end)
+    end
+
+    assert_raise ArgumentError, ~r/invalid/, fn ->
+      LiveSafety.require_max_open_age_ms!(getenv(%{"BITFLYER_MAX_OPEN_AGE_MS" => "0"}))
+    end
+
+    assert_raise ArgumentError, ~r/invalid/, fn ->
+      LiveSafety.require_max_open_age_ms!(getenv(%{"BITFLYER_MAX_OPEN_AGE_MS" => "infinity"}))
+    end
+
+    assert_raise ArgumentError, ~r/invalid/, fn ->
+      LiveSafety.require_max_open_age_ms!(getenv(%{"BITFLYER_MAX_OPEN_AGE_MS" => "1.5"}))
+    end
+
+    limit = LiveSafety.max_open_age_ms_limit()
+
+    assert LiveSafety.require_max_open_age_ms!(
+             getenv(%{"BITFLYER_MAX_OPEN_AGE_MS" => "#{limit}"})
+           ) ==
+             limit
+
+    assert_raise ArgumentError, ~r/invalid/, fn ->
+      LiveSafety.require_max_open_age_ms!(
+        getenv(%{"BITFLYER_MAX_OPEN_AGE_MS" => Integer.to_string(limit + 1)})
+      )
+    end
+  end
+
   test "require_risk_limits! demands all live env keys" do
     assert_raise ArgumentError, ~r/BITFLYER_MAX_ORDER_SIZE/, fn ->
       LiveSafety.require_risk_limits!(fn _ -> nil end)
