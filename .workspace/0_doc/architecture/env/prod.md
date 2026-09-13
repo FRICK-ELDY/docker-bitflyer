@@ -133,9 +133,20 @@ READY_URL=https://bot.example/health/ready READY_LOOP=1 READY_INTERVAL=60 READY_
   bash bin/watch-ready.sh
 ```
 
+Windows 監視ホスト（Vision の作業用 PC）:
+
+```powershell
+$env:READY_URL = "http://<vlan1-prod>/health/ready"
+$env:READY_EVIDENCE = "$env:LOCALAPPDATA\bitflyer\watch-ready.log"
+powershell -NoProfile -File bin/watch-ready.ps1
+# 常駐タスク: powershell -NoProfile -File bin/register-watch-ready-task.ps1
+```
+
 Uptime Kuma（安価 VPS など）の例: Monitor type HTTP(s)、URL 上記、Keyword `"status":"ready"`、間隔 60s、retries 3。失敗で Discord / メール。Kuma 自体は取引 PC に置かない。
 
-計画上の「完了」は手順と探針があること。別ホストのジョブが実際に動いているかは live チェックリスト側。
+実施記録は [watch-ready-evidence.md](./watch-ready-evidence.md)。
+2026-09-13: 作業 PC から非 ready（HTTP 500）と到達不能（3 strikes）を確認。
+VLAN1 本番を `READY_URL` にした常駐はチェックリスト側。
 
 ### ホスト exporter（必須）
 
@@ -404,7 +415,8 @@ docker compose -f compose.prod.yaml --env-file .env.prod exec app \
 - [ ] `TRADE_MODE=dry_run`（または paper）で入れ替え・ロールバックを一度成功している
 - [ ] API キーは出金なし。ホスト `.env.prod` のみ
 - [ ] BasicAuth・公開面（ホスト loopback / ACL）が有効
-- [ ] 別ホストが `/health/ready` を 60s で pull し、非 ready / 到達不能でアラートする
+- [x] 作業 PC から `/health/ready` を引き、非 ready / 到達不能でアラートする（[記録](./watch-ready-evidence.md)。VLAN1 本番 URL への常駐は未）
+- [ ] 別ホストが VLAN1 本番の `/health/ready` を 60s で pull する
 - [ ] ホスト exporter（Linux 9100 / Windows 9182）を別ホストが scrape する
 - [ ] `DISCORD_WEBHOOK_URL` を置き、起動直後の HEARTBEAT と 2 間隔欠落を人が検知できる
 - [ ] `mix bitflyer.contract`（公開 GET）が緑。必要なら `--private`（署名 GET のみ。発注しない）

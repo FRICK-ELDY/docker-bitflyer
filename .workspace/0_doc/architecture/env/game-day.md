@@ -114,3 +114,21 @@ P0 #1–#5 がコード上で閉じるまで Stage 3 以降は実施しない。
 | Discord | 対象外 |
 | 復帰 | 対象外 |
 | 次アクション | paper Stage 2 をホストで実施。Stage 3 は P0 後 |
+
+### 実施記録（2026-09-13）— P2 #10 ready 監視
+
+| 項目 | 記入 |
+| --- | --- |
+| 実施日 (UTC) | 2026-09-13 |
+| 実施者 | 開発（監視ホスト `FRICK`） |
+| Stage | 監視ドリル（Stage 2 の「別ホスト相当 ready」） |
+| モード | dry_run（開発 Compose。取引ホスト死の VLAN1 向け常駐は未） |
+| product_code | 対象外 |
+| 公開 contract | 対象外 |
+| `--private` | skipped |
+| 注入 | なし（既存の CompileError 500 と listen なしポート） |
+| ready | 500（JSON でない）→ 探針 fail。3999 到達不能 → strikes=3 で alert |
+| Discord | 対象外 |
+| 復帰 | 対象外（開発サーバは config 変更後の再起動が必要） |
+| 次アクション | `READY_URL` を VLAN1 本番に差し替え `register-watch-ready-task.ps1` |
+| 詳細 | [watch-ready-evidence.md](./watch-ready-evidence.md) |
