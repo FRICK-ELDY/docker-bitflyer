@@ -4,6 +4,10 @@ defmodule Bitflyer.Exchange.Rest do
 
   `Bitflyer.Exchange.Client` を実装する。HTTP は `:http_client`（既定 `Rest.HTTP`）へ委譲し、
   テストでは fixture 応答を差し込める。実ネットを前提にしない。
+
+  `getexecutions` は公式どおり execution id 降順の先頭ページから `before` で古い側へ進む。
+  1 ページ最大 500、既定最大 20 ページ。最終ページが満杯でも次が空なら取り切り。
+  続きがあるまま上限に達したときだけ `:execution_pages_exhausted`。
   """
 
   @behaviour Bitflyer.Exchange.Client
@@ -13,6 +17,9 @@ defmodule Bitflyer.Exchange.Rest do
   alias Bitflyer.Trading.Product
 
   @default_base_url "https://api.bitflyer.com"
+  @default_execution_page_size 500
+  @max_execution_page_size 500
+  @default_execution_max_pages 20
 
   @impl true
   def fetch_reconcile_snapshot do
@@ -104,20 +111,130 @@ defmodule Bitflyer.Exchange.Rest do
 
   @impl true
   def fetch_executions(request) when is_map(request) do
+    page_size = execution_page_size(request)
+    max_pages = execution_max_pages()
+
+    fetch_execution_pages(request, page_size, max_pages, Map.get(request, :before), 1, [])
+  end
+
+  defp fetch_execution_pages(_request, _page_size, max_pages, _before, page, _acc)
+       when page > max_pages do
+    {:error, :execution_pages_exhausted}
+  end
+
+  defp fetch_execution_pages(request, page_size, max_pages, before, page, acc) do
+    case fetch_execution_page(request, page_size, before) do
+      {:ok, rows} ->
+        acc = merge_executions(acc, rows)
+
+        cond do
+          length(rows) < page_size ->
+            {:ok, acc}
+
+          page >= max_pages ->
+            # 満杯の最終ページは、次が空か短いときだけ取り切り。続きの満杯は超過。
+            confirm_last_page(request, page_size, acc, rows)
+
+          true ->
+            continue_execution_pages(request, page_size, max_pages, acc, rows, page)
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp continue_execution_pages(request, page_size, max_pages, acc, rows, page) do
+    case oldest_before_id(rows) do
+      {:ok, next_before} ->
+        fetch_execution_pages(request, page_size, max_pages, next_before, page + 1, acc)
+
+      :error ->
+        {:error, :missing_identifier}
+    end
+  end
+
+  defp confirm_last_page(request, page_size, acc, rows) do
+    case oldest_before_id(rows) do
+      {:ok, next_before} ->
+        case fetch_execution_page(request, page_size, next_before) do
+          {:ok, []} ->
+            {:ok, acc}
+
+          {:ok, more} when length(more) < page_size ->
+            {:ok, merge_executions(acc, more)}
+
+          {:ok, _more} ->
+            {:error, :execution_pages_exhausted}
+
+          {:error, _} = error ->
+            error
+        end
+
+      :error ->
+        {:error, :missing_identifier}
+    end
+  end
+
+  defp fetch_execution_page(request, page_size, before) do
     product_code = Map.fetch!(request, :product_code)
 
     query =
       [{"product_code", product_code}]
       |> maybe_put_query("child_order_acceptance_id", Map.get(request, :exchange_order_id))
-      # getchildorders と同様、既定件数を明示（API 既定超えの分割約定で coverage 失敗を防ぐ）。
-      # bitFlyer の count 上限はおおむね 500。1 注文がそれを超えるとページ欠けで fail-closed のまま。
-      |> maybe_put_query("count", Map.get(request, :count) || 500)
+      |> maybe_put_query("count", page_size)
+      |> maybe_put_query("before", before)
 
     with :ok <- require_credentials(),
-         {:ok, body} <- request(:get, "/v1/me/getexecutions", "", query),
-         {:ok, executions} <-
-           decode_rows(List.wrap(body), &Decode.execution(&1, product_code)) do
-      {:ok, executions}
+         {:ok, body} <- request(:get, "/v1/me/getexecutions", "", query) do
+      decode_rows(List.wrap(body), &Decode.execution(&1, product_code))
+    end
+  end
+
+  defp merge_executions(acc, rows) do
+    seen = MapSet.new(acc, & &1.id)
+
+    acc ++
+      Enum.reject(rows, fn exec -> MapSet.member?(seen, exec.id) end)
+  end
+
+  defp oldest_before_id(executions) do
+    ids =
+      Enum.map(executions, fn exec ->
+        case Integer.parse(exec.id) do
+          {n, ""} when n > 0 -> n
+          _ -> :error
+        end
+      end)
+
+    if ids == [] or Enum.any?(ids, &(&1 == :error)) do
+      :error
+    else
+      {:ok, Enum.min(ids)}
+    end
+  end
+
+  defp execution_page_size(request) do
+    configured =
+      case Keyword.get(config(), :execution_page_size, @default_execution_page_size) do
+        n when is_integer(n) and n > 0 -> n
+        _ -> @default_execution_page_size
+      end
+
+    requested =
+      case Map.get(request, :count) do
+        n when is_integer(n) and n > 0 -> n
+        _ -> configured
+      end
+
+    # 取引所は count を約 500 で切る。切られた件数を page_size にすると次ページを止める。
+    min(requested, @max_execution_page_size)
+  end
+
+  defp execution_max_pages do
+    case Keyword.get(config(), :execution_max_pages, @default_execution_max_pages) do
+      n when is_integer(n) and n > 0 -> n
+      _ -> @default_execution_max_pages
     end
   end
 

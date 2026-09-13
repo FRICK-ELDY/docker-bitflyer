@@ -324,6 +324,182 @@ defmodule Bitflyer.Exchange.RestTest do
              })
   end
 
+  test "fetch_executions pages with before until a short page" do
+    Process.put(:rest_http_handler, fn method, url, headers, body ->
+      assert method == :get
+      assert body == ""
+      assert_signed_headers(headers)
+      assert String.contains?(url, "/v1/me/getexecutions")
+      assert String.contains?(url, "count=2")
+
+      query = url_query(url)
+
+      case Map.get(query, "before") do
+        nil ->
+          {:ok, response(200, [execution_row(20), execution_row(19)])}
+
+        "19" ->
+          {:ok, response(200, [execution_row(18)])}
+
+        other ->
+          flunk("unexpected before=#{inspect(other)}")
+      end
+    end)
+
+    assert {:ok, rows} =
+             Rest.fetch_executions(%{
+               product_code: "FX_BTC_JPY",
+               exchange_order_id: "JRF-page",
+               count: 2
+             })
+
+    assert Enum.map(rows, & &1.id) == ["20", "19", "18"]
+  end
+
+  test "fetch_executions uses min id as before even when a page is ascending" do
+    Process.put(:rest_http_handler, fn _method, url, _headers, _body ->
+      query = url_query(url)
+
+      case Map.get(query, "before") do
+        nil ->
+          {:ok, response(200, [execution_row(19), execution_row(20)])}
+
+        "19" ->
+          {:ok, response(200, [execution_row(18)])}
+
+        other ->
+          flunk("unexpected before=#{inspect(other)}")
+      end
+    end)
+
+    assert {:ok, rows} =
+             Rest.fetch_executions(%{
+               product_code: "FX_BTC_JPY",
+               exchange_order_id: "JRF-page",
+               count: 2
+             })
+
+    assert Enum.map(rows, & &1.id) == ["19", "20", "18"]
+  end
+
+  test "fetch_executions caps count at the exchange page size" do
+    Process.put(:rest_http_handler, fn _method, url, _headers, _body ->
+      assert String.contains?(url, "count=500")
+      refute String.contains?(url, "count=10000")
+      {:ok, response(200, [])}
+    end)
+
+    assert {:ok, []} =
+             Rest.fetch_executions(%{
+               product_code: "FX_BTC_JPY",
+               exchange_order_id: "JRF-count-cap",
+               count: 10_000
+             })
+  end
+
+  test "fetch_executions accepts an exact full last page when the next page is empty" do
+    previous = Application.get_env(:bitflyer, Rest)
+
+    Application.put_env(
+      :bitflyer,
+      Rest,
+      Keyword.put(previous, :execution_max_pages, 2)
+    )
+
+    on_exit(fn -> Application.put_env(:bitflyer, Rest, previous) end)
+
+    Process.put(:rest_http_handler, fn _method, url, _headers, _body ->
+      query = url_query(url)
+
+      rows =
+        case Map.get(query, "before") do
+          nil -> [execution_row(40), execution_row(39)]
+          "39" -> [execution_row(38), execution_row(37)]
+          "37" -> []
+          other -> flunk("unexpected before=#{inspect(other)}")
+        end
+
+      {:ok, response(200, rows)}
+    end)
+
+    assert {:ok, rows} =
+             Rest.fetch_executions(%{
+               product_code: "FX_BTC_JPY",
+               exchange_order_id: "JRF-page-exact",
+               count: 2
+             })
+
+    assert Enum.map(rows, & &1.id) == ["40", "39", "38", "37"]
+  end
+
+  test "fetch_executions includes a short remainder after the last full page" do
+    previous = Application.get_env(:bitflyer, Rest)
+
+    Application.put_env(
+      :bitflyer,
+      Rest,
+      Keyword.put(previous, :execution_max_pages, 2)
+    )
+
+    on_exit(fn -> Application.put_env(:bitflyer, Rest, previous) end)
+
+    Process.put(:rest_http_handler, fn _method, url, _headers, _body ->
+      query = url_query(url)
+
+      rows =
+        case Map.get(query, "before") do
+          nil -> [execution_row(40), execution_row(39)]
+          "39" -> [execution_row(38), execution_row(37)]
+          "37" -> [execution_row(36)]
+          other -> flunk("unexpected before=#{inspect(other)}")
+        end
+
+      {:ok, response(200, rows)}
+    end)
+
+    assert {:ok, rows} =
+             Rest.fetch_executions(%{
+               product_code: "FX_BTC_JPY",
+               exchange_order_id: "JRF-page-remainder",
+               count: 2
+             })
+
+    assert Enum.map(rows, & &1.id) == ["40", "39", "38", "37", "36"]
+  end
+
+  test "fetch_executions fails closed when page cap is exhausted" do
+    previous = Application.get_env(:bitflyer, Rest)
+
+    Application.put_env(
+      :bitflyer,
+      Rest,
+      Keyword.put(previous, :execution_max_pages, 2)
+    )
+
+    on_exit(fn -> Application.put_env(:bitflyer, Rest, previous) end)
+
+    Process.put(:rest_http_handler, fn _method, url, _headers, _body ->
+      query = url_query(url)
+
+      rows =
+        case Map.get(query, "before") do
+          nil -> [execution_row(40), execution_row(39)]
+          "39" -> [execution_row(38), execution_row(37)]
+          "37" -> [execution_row(36), execution_row(35)]
+          other -> flunk("unexpected before=#{inspect(other)}")
+        end
+
+      {:ok, response(200, rows)}
+    end)
+
+    assert {:error, :execution_pages_exhausted} =
+             Rest.fetch_executions(%{
+               product_code: "FX_BTC_JPY",
+               exchange_order_id: "JRF-page-cap",
+               count: 2
+             })
+  end
+
   test "4xx maps to definite rejection atoms" do
     Process.put(:rest_http_handler, fn _method, _url, _headers, _body ->
       {:ok, response(400, %{"error_message" => "Insufficient funds"})}
@@ -540,6 +716,26 @@ defmodule Bitflyer.Exchange.RestTest do
 
     assert {:ok, %{balances: balances}} = Bitflyer.Exchange.fetch_reconcile_snapshot()
     assert length(balances) == 2
+  end
+
+  defp url_query(url) do
+    url
+    |> URI.parse()
+    |> Map.get(:query)
+    |> Kernel.||("")
+    |> URI.decode_query()
+  end
+
+  defp execution_row(id) do
+    %{
+      "id" => id,
+      "side" => "BUY",
+      "price" => 33470,
+      "size" => 0.01,
+      "commission" => 0,
+      "exec_date" => "2015-07-07T09:57:40.397",
+      "child_order_acceptance_id" => "JRF-page"
+    }
   end
 
   defp fixture(name) do

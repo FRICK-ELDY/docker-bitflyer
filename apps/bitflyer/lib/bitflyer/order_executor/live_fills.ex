@@ -382,23 +382,16 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
          %{reason: :missing_execution_id, internal_order_id: order.internal_order_id}}
 
       Decimal.compare(exec_total, remote) != :eq ->
-        meta = %{
-          reason: :execution_size_mismatch,
-          exec_total: exec_total,
-          remote_filled: remote,
-          exec_count: length(all_execs),
-          internal_order_id: order.internal_order_id
-        }
-
-        # bitFlyer getexecutions の count 上限付近。ページ欠けの可能性を観測用に残す。
-        meta =
-          if length(all_execs) >= 500 do
-            Map.put(meta, :hint, :execution_page_may_be_truncated)
-          else
-            meta
-          end
-
-        {:error, :fill_price_unavailable, meta}
+        # Rest は取り切れたときだけ {:ok}。ページ上限超過は fetch 側で落ちる。
+        # ここまで来る mismatch は取引所不整合であり、ページ欠けではない。
+        {:error, :fill_price_unavailable,
+         %{
+           reason: :execution_size_mismatch,
+           exec_total: exec_total,
+           remote_filled: remote,
+           exec_count: length(all_execs),
+           internal_order_id: order.internal_order_id
+         }}
 
       Decimal.compare(new_total, delta) != :eq ->
         {:error, :fill_price_unavailable,

@@ -52,6 +52,8 @@ defmodule Bitflyer.Exchange do
 
   @doc """
   約定一覧を取得する（live 約定反映用）。
+
+  Rest 実装は `before` で取り切る。ページ上限超過は `{:error, :execution_pages_exhausted}`。
   """
   @spec fetch_executions(Client.fetch_executions_request()) ::
           {:ok, [Client.execution()]} | {:error, term()}
