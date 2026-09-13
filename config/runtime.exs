@@ -178,6 +178,8 @@ end
 
 # Game Day の Feed 断注入。live では残っていても公式 Lightstream を上書きしない（起動停止）。
 # :test は無視（Socket.Local）。空なら config.exs の既定。
+# LiveSafety と同様、.release 起動時も bitflyer ebin は load path にある。
+# Application.start へ移すと Feed が既定を読んだあとになる。
 case Bitflyer.Config.WsUrl.resolve(
        System.get_env("BITFLYER_WS_URL"),
        trade_mode,

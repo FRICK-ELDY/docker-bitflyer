@@ -2,8 +2,9 @@ defmodule Bitflyer.Config.WsUrl do
   @moduledoc """
   Game Day 用 `BITFLYER_WS_URL` の解釈。
 
-  `config/runtime.exs` から呼ぶ。live では公式 Lightstream 以外を読めない。
-  空・未設定は config.exs の既定を残す。
+  `config/runtime.exs` から呼ぶ（Application 起動前でもモジュールは利用可。
+  `LiveSafety` と同じ。プロセスや未適用の Application env には触れない）。
+  live では公式 Lightstream 以外を読めない。空・未設定は config.exs の既定を残す。
   """
 
   @official_host "ws.lightstream.bitflyer.com"
@@ -34,8 +35,8 @@ defmodule Bitflyer.Config.WsUrl do
   """
   @spec host_label(String.t()) :: String.t()
   def host_label(url) when is_binary(url) do
-    case URI.parse(url) do
-      %URI{scheme: scheme, host: host} when is_binary(scheme) and is_binary(host) ->
+    case URI.new(url) do
+      {:ok, %URI{scheme: scheme, host: host}} when is_binary(scheme) and is_binary(host) ->
         "#{scheme}://#{host}"
 
       _ ->
