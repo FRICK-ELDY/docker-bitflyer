@@ -41,7 +41,7 @@
 |:---:|:---|:---|:---|
 | 7 | 購読 ACK | JSON-RPC request id ごとに ACK / error / timeout。ACK は公式どおり `result: true` のみ。`false` / `null` / 欠落 / `channelError` は再接続。全 ACK まで `connected?` にしない。実装: `feed.ex` + `socket.ex` + `normalize.ex` + `socket/local.ex` | 書込み成功や失敗 ACK だけでは connected にしない |
 | 8 | live 未約定期限 | `BITFLYER_MAX_OPEN_AGE_MS` を live で有限必須（上限 7 日。`LiveSafety` + `runtime.exs`）。期限切れは `cancel_aged_opens` → `Live.Cancel` 1 回同期 → 終端で hold 解放。未設定 live は全 open 取消＋認可拒否。`run_now` も aged 取消する。実装: `live_safety.ex` + `open_order_policy.ex` + `risk.ex` + `reconciler.ex` | ソース変更なしに GTC が無期限放置されない |
-| 9 | executions ページング | `before` カーソルで取り切り。ページ数上限超過のみ fail-closed | 500 分割でも記帳できる |
+| 9 | executions ページング | `getexecutions` を `before`（execution id 降順）で取り切る。1 ページ最大 500（`count` は取引所上限で切る）。最終満杯ページは次が空/短ければ取り切り。超過のみ `:execution_pages_exhausted`。実装: `rest.ex` + `live_fills.ex` | 500 分割でも記帳できる。ページ上限超過だけ fail-closed |
 | 10 | 別ホスト監視の実配備 | `watch-ready.sh` を取引ホスト外で常駐させた証跡。非 ready 検知を人が確認 | 同一ホスト死を外部が検知した記録がある |
 | 11 | Game Day Stage 2 | paper 障害注入と復帰。private GET は秘密を残さず結果要約のみ | Stage 3 の前に紙で復旧が回る |
 

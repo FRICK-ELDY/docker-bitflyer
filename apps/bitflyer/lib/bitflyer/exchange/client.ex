@@ -108,7 +108,8 @@ defmodule Bitflyer.Exchange.Client do
   @type fetch_executions_request :: %{
           required(:product_code) => String.t(),
           optional(:exchange_order_id) => String.t(),
-          optional(:count) => pos_integer()
+          optional(:count) => pos_integer(),
+          optional(:before) => pos_integer()
         }
 
   @type execution :: %{

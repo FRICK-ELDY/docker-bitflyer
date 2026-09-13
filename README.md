@@ -168,7 +168,7 @@ Hex の既知 advisory が対象。`heroicons` / `daisyui` など GitHub タグ�
 | 通貨別証拠金 | `GET /v1/me/getcollateralaccounts` | — |
 | 注文一覧（未約定含む） | `GET /v1/me/getchildorders` | Rest 突合・照会 |
 | 親注文一覧 / 詳細 | `GET /v1/me/getparentorders` 等 | 使わない想定 |
-| 自分の約定一覧 | `GET /v1/me/getexecutions` | Rest 約定反映 |
+| 自分の約定一覧 | `GET /v1/me/getexecutions` | Rest 約定反映。`before` で取り切り（1 ページ 500。上限超過のみ fail-closed） |
 | 建玉一覧（CFD / FX） | `GET /v1/me/getpositions` | Rest 突合（**spot では呼ばない**） |
 | 残高履歴 | `GET /v1/me/getbalancehistory` | — |
 | 証拠金変動履歴 | `GET /v1/me/getcollateralhistory` | — |

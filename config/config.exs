@@ -12,7 +12,10 @@ config :bitflyer, :exchange_api, api_key: "", api_secret: ""
 config :bitflyer, Bitflyer.Exchange.Rest,
   base_url: "https://api.bitflyer.com",
   http_client: Bitflyer.Exchange.Rest.HTTP,
-  receive_timeout: 5_000
+  receive_timeout: 5_000,
+  # getexecutions は 1 回 500 件。before で取り切り、ページ上限超過のみ fail-closed
+  execution_page_size: 500,
+  execution_max_pages: 20
 
 config :bitflyer, Bitflyer.Startup.Reconciler,
   boot?: true,

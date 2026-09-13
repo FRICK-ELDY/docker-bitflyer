@@ -43,6 +43,40 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
     def list_child_orders(_), do: {:ok, []}
   end
 
+  defmodule PageCapExecExchange do
+    @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
+
+    @impl true
+    def fetch_reconcile_snapshot, do: {:ok, %{positions: [], balances: [], open_orders: []}}
+
+    @impl true
+    def place_order(_), do: {:error, :not_used}
+
+    @impl true
+    def cancel_order(_), do: {:error, :not_used}
+
+    @impl true
+    def fetch_order(%{exchange_order_id: id}) do
+      {:ok,
+       %{
+         exchange_order_id: id,
+         product_code: "FX_BTC_JPY",
+         side: :buy,
+         size: Decimal.new("0.02"),
+         filled_size: Decimal.new("0.02"),
+         average_price: Decimal.new("1500000"),
+         status: :completed
+       }}
+    end
+
+    @impl true
+    def fetch_executions(_), do: {:error, :execution_pages_exhausted}
+
+    @impl true
+    def list_child_orders(_), do: {:ok, []}
+  end
+
   defmodule BrokenExecExchange do
     @behaviour Bitflyer.Exchange.Client
     use Bitflyer.TestSupport.ExchangeClientStubs
@@ -888,6 +922,27 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
              LiveFills.sync_order(order, exchange: FillExchange)
 
     assert meta.reason == :execution_size_mismatch
+    assert {:ok, []} = live_positions()
+  end
+
+  test "execution page cap from exchange is fail-closed" do
+    {:ok, order} =
+      create_live_order("live-exec-pages", "JRF-exec-pages", size: Decimal.new("0.02"))
+
+    Process.put({:fill_order, "JRF-exec-pages"}, %{
+      exchange_order_id: "JRF-exec-pages",
+      product_code: "FX_BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.02"),
+      filled_size: Decimal.new("0.02"),
+      average_price: Decimal.new("1500000"),
+      status: :completed
+    })
+
+    assert {:error, :exchange_error, meta} =
+             LiveFills.sync_order(order, exchange: PageCapExecExchange)
+
+    assert meta.reason == :execution_pages_exhausted
     assert {:ok, []} = live_positions()
   end
 
