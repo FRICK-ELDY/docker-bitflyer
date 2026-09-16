@@ -1,21 +1,10 @@
-# Bitflyer
+# Bitflyer（`apps/bitflyer`）
 
-**TODO: Add description**
+Umbrella の取引所連携・Domain・エンジン正本。UI は含めない（`apps/ui`）。
 
-## Installation
+- Repo / Domain: `Bitflyer.Repo`、`Bitflyer.Trading`（Ash）
+- 論理コンポ: market-data / strategy / risk / order-executor / observe
+- 品質ゲート: ルートで `mix precommit`（`ash.codegen --check` 含む）
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `bitflyer` to your list of dependencies in `mix.exs`:
-
-```elixir
-def deps do
-  [
-    {:bitflyer, "~> 0.1.0"}
-  ]
-end
-```
-
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/bitflyer>.
-
+詳細はルート [README.md](../../README.md) と
+[overview.md](../../.workspace/0_doc/architecture/overview.md)。

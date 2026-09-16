@@ -48,6 +48,8 @@ defmodule DockerBitflyer.MixProject do
         "deps.unlock --check-unused",
         "format --check-formatted",
         "compile --warnings-as-errors",
+        # Resource と priv/resource_snapshots の drift を落とす（手書き migration 後の snapshot 同期）
+        "ash.codegen --check --domains Bitflyer.Trading",
         # test/ は compile 対象外のため、こちらでも warnings-as-errors にする
         "test --warnings-as-errors"
       ],
