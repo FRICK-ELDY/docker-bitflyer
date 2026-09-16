@@ -218,9 +218,13 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
         Mix.shell().info("position side=#{side} size=#{Decimal.to_string(size)}")
         %{results | position: {:ok, %{side: side, size: Decimal.to_string(size)}}}
 
-      other ->
-        Mix.shell().error("position read failed: #{inspect(other)}")
-        %{results | position: {:error, other}}
+      {:ok, nil} ->
+        Mix.shell().error("position not found")
+        %{results | position: {:error, :not_found}}
+
+      {:error, reason} ->
+        Mix.shell().error("position read failed: #{inspect(reason)}")
+        %{results | position: {:error, reason}}
     end
   end
 
@@ -280,16 +284,15 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
     for {currency, amount} <- [{"JPY", "1000000"}, {"BTC", "0"}] do
       amt = Decimal.new(amount)
 
-      {:ok, _} =
-        BalanceSnapshot
-        |> Ash.Changeset.for_create(:create, %{
-          currency: currency,
-          amount: amt,
-          available: amt,
-          captured_at: captured_at,
-          trade_mode: :paper
-        })
-        |> Ash.create()
+      BalanceSnapshot
+      |> Ash.Changeset.for_create(:create, %{
+        currency: currency,
+        amount: amt,
+        available: amt,
+        captured_at: captured_at,
+        trade_mode: :paper
+      })
+      |> Ash.create!()
     end
 
     :ok
@@ -330,21 +333,15 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
   end
 
   defp clear_gameday_paper_orders_and_fills! do
-    {:ok, fills} =
-      Fill
-      |> Ash.Query.filter(trade_mode == :paper)
-      |> Ash.read()
-
-    fills
+    Fill
+    |> Ash.Query.filter(trade_mode == :paper)
+    |> Ash.read!()
     |> Enum.filter(&String.starts_with?(&1.internal_order_id, @gameday_order_prefix))
     |> Enum.each(&Ash.destroy!/1)
 
-    {:ok, orders} =
-      Order
-      |> Ash.Query.filter(trade_mode == :paper)
-      |> Ash.read()
-
-    orders
+    Order
+    |> Ash.Query.filter(trade_mode == :paper)
+    |> Ash.read!()
     |> Enum.filter(&String.starts_with?(&1.internal_order_id, @gameday_order_prefix))
     |> Enum.each(&Ash.destroy!/1)
 
