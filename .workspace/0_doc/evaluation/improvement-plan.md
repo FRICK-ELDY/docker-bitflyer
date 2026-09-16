@@ -40,7 +40,7 @@
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
 | 7 | ~~残高 probe~~ | **完了 (2026-09-16)**。`BalanceCache.probe/4` を認可から呼び `reserve` と同一比較。Risk moduledoc に近似（probe→reserve TOCTOU）を明記。Runner は `:insufficient_balance` に銘柄バックオフ（既定 5s） | 認可通過→予約失敗の Tight loop が消える |
-| 8 | ticker bid/ask → spread ゲート | `Normalize.from_ticker/1` に best bid/ask。異常 spread で成行を拒否 | 薄商いの market を認可で止められる |
+| 8 | ~~ticker bid/ask → spread ゲート~~ | **完了 (2026-09-16)**。`Normalize.from_ticker/1` が `best_bid`/`best_ask` を必須化。成行は `max_spread_pct`（既定 0.5%、live は `BITFLYER_MAX_SPREAD_PCT`）で拒否。指値は従来どおり LTP 乖離 | 薄商いの market を認可で止められる |
 | 9 | 軽微負債をこのサイクルで 3 件消す | **必ず 3 件**: `ash.codegen --check`、両 `test_helper` の Sandbox mode、`apps/bitflyer/README.md`。残り（Dockerfile USER、websockex 記録、保持方針）は次 | 「必ず」を守った記録がある。守らないなら宣言から「必ず」を消す |
 
 ---

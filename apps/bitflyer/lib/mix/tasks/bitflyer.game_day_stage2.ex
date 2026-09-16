@@ -299,9 +299,13 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
   end
 
   defp put_fresh_ticker!(%Decimal{} = ltp) do
+    half = Decimal.max(Decimal.new("1"), Decimal.mult(ltp, Decimal.new("0.0001")))
+
     :ok =
       Cache.put(@market_key, %{
         ltp: ltp,
+        best_bid: Decimal.sub(ltp, half),
+        best_ask: Decimal.add(ltp, half),
         source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
       })
   end

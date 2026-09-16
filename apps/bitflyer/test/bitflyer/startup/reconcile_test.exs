@@ -79,6 +79,8 @@ defmodule Bitflyer.Startup.ReconcileTest do
        %{
          "product_code" => product_code,
          "ltp" => 5_000_000,
+         "best_bid" => 4_999_000,
+         "best_ask" => 5_001_000,
          "timestamp" => DateTime.to_iso8601(skewed)
        }}
     end

@@ -9,6 +9,7 @@ defmodule Bitflyer.Risk do
   検査: 同期 → FailureRate 同期 → Feed 接続（`market_feed_gate`）→ 鮮度 →
   時計ずれ → 注文サイズ → 建玉 →
   live spot 売りカバー（買い建玉 − 未約定売り） → 価格逸脱 →
+  成行 spread（`max_spread_pct`） →
   発注頻度予約 → 日次損失 → 日次ドローダウン（realized+unrealized） → 残高。
   live は先に銘柄種別を検査し、spot 以外（FX/CFD）を拒否する。
   live は `max_open_age_ms` が有限でないと認可しない（GTC 無期限を防ぐ）。
@@ -110,6 +111,7 @@ defmodule Bitflyer.Risk do
            :ok <- check_position_size(command, limits, opts),
            :ok <- check_spot_sell_cover(command, opts),
            :ok <- check_price_deviation(command, limits, opts),
+           :ok <- check_spread(command, limits, opts),
            {:ok, reservation} <- reserve_order_rate(limits, opts),
            :ok <- finish_authorize_after_rate(command, limits, opts, reservation) do
         {:ok, mint_authorized_order(command, reservation, opts)}
@@ -543,6 +545,37 @@ defmodule Bitflyer.Risk do
     end
   end
 
+  # 成行のみ。薄商い・異常 spread を認可で止める（指値は max_price_deviation_pct）
+  defp check_spread(command, limits, opts) do
+    order_type = Map.get(command, :order_type, :market)
+
+    if order_type != :market do
+      :ok
+    else
+      case fetch_bid_ask(command, opts) do
+        {:ok, bid, ask} ->
+          spread_pct = spread_pct(bid, ask)
+
+          if Decimal.gt?(spread_pct, limits.max_spread_pct) do
+            {:error, :limit_exceeded,
+             %{
+               limit: :max_spread_pct,
+               spread_pct: spread_pct,
+               max: limits.max_spread_pct,
+               bid: bid,
+               ask: ask
+             }}
+          else
+            :ok
+          end
+
+        :miss ->
+          {:error, :stale,
+           %{market_key: Map.fetch!(command, :market_key), reason: :bid_ask_missing}}
+      end
+    end
+  end
+
   defp reserve_order_rate(limits, opts) do
     max = limits.max_orders_per_minute
 
@@ -794,6 +827,22 @@ defmodule Bitflyer.Risk do
     end
   end
 
+  defp fetch_bid_ask(command, opts) do
+    key = Map.fetch!(command, :market_key)
+    server = Keyword.get(opts, :server, Cache)
+
+    case Cache.get(key, server) do
+      {:ok, value, _received_at} ->
+        case extract_bid_ask(value) do
+          {:ok, bid, ask} -> {:ok, bid, ask}
+          :miss -> :miss
+        end
+
+      :miss ->
+        :miss
+    end
+  end
+
   defp extract_ltp(%{ltp: %Decimal{} = ltp}) do
     if Decimal.positive?(ltp), do: ltp, else: nil
   end
@@ -804,11 +853,43 @@ defmodule Bitflyer.Risk do
 
   defp extract_ltp(_), do: nil
 
+  defp extract_bid_ask(%{best_bid: %Decimal{} = bid, best_ask: %Decimal{} = ask}) do
+    validate_bid_ask(bid, ask)
+  end
+
+  defp extract_bid_ask(%{"best_bid" => %Decimal{} = bid, "best_ask" => %Decimal{} = ask}) do
+    validate_bid_ask(bid, ask)
+  end
+
+  defp extract_bid_ask(_), do: :miss
+
+  defp validate_bid_ask(bid, ask) do
+    if Decimal.positive?(bid) and Decimal.positive?(ask) and
+         Decimal.compare(ask, bid) != :lt do
+      {:ok, bid, ask}
+    else
+      :miss
+    end
+  end
+
   defp price_deviation_pct(%Decimal{} = price, %Decimal{} = ltp) do
     price
     |> Decimal.sub(ltp)
     |> Decimal.abs()
     |> Decimal.div(ltp)
+    |> Decimal.mult(Decimal.new(100))
+  end
+
+  # ((ask - bid) / mid) * 100。mid = (bid + ask) / 2
+  defp spread_pct(%Decimal{} = bid, %Decimal{} = ask) do
+    mid =
+      bid
+      |> Decimal.add(ask)
+      |> Decimal.div(Decimal.new(2))
+
+    ask
+    |> Decimal.sub(bid)
+    |> Decimal.div(mid)
     |> Decimal.mult(Decimal.new(100))
   end
 

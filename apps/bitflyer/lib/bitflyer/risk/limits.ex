@@ -8,6 +8,7 @@ defmodule Bitflyer.Risk.Limits do
   @default_max_daily_loss "100000"
   @default_max_orders_per_minute 20
   @default_max_price_deviation_pct "2"
+  @default_max_spread_pct "0.5"
   @default_max_clock_skew_ms 5_000
 
   @type t :: %{
@@ -18,7 +19,8 @@ defmodule Bitflyer.Risk.Limits do
           max_daily_loss: Decimal.t(),
           max_daily_drawdown: Decimal.t(),
           max_orders_per_minute: non_neg_integer(),
-          max_price_deviation_pct: Decimal.t()
+          max_price_deviation_pct: Decimal.t(),
+          max_spread_pct: Decimal.t()
         }
 
   @doc """
@@ -53,7 +55,8 @@ defmodule Bitflyer.Risk.Limits do
       max_orders_per_minute:
         non_neg_int(Map.get(limits, :max_orders_per_minute, @default_max_orders_per_minute)),
       max_price_deviation_pct:
-        decimal(Map.get(limits, :max_price_deviation_pct, @default_max_price_deviation_pct))
+        decimal(Map.get(limits, :max_price_deviation_pct, @default_max_price_deviation_pct)),
+      max_spread_pct: decimal(Map.get(limits, :max_spread_pct, @default_max_spread_pct))
     }
   end
 

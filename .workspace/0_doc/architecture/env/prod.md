@@ -24,7 +24,7 @@
 | UI 認証 | `UI_BASIC_AUTH_USERNAME` / `UI_BASIC_AUTH_PASSWORD` 必須（`:browser` のみ。`/health*` は認証なし）。`/ops/dashboard` も同じ保護 |
 | HTTP bind | 既定 `PHX_HTTP_IP=127.0.0.1`。VLAN 越しに出すときだけ明示変更 |
 | API キー | `BITFLYER_API_KEY` / `BITFLYER_API_SECRET`。`TRADE_MODE=live` 時必須（欠落は起動停止） |
-| Risk 上限 | `BITFLYER_MAX_ORDER_SIZE` / `POSITION_SIZE` / `DAILY_LOSS` / `DAILY_DRAWDOWN_JPY` / `ORDERS_PER_MINUTE` / `PRICE_DEVIATION_PCT` を明示（開発既定は live で拒否） |
+| Risk 上限 | `BITFLYER_MAX_ORDER_SIZE` / `POSITION_SIZE` / `DAILY_LOSS` / `DAILY_DRAWDOWN_JPY` / `ORDERS_PER_MINUTE` / `PRICE_DEVIATION_PCT` / `SPREAD_PCT` を明示（開発既定は live で拒否）。成行は `((ask-bid)/mid)*100` が `SPREAD_PCT` 超で拒否 |
 | 未約定 TTL | `BITFLYER_MAX_OPEN_AGE_MS`（正の整数 ms、上限 7 日）。live 必須。欠落・`infinity`・上限超過は起動停止 |
 | 取引所エラー | 401/403 は即 `:auth_failed` サーキット。その他の確定拒否は窓内 N 回（既定 60s / 5 回）で `:consecutive_exchange_errors`。鍵を直したあとは突合→`mix bitflyer.resume` |
 | Strategy | 既定無効。`BITFLYER_STRATEGY_ENABLED=true` が必要。`FixedOnce` は live で有効化不可 |

@@ -25,7 +25,14 @@ defmodule Bitflyer.MarketData.Rest.StubTest do
   test "fetch_ticker returns fresh ticker when response is :ok" do
     Application.put_env(:bitflyer, Stub, response: :ok)
 
-    assert {:ok, %{"product_code" => "FX_BTC_JPY", "ltp" => 5_000_000, "timestamp" => ts}} =
+    assert {:ok,
+            %{
+              "product_code" => "FX_BTC_JPY",
+              "ltp" => 5_000_000,
+              "best_bid" => 4_999_000,
+              "best_ask" => 5_001_000,
+              "timestamp" => ts
+            }} =
              Stub.fetch_ticker("FX_BTC_JPY")
 
     assert is_binary(ts)

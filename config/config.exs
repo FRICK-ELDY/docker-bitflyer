@@ -101,6 +101,8 @@ config :bitflyer, Bitflyer.Risk,
   max_daily_drawdown: "100000",
   max_orders_per_minute: 20,
   max_price_deviation_pct: "2",
+  # ((ask-bid)/mid)*100。成行のみ。corpus 正常帯 ~0.05% を通し薄商いを止める
+  max_spread_pct: "0.5",
   exchange_error_window_ms: 60_000,
   max_exchange_errors_per_window: 5
 

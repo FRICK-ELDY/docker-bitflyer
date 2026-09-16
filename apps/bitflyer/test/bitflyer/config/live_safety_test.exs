@@ -9,7 +9,8 @@ defmodule Bitflyer.Config.LiveSafetyTest do
     "BITFLYER_MAX_DAILY_LOSS" => "10000",
     "BITFLYER_MAX_DAILY_DRAWDOWN_JPY" => "12000",
     "BITFLYER_MAX_ORDERS_PER_MINUTE" => "5",
-    "BITFLYER_MAX_PRICE_DEVIATION_PCT" => "1"
+    "BITFLYER_MAX_PRICE_DEVIATION_PCT" => "1",
+    "BITFLYER_MAX_SPREAD_PCT" => "0.5"
   }
 
   defp getenv(env), do: fn key -> Map.get(env, key) end
@@ -79,6 +80,7 @@ defmodule Bitflyer.Config.LiveSafetyTest do
     assert limits[:max_daily_drawdown] == "12000"
     assert limits[:max_orders_per_minute] == 5
     assert limits[:max_price_deviation_pct] == "1"
+    assert limits[:max_spread_pct] == "0.5"
   end
 
   test "require_risk_limits! rejects non-decimal and non-positive values" do

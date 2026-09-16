@@ -3,15 +3,30 @@ defmodule Bitflyer.MarketData.NormalizeTest do
 
   alias Bitflyer.MarketData.Normalize
 
-  test "from_ticker normalizes REST ticker body with source_timestamp" do
-    assert {:ok, {:ticker, "FX_BTC_JPY"}, %{ltp: ltp, source_timestamp: ts}} =
-             Normalize.from_ticker(%{
-               "product_code" => "FX_BTC_JPY",
-               "ltp" => 5_000_000,
-               "timestamp" => "2015-07-08T02:50:59.97"
-             })
+  defp ticker(attrs) do
+    Map.merge(
+      %{
+        "product_code" => "FX_BTC_JPY",
+        "ltp" => 5_000_000,
+        "best_bid" => 4_999_000,
+        "best_ask" => 5_001_000
+      },
+      attrs
+    )
+  end
+
+  test "from_ticker normalizes REST ticker body with source_timestamp and bid/ask" do
+    assert {:ok, {:ticker, "FX_BTC_JPY"},
+            %{ltp: ltp, best_bid: bid, best_ask: ask, source_timestamp: ts}} =
+             Normalize.from_ticker(
+               ticker(%{
+                 "timestamp" => "2015-07-08T02:50:59.97"
+               })
+             )
 
     assert Decimal.equal?(ltp, Decimal.new(5_000_000))
+    assert Decimal.equal?(bid, Decimal.new(4_999_000))
+    assert Decimal.equal?(ask, Decimal.new(5_001_000))
     assert %DateTime{} = ts
     assert ts.year == 2015
     assert ts.month == 7
@@ -20,18 +35,37 @@ defmodule Bitflyer.MarketData.NormalizeTest do
 
   test "from_ticker allows missing timestamp as nil" do
     assert {:ok, {:ticker, "FX_BTC_JPY"}, %{ltp: ltp, source_timestamp: nil}} =
-             Normalize.from_ticker(%{"product_code" => "FX_BTC_JPY", "ltp" => 5_000_000})
+             Normalize.from_ticker(ticker(%{}))
 
     assert Decimal.equal?(ltp, Decimal.new(5_000_000))
   end
 
-  test "from_ticker rejects invalid timestamp without raising" do
+  test "from_ticker rejects missing bid/ask" do
     assert :error =
              Normalize.from_ticker(%{
                "product_code" => "FX_BTC_JPY",
                "ltp" => 5_000_000,
-               "timestamp" => "not-a-datetime"
+               "best_bid" => 4_999_000
              })
+  end
+
+  test "from_ticker rejects crossed book" do
+    assert :error =
+             Normalize.from_ticker(
+               ticker(%{
+                 "best_bid" => 5_002_000,
+                 "best_ask" => 5_001_000
+               })
+             )
+  end
+
+  test "from_ticker rejects invalid timestamp without raising" do
+    assert :error =
+             Normalize.from_ticker(
+               ticker(%{
+                 "timestamp" => "not-a-datetime"
+               })
+             )
   end
 
   test "from_ws_frame extracts channelMessage ticker" do
@@ -43,15 +77,20 @@ defmodule Bitflyer.MarketData.NormalizeTest do
           "message" => %{
             "product_code" => "FX_BTC_JPY",
             "ltp" => "5100000",
+            "best_bid" => "5099000",
+            "best_ask" => "5101000",
             "timestamp" => "2015-07-08T02:50:59.97Z"
           }
         }
       })
 
-    assert {:ok, {:ticker, "FX_BTC_JPY"}, %{ltp: ltp, source_timestamp: %DateTime{}}} =
+    assert {:ok, {:ticker, "FX_BTC_JPY"},
+            %{ltp: ltp, best_bid: bid, best_ask: ask, source_timestamp: %DateTime{}}} =
              Normalize.from_ws_frame(frame)
 
     assert Decimal.equal?(ltp, Decimal.new("5100000"))
+    assert Decimal.equal?(bid, Decimal.new("5099000"))
+    assert Decimal.equal?(ask, Decimal.new("5101000"))
   end
 
   test "from_ws_frame rejects channel and product_code mismatch" do
@@ -63,6 +102,8 @@ defmodule Bitflyer.MarketData.NormalizeTest do
           "message" => %{
             "product_code" => "FX_BTC_JPY",
             "ltp" => "5100000",
+            "best_bid" => "5099000",
+            "best_ask" => "5101000",
             "timestamp" => "2015-07-08T02:50:59.97Z"
           }
         }
@@ -111,8 +152,13 @@ defmodule Bitflyer.MarketData.NormalizeTest do
     assert {:error, "x", :invalid_id} = Normalize.rpc_response(%{"id" => "x", "result" => true})
   end
 
+  test "from_ticker rejects zero or negative ltp" do
+    assert :error = Normalize.from_ticker(ticker(%{"ltp" => 0}))
+    assert :error = Normalize.from_ticker(ticker(%{"ltp" => -1}))
+  end
+
   test "from_ticker rejects invalid ltp without raising" do
     assert :error =
-             Normalize.from_ticker(%{"product_code" => "FX_BTC_JPY", "ltp" => "not-a-number"})
+             Normalize.from_ticker(ticker(%{"ltp" => "not-a-number"}))
   end
 end
