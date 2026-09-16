@@ -655,7 +655,7 @@ defmodule Bitflyer.Risk do
   end
 
   defp probe_available_balance(command, opts, trade_mode) do
-    case balance_hold(command, opts) do
+    case balance_hold(command, Keyword.put_new(opts, :trade_mode, trade_mode)) do
       {:ok, :skip} ->
         :ok
 

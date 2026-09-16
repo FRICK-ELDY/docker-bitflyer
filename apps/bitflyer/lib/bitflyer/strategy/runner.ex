@@ -281,14 +281,15 @@ defmodule Bitflyer.Strategy.Runner do
   defp maybe_balance_backoff(cooldowns, product_code, result, now) do
     case result do
       {:error, :limit_exceeded, %{limit: :insufficient_balance}} ->
-        until = now + insufficient_balance_backoff_ms()
+        backoff_ms = insufficient_balance_backoff_ms()
+        until = now + backoff_ms
 
         Bitflyer.Telemetry.log(
           :info,
           "strategy insufficient_balance backoff",
           %{
             product_code: product_code,
-            backoff_ms: insufficient_balance_backoff_ms(),
+            backoff_ms: backoff_ms,
             trade_mode: Bitflyer.TradeMode.current()
           }
         )
