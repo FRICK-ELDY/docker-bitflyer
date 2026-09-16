@@ -42,7 +42,9 @@ defmodule Bitflyer.Strategy.Runner do
   @retryable_limit_kinds [
     :max_orders_per_minute,
     :max_daily_loss,
-    :insufficient_balance
+    :insufficient_balance,
+    # 一時的な薄商い。settle すると同一 intent が二度と出ない
+    :max_spread_pct
   ]
 
   @spec start_link(keyword()) :: GenServer.on_start()

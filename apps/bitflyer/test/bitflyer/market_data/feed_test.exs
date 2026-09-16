@@ -29,6 +29,8 @@ defmodule Bitflyer.MarketData.FeedTest do
        %{
          "product_code" => product_code,
          "ltp" => 4_900_000,
+         "best_bid" => 4_899_000,
+         "best_ask" => 4_901_000,
          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
        }}
     end
@@ -119,7 +121,12 @@ defmodule Bitflyer.MarketData.FeedTest do
         "method" => "channelMessage",
         "params" => %{
           "channel" => MarketData.ticker_channel(@product),
-          "message" => %{"product_code" => @product, "ltp" => "5000000"}
+          "message" => %{
+            "product_code" => @product,
+            "ltp" => "5000000",
+            "best_bid" => "4999000",
+            "best_ask" => "5001000"
+          }
         }
       })
 
@@ -346,7 +353,12 @@ defmodule Bitflyer.MarketData.FeedTest do
         "method" => "channelMessage",
         "params" => %{
           "channel" => MarketData.ticker_channel(@product),
-          "message" => %{"product_code" => @product, "ltp" => "5100000"}
+          "message" => %{
+            "product_code" => @product,
+            "ltp" => "5100000",
+            "best_bid" => "5099000",
+            "best_ask" => "5101000"
+          }
         }
       })
 

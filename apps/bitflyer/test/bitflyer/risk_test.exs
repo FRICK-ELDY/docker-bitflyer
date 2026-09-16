@@ -74,7 +74,12 @@ defmodule Bitflyer.RiskTest do
 
   test "authorize rejects missing source_timestamp" do
     assert Readiness.mark_ready() == :ok
-    assert Cache.put(@market_key, %{ltp: Decimal.new("5000000")}) == :ok
+
+    assert Cache.put(@market_key, %{
+             ltp: Decimal.new("5000000"),
+             best_bid: Decimal.new("4999000"),
+             best_ask: Decimal.new("5001000")
+           }) == :ok
 
     assert {:error, :clock_skew, %{reason: :missing_source_timestamp}} =
              Risk.authorize(valid_command(), positions: [])
@@ -85,6 +90,8 @@ defmodule Bitflyer.RiskTest do
 
     assert Cache.put(@market_key, %{
              ltp: Decimal.new("5000000"),
+             best_bid: Decimal.new("4999000"),
+             best_ask: Decimal.new("5001000"),
              source_timestamp: DateTime.utc_now()
            }) == :ok
 
@@ -565,6 +572,77 @@ defmodule Bitflyer.RiskTest do
                positions: [],
                limits: %{max_price_deviation_pct: Decimal.new("0.01")}
              )
+  end
+
+  test "authorize rejects market order when spread exceeds max_spread_pct" do
+    assert Readiness.mark_ready() == :ok
+
+    assert :ok =
+             Cache.put(@market_key, %{
+               ltp: Decimal.new("5000000"),
+               best_bid: Decimal.new("4900000"),
+               best_ask: Decimal.new("5100000"),
+               source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+             })
+
+    # mid=5_000_000, spread=4%
+    assert {:error, :limit_exceeded, %{limit: :max_spread_pct, spread_pct: spread}} =
+             Risk.authorize(valid_command(%{order_type: :market}),
+               positions: [],
+               limits: %{max_spread_pct: Decimal.new("0.5")}
+             )
+
+    assert Decimal.gt?(spread, Decimal.new("0.5"))
+  end
+
+  test "authorize accepts market order within max_spread_pct" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(valid_command(%{order_type: :market}),
+               positions: [],
+               limits: %{max_spread_pct: Decimal.new("0.5")}
+             )
+  end
+
+  test "authorize skips spread gate for limit orders" do
+    assert Readiness.mark_ready() == :ok
+
+    assert :ok =
+             Cache.put(@market_key, %{
+               ltp: Decimal.new("5000000"),
+               best_bid: Decimal.new("4900000"),
+               best_ask: Decimal.new("5100000"),
+               source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+             })
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(
+               valid_command(%{
+                 order_type: :limit,
+                 price: Decimal.new("5000000"),
+                 size: Decimal.new("0.01")
+               }),
+               positions: [],
+               limits: %{
+                 max_spread_pct: Decimal.new("0.01"),
+                 max_price_deviation_pct: Decimal.new("2")
+               }
+             )
+  end
+
+  test "authorize rejects market order when bid/ask missing from cache" do
+    assert Readiness.mark_ready() == :ok
+
+    assert :ok =
+             Cache.put(@market_key, %{
+               ltp: Decimal.new("5000000"),
+               source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+             })
+
+    assert {:error, :stale, %{reason: :bid_ask_missing}} =
+             Risk.authorize(valid_command(%{order_type: :market}), positions: [])
   end
 
   test "authorize rejects when recent order rate exceeds limit" do

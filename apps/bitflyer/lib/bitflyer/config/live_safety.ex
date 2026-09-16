@@ -18,7 +18,8 @@ defmodule Bitflyer.Config.LiveSafety do
     {"BITFLYER_MAX_DAILY_LOSS", :max_daily_loss, :positive_decimal},
     {"BITFLYER_MAX_DAILY_DRAWDOWN_JPY", :max_daily_drawdown, :positive_decimal},
     {"BITFLYER_MAX_ORDERS_PER_MINUTE", :max_orders_per_minute, :non_neg_integer},
-    {"BITFLYER_MAX_PRICE_DEVIATION_PCT", :max_price_deviation_pct, :positive_decimal}
+    {"BITFLYER_MAX_PRICE_DEVIATION_PCT", :max_price_deviation_pct, :positive_decimal},
+    {"BITFLYER_MAX_SPREAD_PCT", :max_spread_pct, :positive_decimal}
   ]
 
   @doc """

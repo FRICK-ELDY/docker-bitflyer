@@ -2,14 +2,19 @@ defmodule Bitflyer.MarketData.Normalize do
   @moduledoc """
   取引所 ticker JSON を Cache 用 `{key, value}` に正規化する。
 
-  `ltp` に加え、取引所 `timestamp` を `source_timestamp`（UTC `DateTime`）として保持する。
+  `ltp` / `best_bid` / `best_ask` に加え、取引所 `timestamp` を
+  `source_timestamp`（UTC `DateTime`）として保持する。
   公開 ticker のオフセット無し日時は UTC とみなす（Private API の JST 契約とは別）。
-  欠落は `nil`（Risk の skew は fail-closed）。
+  時刻欠落は `nil`（Risk の skew は fail-closed）。
+  `ltp` / bid / ask の欠落・ゼロ・負、および crossed（ask < bid）は `:error`
+  （Cache に載せない。取引所が瞬間 0 を返しても旧値の鮮度切れで fail-closed）。
   WS は `params.channel` と message の `product_code` が一致しない場合 `:error`。
   """
 
   @type ticker_value :: %{
           required(:ltp) => Decimal.t(),
+          required(:best_bid) => Decimal.t(),
+          required(:best_ask) => Decimal.t(),
           required(:source_timestamp) => DateTime.t() | nil
         }
 
@@ -20,12 +25,23 @@ defmodule Bitflyer.MarketData.Normalize do
   def from_ticker(message) when is_map(message) do
     product_code = Map.get(message, "product_code") || Map.get(message, :product_code)
     ltp = Map.get(message, "ltp") || Map.get(message, :ltp)
+    bid = Map.get(message, "best_bid") || Map.get(message, :best_bid)
+    ask = Map.get(message, "best_ask") || Map.get(message, :best_ask)
     timestamp = Map.get(message, "timestamp") || Map.get(message, :timestamp)
 
     with true <- is_binary(product_code) and product_code != "",
-         {:ok, decimal_ltp} <- cast_decimal(ltp),
+         {:ok, decimal_ltp} <- cast_positive_decimal(ltp),
+         {:ok, decimal_bid} <- cast_positive_decimal(bid),
+         {:ok, decimal_ask} <- cast_positive_decimal(ask),
+         true <- Decimal.compare(decimal_ask, decimal_bid) != :lt,
          {:ok, source_timestamp} <- cast_source_timestamp(timestamp) do
-      {:ok, {:ticker, product_code}, %{ltp: decimal_ltp, source_timestamp: source_timestamp}}
+      {:ok, {:ticker, product_code},
+       %{
+         ltp: decimal_ltp,
+         best_bid: decimal_bid,
+         best_ask: decimal_ask,
+         source_timestamp: source_timestamp
+       }}
     else
       _ -> :error
     end
@@ -163,10 +179,13 @@ defmodule Bitflyer.MarketData.Normalize do
   defp rpc_error_reason(%{message: message}) when is_binary(message), do: message
   defp rpc_error_reason(_), do: :rpc_error
 
-  defp cast_decimal(v) do
+  defp cast_positive_decimal(v) do
     case Decimal.cast(v) do
-      {:ok, %Decimal{} = d} -> {:ok, d}
-      _ -> :error
+      {:ok, %Decimal{} = d} ->
+        if Decimal.positive?(d), do: {:ok, d}, else: :error
+
+      _ ->
+        :error
     end
   end
 
