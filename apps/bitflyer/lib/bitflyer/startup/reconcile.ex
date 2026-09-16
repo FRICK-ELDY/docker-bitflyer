@@ -14,6 +14,9 @@ defmodule Bitflyer.Startup.Reconcile do
   **支払超過側** の手数料許容だけで説明できる差分を許す。増加（入金）は幅内でも
   `balance_mismatch`。説明できたら取引所 `getbalance` から新しい tip を append する
   （`LiveBalance`）。Fill 記帳直後に `getbalance` が未反映なら 1 回だけ再取得する。
+  逆に同期〜`getbalance` のあいだに約定が入って取引所だけが進んだときは
+  `balance_mismatch` の直前に fill 再同期→内部再読→snapshot 再取得を 1 回だけ入れ、
+  それでも説明不能なら halt。
 
   spot 在庫は `getpositions` ではなく `getbalance` の base amount と内部の
   買い Position.size を比べる（`LiveInventory`。平均単価は対象外。未約定売りは
@@ -68,6 +71,8 @@ defmodule Bitflyer.Startup.Reconcile do
   - `:now_utc` — 時計検査の壁時計注入
   - `:skip_permissions?` / `:skip_clock_skew?` — テスト用スキップ
   - `:position_size_tolerance_abs` — live spot 在庫の絶対床（`LiveInventory`）
+  - `:balance_lag_retries` — Fill 先行で getbalance 未反映の再取得回数（既定 1）
+  - `:fill_sync_retries` — 取引所先行の `balance_mismatch` 時の fill 再同期回数（既定 1）
   """
   @spec run(keyword()) :: result()
   def run(opts \\ []) do
@@ -163,7 +168,7 @@ defmodule Bitflyer.Startup.Reconcile do
          {:ok, internal} <- restore(:live),
          {:ok, snapshot} <- fetch_live_snapshot(exchange),
          {:ok, snapshot} <-
-           compare_or_refetch_lag(internal, snapshot, required, opts, exchange) do
+           compare_with_window_retries(internal, snapshot, required, opts, exchange) do
       {:ok, Map.put(internal, :exchange_balances, exchange_balance_map(snapshot))}
     end
   end
@@ -282,14 +287,22 @@ defmodule Bitflyer.Startup.Reconcile do
     end
   end
 
-  defp compare_or_refetch_lag(internal, snapshot, required, opts, exchange) do
-    retries = Keyword.get(opts, :balance_lag_retries, 1)
+  # 突合窓の両向き救済:
+  # - 内部 Fill 先行 / getbalance 未反映 → balance_exchange_lag で残高再取得 1 回
+  # - 取引所先行 / Fill 未同期 → balance_mismatch で fill 再同期→restore→snapshot 再取得 1 回
+  #   （再同期で Fill が増えても、同じ古い snapshot で「入金」誤検知しない）
+  # 任意の balance_mismatch で再同期する（向き判定より広い。入金も sync 1 回走るが飲み込みはしない）。
+  # どちらも尽きたあとの説明不能差分だけ halt。
+  defp compare_with_window_retries(internal, snapshot, required, opts, exchange) do
+    lag_retries = Keyword.get(opts, :balance_lag_retries, 1)
+    fill_retries = Keyword.get(opts, :fill_sync_retries, 1)
 
     case compare_with_exchange(internal, snapshot, required, opts) do
       :ok ->
         {:ok, snapshot}
 
-      {:error, :reconcile_mismatch, %{kind: :balance_exchange_lag} = meta} when retries > 0 ->
+      {:error, :reconcile_mismatch, %{kind: :balance_exchange_lag} = meta}
+      when lag_retries > 0 ->
         Bitflyer.Telemetry.log(
           :info,
           "live getbalance lagged fills; refetching once",
@@ -297,11 +310,11 @@ defmodule Bitflyer.Startup.Reconcile do
         )
 
         with {:ok, snapshot2} <- fetch_live_snapshot(exchange) do
-          compare_or_refetch_lag(
+          compare_with_window_retries(
             internal,
             snapshot2,
             required,
-            Keyword.put(opts, :balance_lag_retries, retries - 1),
+            Keyword.put(opts, :balance_lag_retries, lag_retries - 1),
             exchange
           )
         end
@@ -311,6 +324,26 @@ defmodule Bitflyer.Startup.Reconcile do
          meta
          |> Map.put(:kind, :balance_mismatch)
          |> Map.put(:reason, :balance_exchange_lag)}
+
+      {:error, :reconcile_mismatch, %{kind: :balance_mismatch} = meta}
+      when fill_retries > 0 ->
+        Bitflyer.Telemetry.log(
+          :info,
+          "live balance mismatch; resyncing fills once",
+          Map.merge(%{trade_mode: :live}, Map.take(meta, [:currency, :kind, :expected, :actual]))
+        )
+
+        with :ok <- sync_live_fills(exchange),
+             {:ok, internal2} <- restore(:live),
+             {:ok, snapshot2} <- fetch_live_snapshot(exchange) do
+          compare_with_window_retries(
+            internal2,
+            snapshot2,
+            required,
+            Keyword.put(opts, :fill_sync_retries, fill_retries - 1),
+            exchange
+          )
+        end
 
       other ->
         other

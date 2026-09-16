@@ -7,7 +7,7 @@ defmodule Bitflyer.Startup.ReconcileTest do
 
   alias Bitflyer.Readiness
   alias Bitflyer.Startup.{Reconcile, Reconciler}
-  alias Bitflyer.Trading.{BalanceSnapshot, Fill, Position, RiskState}
+  alias Bitflyer.Trading.{BalanceSnapshot, Fill, Order, Position, RiskState}
 
   @jpy_amount Decimal.new("1000000")
   @btc_amount Decimal.new("0.5")
@@ -252,6 +252,79 @@ defmodule Bitflyer.Startup.ReconcileTest do
 
     @impl true
     def place_order(_request), do: {:error, :not_used_in_reconcile}
+  end
+
+  # 突合窓: 初回 fill 同期では未約定、getbalance は約定済み、再同期で Fill が入る。
+  # 注文状態はキュー（呼び出し回数カウンタではない）。
+  defmodule ExchangeAheadFillExchange do
+    @behaviour Bitflyer.Exchange.Client
+    use Bitflyer.TestSupport.ExchangeClientStubs
+
+    @exchange_order_id "JRF-window-1"
+
+    @impl true
+    def fetch_reconcile_snapshot do
+      {:ok,
+       %{
+         positions: [],
+         balances: [
+           %{currency: "JPY", amount: Decimal.new("950000"), available: Decimal.new("950000")},
+           %{currency: "BTC", amount: Decimal.new("0.51"), available: Decimal.new("0.51")}
+         ],
+         open_orders: []
+       }}
+    end
+
+    @impl true
+    def fetch_order(%{exchange_order_id: id}) do
+      info =
+        case Application.get_env(:bitflyer, :test_fill_window_order_queue) do
+          [head | tail] ->
+            Application.put_env(:bitflyer, :test_fill_window_order_queue, tail)
+            Map.put(head, :exchange_order_id, id)
+
+          _ ->
+            filled_order(id)
+        end
+
+      Application.put_env(:bitflyer, :test_fill_window_last_order, info)
+      {:ok, info}
+    end
+
+    @impl true
+    def fetch_executions(%{exchange_order_id: id}) do
+      info = Application.get_env(:bitflyer, :test_fill_window_last_order)
+      {:ok, Bitflyer.TestSupport.FillExecutions.from_order_info(id, info)}
+    end
+
+    @impl true
+    def place_order(_request), do: {:error, :not_used_in_reconcile}
+
+    def exchange_order_id, do: @exchange_order_id
+
+    def active_order(id \\ @exchange_order_id) do
+      %{
+        exchange_order_id: id,
+        product_code: "BTC_JPY",
+        side: :buy,
+        size: Decimal.new("0.01"),
+        filled_size: Decimal.new("0"),
+        average_price: nil,
+        status: :active
+      }
+    end
+
+    def filled_order(id \\ @exchange_order_id) do
+      %{
+        exchange_order_id: id,
+        product_code: "BTC_JPY",
+        side: :buy,
+        size: Decimal.new("0.01"),
+        filled_size: Decimal.new("0.01"),
+        average_price: Decimal.new("5000000"),
+        status: :completed
+      }
+    end
   end
 
   defmodule InvalidNumberExchange do
@@ -1071,6 +1144,83 @@ defmodule Bitflyer.Startup.ReconcileTest do
              Reconcile.run(trade_mode: :live, exchange: LiveBalancesExchange)
 
     assert currency in ["JPY", "BTC"]
+  end
+
+  test "live exchange-ahead fill window resyncs fills once and advances" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, ExchangeAheadFillExchange)
+
+    Application.put_env(:bitflyer, :test_fill_window_order_queue, [
+      ExchangeAheadFillExchange.active_order(),
+      ExchangeAheadFillExchange.filled_order()
+    ])
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_fill_window_order_queue)
+      Application.delete_env(:bitflyer, :test_fill_window_last_order)
+    end)
+
+    seed_live_balance_baseline!()
+
+    assert {:ok, _} =
+             Order
+             |> Ash.Changeset.for_create(:create, %{
+               internal_order_id: "live-window-1",
+               exchange_order_id: ExchangeAheadFillExchange.exchange_order_id(),
+               product_code: "BTC_JPY",
+               side: :buy,
+               status: :pending,
+               order_type: :market,
+               size: Decimal.new("0.01"),
+               filled_size: Decimal.new(0),
+               filled_notional: Decimal.new(0),
+               trade_mode: :live
+             })
+             |> Ash.create()
+
+    # 初回 sync では未約定のまま getbalance だけ約定済み → mismatch → fill 再同期で回復
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: ExchangeAheadFillExchange)
+
+    assert {:ok, tips} = BalanceSnapshot.latest_tips(:live)
+    assert Decimal.eq?(Enum.find(tips, &(&1.currency == "JPY")).amount, Decimal.new("950000"))
+    assert Decimal.eq?(Enum.find(tips, &(&1.currency == "BTC")).amount, Decimal.new("0.51"))
+
+    assert {:ok, [fill]} =
+             Fill
+             |> Ash.Query.filter(internal_order_id == "live-window-1")
+             |> Ash.read()
+
+    assert Decimal.eq?(fill.size, Decimal.new("0.01"))
+  end
+
+  test "live exchange-ahead window still halts on unexplained deposit after fill resync" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, LiveBalancesExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_live_balances)
+      Application.delete_env(:bitflyer, :test_live_balance_queue)
+    end)
+
+    seed_live_balance_baseline!()
+
+    # Fill が無く open order も無い入金。fill 再同期は no-op のまま mismatch
+    Application.put_env(:bitflyer, :test_live_balances, [
+      %{currency: "JPY", amount: Decimal.new("1000001"), available: Decimal.new("1000001")},
+      %{currency: "BTC", amount: Decimal.new("0.5"), available: Decimal.new("0.5")}
+    ])
+
+    assert {:error, :reconcile_mismatch,
+            %{kind: :balance_mismatch, currency: "JPY", unexplained: "1"}} =
+             Reconcile.run(trade_mode: :live, exchange: LiveBalancesExchange)
   end
 
   test "live available hold without amount change still reconciles" do
