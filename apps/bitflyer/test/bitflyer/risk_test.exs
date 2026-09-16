@@ -272,6 +272,84 @@ defmodule Bitflyer.RiskTest do
     refute Enum.any?(rows, &(&1.trade_mode == :dry_run))
   end
 
+  test "enforce after authorize flush persists HWM so reinit keeps unrealized drawdown" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    filled_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, _} =
+             Bitflyer.Trading.Fill
+             |> Ash.Changeset.for_create(:create, %{
+               internal_order_id: "hwm-flush-1",
+               product_code: "BTC_JPY",
+               side: :sell,
+               size: Decimal.new("0.02"),
+               price: Decimal.new("5000000"),
+               realized_pnl: Decimal.new("100000"),
+               trade_mode: :dry_run,
+               filled_at: filled_at
+             })
+             |> Ash.create()
+
+    assert :ok = DailyLoss.reload(trade_mode: :dry_run)
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(valid_command(), positions: [], trade_mode: :dry_run)
+
+    day = DailyLoss.trading_day(DateTime.utc_now())
+    assert {:ok, rows_before} = DailyEquityPeak.fetch_day(day)
+    refute Enum.any?(rows_before, &(&1.trade_mode == :dry_run))
+
+    assert {:ok, position} =
+             Position
+             |> Ash.Changeset.for_create(:create, %{
+               product_code: "BTC_JPY",
+               side: :buy,
+               size: Decimal.new("0.02"),
+               average_price: Decimal.new("5000000"),
+               trade_mode: :dry_run
+             })
+             |> Ash.create()
+
+    # 実現益後に含み損で equity を下げる（peak は認可で ETS のみ上昇済み）
+    assert put_fresh_ticker(@market_key, Decimal.new("1000000")) == :ok
+
+    assert {:ok, snap} =
+             Bitflyer.Risk.Equity.enforce(
+               trade_mode: :dry_run,
+               positions: [position],
+               limits: %{max_daily_drawdown: "200000"}
+             )
+
+    assert Decimal.eq?(snap.peak, Decimal.new("100000"))
+    assert Decimal.eq?(snap.realized_net, Decimal.new("100000"))
+    assert Decimal.eq?(snap.unrealized, Decimal.new("-80000"))
+    assert Decimal.eq?(snap.equity_pnl, Decimal.new("20000"))
+    assert Decimal.eq?(snap.drawdown, Decimal.new("80000"))
+
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    row = Enum.find(rows, &(&1.trade_mode == :dry_run))
+    assert row
+    assert Decimal.eq?(row.peak, Decimal.new("100000"))
+
+    assert :ok = DailyLoss.reset()
+    assert :ok = DailyLoss.reinit()
+
+    assert {:ok, restored} =
+             Bitflyer.Risk.Equity.snapshot(
+               trade_mode: :dry_run,
+               positions: [position],
+               record_peak: false,
+               limits: %{max_daily_drawdown: "200000"}
+             )
+
+    assert Decimal.eq?(restored.peak, Decimal.new("100000"))
+    assert Decimal.eq?(restored.realized_net, Decimal.new("100000"))
+    assert Decimal.eq?(restored.unrealized, Decimal.new("-80000"))
+    assert Decimal.eq?(restored.drawdown, Decimal.new("80000"))
+  end
+
   test "authorize rejects when circuit is open and open_circuit persists RiskState" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
