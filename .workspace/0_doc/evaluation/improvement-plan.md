@@ -11,7 +11,7 @@
 
 前回計画の P0 #1–#2（tip 前進骨格・ゼロ手数料ハーネス）、当時の P1（HWM 行・fee 列・spot 在庫・Feed 認可など）、P2 #7–#9（ACK、有限 open age、ページング）は**部品として**両評価者がコード再読で確認した。P2 #10/#11 は証跡・部分実施まで。再掲しない。
 
-**ただし「済」＝ live 解禁ではない。** 本計画の P0 #1/#2（commission 単位・反証）と P1 #3（HWM flush）・#4（突合窓の対称化）・#6（Game Day Stage 2 縦経路）は完了。残る live 解禁前の出口条件は P1 #5（監視配備）。
+**ただし「済」＝ live 解禁ではない。** 本計画の P0 #1/#2（commission 単位・反証）と P1 #3（HWM flush）・#4（突合窓の対称化）・#6（Game Day Stage 2 縦経路）は完了。P2 #7（残高 probe）も完了だが **live 解禁ゲートではない**（観測・自己修復の残差）。**残る live 解禁前の出口条件は P1 #5（監視配備）のみ。**
 
 ---
 
@@ -39,7 +39,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 7 | 残高 probe | `BalanceCache.probe/4` を認可から呼び、判定と reserve を 1 本にする。当面なら Risk moduledoc に近似と書き、`:insufficient_balance` 再試行にバックオフ | 認可通過→予約失敗の Tight loop が消える |
+| 7 | ~~残高 probe~~ | **完了 (2026-09-16)**。`BalanceCache.probe/4` を認可から呼び `reserve` と同一比較。Risk moduledoc に近似（probe→reserve TOCTOU）を明記。Runner は `:insufficient_balance` に銘柄バックオフ（既定 5s） | 認可通過→予約失敗の Tight loop が消える |
 | 8 | ticker bid/ask → spread ゲート | `Normalize.from_ticker/1` に best bid/ask。異常 spread で成行を拒否 | 薄商いの market を認可で止められる |
 | 9 | 軽微負債をこのサイクルで 3 件消す | **必ず 3 件**: `ash.codegen --check`、両 `test_helper` の Sandbox mode、`apps/bitflyer/README.md`。残り（Dockerfile USER、websockex 記録、保持方針）は次 | 「必ず」を守った記録がある。守らないなら宣言から「必ず」を消す |
 

@@ -175,6 +175,28 @@ defmodule Bitflyer.Risk.BalanceCacheTest do
              BalanceCache.reserve(:live, "JPY", Decimal.new("50000"), hold_id: "hold-b")
   end
 
+  test "probe matches reserve comparison without deducting" do
+    assert :ok =
+             BalanceCache.put(:paper, %{
+               "JPY" => Decimal.new("100000"),
+               "BTC" => Decimal.new("0")
+             })
+
+    assert :ok = BalanceCache.probe(:paper, "JPY", Decimal.new("60000"))
+    assert {:ok, balances} = BalanceCache.get(:paper)
+    assert Decimal.equal?(balances["JPY"], Decimal.new("100000"))
+
+    assert {:error, :insufficient_balance, %{currency: "JPY", required: required}} =
+             BalanceCache.probe(:paper, "JPY", Decimal.new("150000"))
+
+    assert Decimal.equal?(required, Decimal.new("150000"))
+    assert {:ok, still} = BalanceCache.get(:paper)
+    assert Decimal.equal?(still["JPY"], Decimal.new("100000"))
+
+    assert {:error, :currency_missing, %{currency: "ETH"}} =
+             BalanceCache.probe(:paper, "ETH", Decimal.new("1"))
+  end
+
   test "release_hold returns the reserved amount not a recomputed notional" do
     assert :ok =
              BalanceCache.put(:live, %{

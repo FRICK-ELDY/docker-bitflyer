@@ -28,6 +28,11 @@ defmodule Bitflyer.Risk do
   （起動 warm 失敗時は unsynced で認可拒否）、日次損失は `Risk.DailyLoss`、残高は `Risk.BalanceCache`（ETS）。
   ドローダウン HWM の上昇は認可では ETS のみ。`DailyEquityPeak` への upsert は Fill 後 /
   突合 / resume の `Equity.enforce`。
+
+  残高は認可で `BalanceCache.probe/4`（`reserve/4` と同一比較・非減額）を呼ぶ。
+  正本の減額は submit 時 `reserve/4`。probe→reserve のあいだに残高が減れば
+  認可通過後に `:insufficient_balance` になりうる（近似）。Runner は同理由に
+  バックオフを付け、throttle だけの Tight loop を避ける。
   """
 
   require Ash.Query
@@ -634,13 +639,49 @@ defmodule Bitflyer.Risk do
     if trade_mode == :dry_run do
       :ok
     else
-      case resolve_balances(opts, trade_mode) do
-        {:ok, balances} ->
-          verify_available_balance(command, balances, opts)
+      # テスト注入時のみ旧比較。本番経路は probe（reserve と同一比較）
+      if Keyword.has_key?(opts, :balances) and test_injections_allowed?() do
+        case resolve_balances(opts, trade_mode) do
+          {:ok, balances} ->
+            verify_available_balance(command, balances, opts)
 
-        {:error, :unsynced} ->
-          {:error, :unsynced, %{reason: :balance_unsynced}}
+          {:error, :unsynced} ->
+            {:error, :unsynced, %{reason: :balance_unsynced}}
+        end
+      else
+        probe_available_balance(command, opts, trade_mode)
       end
+    end
+  end
+
+  defp probe_available_balance(command, opts, trade_mode) do
+    case balance_hold(command, Keyword.put_new(opts, :trade_mode, trade_mode)) do
+      {:ok, :skip} ->
+        :ok
+
+      {:ok, %{currency: currency, amount: amount}} ->
+        probe_opts =
+          case Keyword.fetch(opts, :balance_cache_server) do
+            {:ok, server} -> [server: server]
+            :error -> []
+          end
+
+        case BalanceCache.probe(trade_mode, currency, amount, probe_opts) do
+          :ok ->
+            :ok
+
+          {:error, :unsynced} ->
+            {:error, :unsynced, %{reason: :balance_unsynced}}
+
+          {:error, :currency_missing, %{currency: missing}} ->
+            {:error, :unsynced, %{reason: :balance_currency_missing, currency: missing}}
+
+          {:error, :insufficient_balance, meta} ->
+            {:error, :limit_exceeded, Map.put(meta, :limit, :insufficient_balance)}
+        end
+
+      {:error, _, _} = error ->
+        error
     end
   end
 
