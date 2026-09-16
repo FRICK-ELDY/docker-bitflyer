@@ -1197,6 +1197,54 @@ defmodule Bitflyer.Startup.ReconcileTest do
     assert Decimal.eq?(fill.size, Decimal.new("0.01"))
   end
 
+  test "live exchange-ahead window drops injected fills after resync" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, ExchangeAheadFillExchange)
+
+    Application.put_env(:bitflyer, :test_fill_window_order_queue, [
+      ExchangeAheadFillExchange.active_order(),
+      ExchangeAheadFillExchange.filled_order()
+    ])
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.delete_env(:bitflyer, :test_fill_window_order_queue)
+      Application.delete_env(:bitflyer, :test_fill_window_last_order)
+    end)
+
+    seed_live_balance_baseline!()
+
+    assert {:ok, _} =
+             Order
+             |> Ash.Changeset.for_create(:create, %{
+               internal_order_id: "live-window-fills-opt-1",
+               exchange_order_id: ExchangeAheadFillExchange.exchange_order_id(),
+               product_code: "BTC_JPY",
+               side: :buy,
+               status: :pending,
+               order_type: :market,
+               size: Decimal.new("0.01"),
+               filled_size: Decimal.new(0),
+               filled_notional: Decimal.new(0),
+               trade_mode: :live
+             })
+             |> Ash.create()
+
+    # 空の :fills 注入が再同期後も残ると mismatch が再発する
+    assert {:ok, _} =
+             Reconcile.run(
+               trade_mode: :live,
+               exchange: ExchangeAheadFillExchange,
+               fills: []
+             )
+
+    assert {:ok, tips} = BalanceSnapshot.latest_tips(:live)
+    assert Decimal.eq?(Enum.find(tips, &(&1.currency == "JPY")).amount, Decimal.new("950000"))
+  end
+
   test "live exchange-ahead window still halts on unexplained deposit after fill resync" do
     previous = Application.get_env(:bitflyer, :trade_mode)
 

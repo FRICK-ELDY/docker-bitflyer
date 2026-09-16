@@ -336,11 +336,14 @@ defmodule Bitflyer.Startup.Reconcile do
         with :ok <- sync_live_fills(exchange),
              {:ok, internal2} <- restore(:live),
              {:ok, snapshot2} <- fetch_live_snapshot(exchange) do
+          # 注入 :fills が残ると再同期後も古い Fill 列で再比較してしまう
           compare_with_window_retries(
             internal2,
             snapshot2,
             required,
-            Keyword.put(opts, :fill_sync_retries, fill_retries - 1),
+            opts
+            |> Keyword.delete(:fills)
+            |> Keyword.put(:fill_sync_retries, fill_retries - 1),
             exchange
           )
         end
