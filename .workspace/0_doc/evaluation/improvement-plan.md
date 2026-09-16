@@ -1,19 +1,27 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-16
-根拠: [evaluation-2026-09-13.md](./evaluation-2026-09-13.md) / [specific-weaknesses-2026-09-13.md](./specific-weaknesses-2026-09-13.md)
+最終更新: 2026-09-16（再評価まとめ後）
+根拠: [evaluation-2026-09-16.md](./evaluation-2026-09-16.md) / [specific-weaknesses-2026-09-16.md](./specific-weaknesses-2026-09-16.md)
 
 方針: **利益機能より資金保全・復帰・観測を先に直す。** live 実発注は下記 P0 の完了まで禁止。戦略の高度化は縦貫通の安全化の後。
 
+**完了宣言ルール:** 「完了」と書くときは、右列「完了の見方」を満たした根拠を 1 行必須にする。満たせない項目は取り消し線にせず **部分完了** と残す。
+
 ---
 
-## 消化済み（2026-09-12 計画 → コード確認）
+## 消化済み（コード確認・再評価で維持）
 
-前回計画の P0 #1–#2（tip 前進骨格・ゼロ手数料ハーネス）、当時の P1（HWM 行・fee 列・spot 在庫・Feed 認可など）、**当時の** P2 #7–#9（ACK、有限 open age、ページング）は**部品として**両評価者がコード再読で確認した。当時の P2 #10/#11 は証跡・部分実施まで。再掲しない。
+| # | 項目 | 状態 |
+|:---:|:---|:---|
+| — | tip 前進骨格・ゼロ手数料ハーネス（旧 P0） | 部品として維持 |
+| — | Feed 認可・spot 在庫・ACK・有限 open age・ページング | 維持 |
+| P1 #4 | 突合窓の対称化（`fill_sync_retries`） | **完了**（コード再読） |
+| P1 #6 | Game Day Stage 2 の paper 縦経路 | **コード経路は完了**。副作用は本計画 P1 #6b |
+| P2 #7 | BalanceCache.probe + Runner backoff | **完了** |
+| P2 #8 | ticker bid/ask → spread ゲート | **完了**（板異常の切り分け残差は P2） |
+| P2 #9 | ash.codegen --check / Sandbox manual / README | **完了** |
 
-**番号注意:** 下表の **本計画 P2 #7–#9**（残高 probe / spread ゲート / 軽微 3 件）は、上記「当時の P2 #7–#9」とは別物である。
-
-**ただし「済」＝ live 解禁ではない。** 本計画の P0 #1/#2 と P1 #3/#4/#6、および本計画 P2 #7–#9 は完了。P2 は **live 解禁ゲートではない**（観測・自己修復・軽微負債）。**残る live 解禁前の出口条件は P1 #5（監視配備）のみ。**
+**「済」＝ live 解禁ではない。**
 
 ---
 
@@ -21,19 +29,18 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 1 | ~~commission 単位の確定と会計~~ | **完了 (2026-09-16)**。証跡 [commission-unit-evidence.md](../architecture/env/commission-unit-evidence.md)。`Product.fee_currency/1`、`Fill.fee_currency`、Positions / LiveBalance を BTC_JPY=BTC に統一。Decode 欠落・負は維持。fixture `getexecutions_btc_jpy_fee.json` で tip 一致を固定。売建解消・ドテンは inventory（`held`）基準 | 実応答（または公式が単位を明記した fixture）で口座 BTC/JPY の変化と内部 expected が許容幅で一致する |
-| 2 | ~~ハーネスと反証回帰~~ | **完了 (2026-09-16)**。`LiveExchangeHarness` は base fee。縦回帰は `live_balance_advance_test`。反証は `commission_unit_guard_test` + fixture で JPY 決め打ち / 旧 quote 残高が必ず `balance_mismatch` または `spot_inventory_inflated` になることを固定 | fixture だけで「JPY 決め打ち」を再現・防止できる |
+| 1 | commission 一次証跡（部分完了に戻す） | **部分完了 (2026-09-16)。** 内部は `Product.fee_currency/1` で BTC 建て一貫。証跡は公式類推＋fixture のみ。Stage 3a: 最小ロット**買い**1 回で `getexecutions.commission` と前後 `getbalance`、`LiveBalance.explain` を匿名化して [commission-unit-evidence.md](../architecture/env/commission-unit-evidence.md) に貼る。一致後に Stage 3b:**売り**1 回で base/quote 帰属を確定 | 売買それぞれの実差分が内部 expected と許容幅で一致し、証跡に日付・execution id（匿名可）がある |
+| 2 | ハーネス独立性 | 売り fee を `:base_deduct \| :quote_mark` の両モデルで縦回帰。実観測で片方に固定。現行の「JPY 決め打ち反証」は維持 | 自モデルが誤っていても少なくとも片側モデルの失敗を検出できる、または実観測でモデルが固定されている |
 
 ---
 
-## P1 — 停止からの出口と突合の締め
+## P1 — 停止からの出口と安全装置
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 3 | ~~HWM flush~~ | **完了 (2026-09-16)**。ETS に `persisted_peak` を持ち、Fill / 突合 / resume の persist 点で `peak > persisted_peak` なら `DailyEquityPeak` へ flush。認可は ETS のみ。回帰: authorize → equity 低下 → enforce flush → reinit 後も drawdown 残存 | 実現益後の含み損で、周期をまたいだ peak が再起動後も消えない |
-| 4 | ~~突合窓の対称化~~ | **完了 (2026-09-16)**。`balance_mismatch` 時に fill 再同期→restore→snapshot 再取得を 1 回（`fill_sync_retries`）。既存の `balance_exchange_lag` 残高再取得と対になる。入金など説明不能は再同期後も halt | 同期〜残高取得のあいだに入った約定で即 halt しない。説明不能だけ halt |
+| 3 | HWM 認可後 crash 窓 | 認可で peak 上昇したら監督下 write-behind へ単調 upsert、または mark 非依存の flush 点。shutdown drain + 再起動回帰 | 認可直後 crash でも DB 高値が残るテストがある |
 | 5 | 別ホスト監視の実配備 | 作業 PC で `register-watch-ready-task.ps1` を VLAN1 の `READY_URL` に向けて登録。証跡を [watch-ready-evidence.md](../architecture/env/watch-ready-evidence.md) に「本番向き常駐」として残す | 取引ホスト停止を外から検知した記録がある |
-| 6 | ~~Game Day Stage 2 の縦経路~~ | **完了 (2026-09-16)**。`mix bitflyer.game_day_stage2` で paper `submit_order` 建玉 → Feed 断拒否 → 復帰後再認可。Discord は Webhook HTTP 2xx。証跡 [game-day.md](../architecture/env/game-day.md) | SQL 直投入と ready 503 だけの代替を卒業する |
+| 6b | Game Day の停止解除副作用 | `mix bitflyer.game_day_stage2` から無条件 `Risk.clear_circuit()` を撤去。開始時に `RiskState.halted` なら理由を出して中断。`mark_ready` 押し通しをやめ、Reconciler 結果で Ready を要求 | paper ドリルが live 停止理由を消さない。Ready が突合経路でしか付かない |
 
 ---
 
@@ -41,9 +48,10 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 7 | ~~残高 probe~~ | **完了 (2026-09-16)**。`BalanceCache.probe/4` を認可から呼び `reserve` と同一比較。Risk moduledoc に近似（probe→reserve TOCTOU）を明記。Runner は `:insufficient_balance` に銘柄バックオフ（既定 5s） | 認可通過→予約失敗の Tight loop が消える |
-| 8 | ~~ticker bid/ask → spread ゲート~~ | **完了 (2026-09-16)**。`Normalize.from_ticker/1` が `best_bid`/`best_ask` を必須化。成行は `max_spread_pct`（既定 0.5%、live は `BITFLYER_MAX_SPREAD_PCT`）で拒否。指値は従来どおり LTP 乖離 | 薄商いの market を認可で止められる |
-| 9 | ~~軽微負債をこのサイクルで 3 件消す~~ | **完了 (2026-09-16)**。① `ash.codegen --check` を precommit に追加し手書き migration 後の snapshot を同期（再生成 DDL は **削除禁止の no-op** migration）。② 両 `test_helper` に `Sandbox.mode(..., :manual)`。③ `apps/bitflyer/README.md` を責務説明に置換。**コミット必須（未追跡になりやすい）:** `priv/repo/migrations/20260916101043_sync_handwritten_snapshots.exs` と `priv/resource_snapshots/repo/{balance_snapshots,orders,strategy_parameter_revisions}/2026091610104*.json`。残り（Dockerfile USER、websockex 記録、保持方針）は次 | 「必ず」を守った記録がある。守らないなら宣言から「必ず」を消す |
+| 7 | 成行拘束の ask 化 | live 成行買いは `best_ask` 基準で probe/reserve。paper は既存方針を明示 | 薄スプレッドでも過小拘束しない回帰がある |
+| 8 | ticker 2 層化 | `{ltp, book}` に分け、板欠落でも LTP 鮮度を残す。spread は book 欠落で拒否 | 板異常が `bid_ask_missing` として止まり、時計検査は LTP で通る |
+| 9 | DailyEquityPeak の GREATEST upsert | `inspect` 文字列一致をやめ、単調 upsert 1 文へ | 並行 Fill/enforce で過剰 unsynced にならない |
+| 10 | improvement-plan 運用 | 本ファイルの完了宣言に根拠行を必須化（本サイクルから適用） | 次回評価で「完了」と証跡が矛盾しない |
 
 ---
 
@@ -51,16 +59,17 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 10 | データ保持方針 | fills/snapshots の retention または「当面なし」の文書化 + `sum_realized` の aggregate | 24/365 で表肥大の判断基準がある |
-| 11 | Prometheus / SLO | 時系列蓄積、カーディナリティ抑制 | 率・推移がホスト外で追える |
-| 12 | Hex 外 scanner | release image / lock の Trivy 等。high の例外期限 | GitHub tag と OS がゲートに入る |
-| 13 | 残る軽微 | 開発 Dockerfile の USER、websockex 記録または移行 | 5 サイクル連続の `-1` が減る |
+| 11 | データ保持方針 | fills/snapshots の retention または「当面なし」の文書化 + `sum_realized` の DB aggregate | 24/365 で表肥大の判断基準がある |
+| 12 | Prometheus / SLO | 時系列蓄積、カーディナリティ抑制 | 率・推移がホスト外で追える |
+| 13 | Hex 外 scanner | release image / lock の Trivy 等。high の例外期限 | GitHub tag と OS がゲートに入る |
+| 14 | 隔離 restore 証跡 | backup hash → 空 DB → migration → boot/reconcile を記録 | Recoverable が手順だけでなく成功記録になる |
+| 15 | 残る軽微 | 開発 Dockerfile の USER、websockex 記録または移行 | 複数サイクル連続の `-1` が減る |
 
 ---
 
 ## 意図的に後回し（提案のみ）
 
-- 戦略アルゴリズムの高度化・パラメータ canary・二者承認
+- 戦略アルゴリズムの高度化・パラメータ canary・二者承認（解禁後に薄い live 戦略 1 本は例外的に先行可）
 - 板の本格購読・プロパティ / モデルベース試験の本格導入
 - private execution WS、API レート予算、起動時 `getpositions` 空検査
 - SBOM / 署名、裁量向け UI、複数取引所、ML 基盤、FX 証拠金（backlog）
@@ -76,4 +85,4 @@
 | 本番 CD | [03-cd-prod-host.md](../../3_archive/03-cd-prod-host.md)（完了） |
 | Game Day | [game-day.md](../architecture/env/game-day.md) |
 
-次回評価では、本計画の **P0** がコード上で解決済みかを対象ファイルの再読で確認する。P0 未完了のまま live 実発注を進めた場合は重大減点とする。
+次回評価では、本計画の **P0** がコードおよび証跡上で解決済みかを対象ファイルの再読で確認する。P0 未完了のまま live 実発注を進めた場合は重大減点とする。
