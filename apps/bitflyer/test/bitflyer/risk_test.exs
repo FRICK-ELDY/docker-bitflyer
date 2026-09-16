@@ -328,11 +328,9 @@ defmodule Bitflyer.RiskTest do
     assert Decimal.eq?(snap.equity_pnl, Decimal.new("20000"))
     assert Decimal.eq?(snap.drawdown, Decimal.new("80000"))
 
-    assert {:ok, [row]} =
-             day
-             |> DailyEquityPeak.fetch_day()
-             |> then(fn {:ok, rows} -> {:ok, Enum.filter(rows, &(&1.trade_mode == :dry_run))} end)
-
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    row = Enum.find(rows, &(&1.trade_mode == :dry_run))
+    assert row
     assert Decimal.eq?(row.peak, Decimal.new("100000"))
 
     assert :ok = DailyLoss.reset()

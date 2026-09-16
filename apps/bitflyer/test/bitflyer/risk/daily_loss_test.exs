@@ -252,11 +252,9 @@ defmodule Bitflyer.Risk.DailyLossTest do
 
     assert Decimal.eq?(flushed, Decimal.new("150000"))
 
-    assert {:ok, [row]} =
-             day
-             |> DailyEquityPeak.fetch_day()
-             |> then(fn {:ok, rows} -> {:ok, Enum.filter(rows, &(&1.trade_mode == :live))} end)
-
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    row = Enum.find(rows, &(&1.trade_mode == :live))
+    assert row
     assert Decimal.eq?(row.peak, Decimal.new("100000"))
 
     assert {:ok, %{peak: ets}} = DailyLoss.snapshot(:live)
@@ -265,11 +263,9 @@ defmodule Bitflyer.Risk.DailyLossTest do
     # persisted は DB=100000 のままなので、次の enforce 相当で 150000 を flush する
     assert {:ok, _} = DailyLoss.record_peak(:live, Decimal.new("20000"))
 
-    assert {:ok, [row_after]} =
-             day
-             |> DailyEquityPeak.fetch_day()
-             |> then(fn {:ok, rows} -> {:ok, Enum.filter(rows, &(&1.trade_mode == :live))} end)
-
+    assert {:ok, rows_after} = DailyEquityPeak.fetch_day(day)
+    row_after = Enum.find(rows_after, &(&1.trade_mode == :live))
+    assert row_after
     assert Decimal.eq?(row_after.peak, Decimal.new("150000"))
 
     assert :ok = DailyLoss.reset()
