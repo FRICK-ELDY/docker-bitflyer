@@ -251,7 +251,7 @@ live で必須通貨（既定: JPY / BTC）の `BalanceSnapshot` が無いと起
 
 必須通貨のうち tip が無いものだけを書く（欠落分の補完可）。全必須通貨に tip がある場合は `baseline_already_complete`。
 
-live 運用中の残高 tip は定期／起動突合が、内部 Fill 合計と **支払超過側** の手数料許容幅で説明できる差分だけ取引所 `getbalance` から append する。`Fill.fee` が揃っていれば `fee_currency` どおり base / quote に実手数料を織り込み、許容は絶対床だけ。fee 未記録（NULL）の Fill だけ 20bps を残す。想定より増える差分（入金）は幅内でも halt。Fill が無いときの 1 JPY 床は使わない。説明不能な差分（外部入出金など）は `balance_mismatch` で halt する。人手で正本を切り直すときは承認付き `--rebaseline`（初期化とは別経路）:
+live 運用中の残高 tip は定期／起動突合が、内部 Fill 合計と **支払超過側** の手数料許容幅で説明できる差分だけ取引所 `getbalance` から append する。`Fill.fee` が揃っていれば `fee_currency` どおり base / quote に実手数料を織り込み、許容は絶対床だけ。fee 未記録（NULL）の Fill だけ 20bps を残す。想定より増える差分（入金）は幅内でも halt。Fill が無いときの 1 JPY 床は使わない。説明不能な差分（外部入出金など）は `balance_mismatch` で halt する。突合窓では、Fill 先行の `getbalance` 未反映は残高再取得 1 回、取引所先行の Fill 未同期は fill 再同期→内部再読→snapshot 再取得 1 回で救済し、それでも説明不能なら halt する。人手で正本を切り直すときは承認付き `--rebaseline`（初期化とは別経路）:
 
 ```bash
 docker compose exec -e BITFLYER_BASELINE_OPERATOR=alice app \
