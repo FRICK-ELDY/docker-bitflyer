@@ -198,6 +198,125 @@ defmodule Bitflyer.Risk.DailyLossTest do
     refute Enum.any?(rows, &(&1.trade_mode == :live))
   end
 
+  test "persist flush writes ETS-only peak after equity drops" do
+    assert {:ok, _} = DailyLoss.record_peak(:live, Decimal.new("100000"), persist: false)
+
+    day = DailyLoss.trading_day(DateTime.utc_now())
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    refute Enum.any?(rows, &(&1.trade_mode == :live))
+
+    # equity は下がっても peak > persisted_peak なら flush
+    assert {:ok, flushed} = DailyLoss.record_peak(:live, Decimal.new("20000"))
+    assert Decimal.eq?(flushed, Decimal.new("100000"))
+
+    assert {:ok, [row]} = DailyEquityPeak.fetch_day(day)
+    assert row.trade_mode == :live
+    assert Decimal.eq?(row.peak, Decimal.new("100000"))
+
+    assert :ok = DailyLoss.reset()
+    assert :ok = DailyLoss.reinit()
+    assert {:ok, %{peak: restored}} = DailyLoss.snapshot(:live)
+    assert Decimal.eq?(restored, Decimal.new("100000"))
+  end
+
+  test "persist false does not flush ETS-only peak" do
+    assert {:ok, _} = DailyLoss.record_peak(:paper, Decimal.new("100000"), persist: false)
+    assert {:ok, peak} = DailyLoss.record_peak(:paper, Decimal.new("20000"), persist: false)
+    assert Decimal.eq?(peak, Decimal.new("100000"))
+
+    day = DailyLoss.trading_day(DateTime.utc_now())
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    refute Enum.any?(rows, &(&1.trade_mode == :paper))
+  end
+
+  test "commit persisted advances only DB-written peak under concurrent authorize rise" do
+    assert {:ok, _} = DailyLoss.record_peak(:live, Decimal.new("100000"), persist: false)
+
+    day = DailyLoss.trading_day(DateTime.utc_now())
+
+    persist = fn trade_mode, trading_day, new_peak ->
+      assert trade_mode == :live
+      assert trading_day == day
+      assert Decimal.eq?(new_peak, Decimal.new("100000"))
+
+      # Ash 書込中相当: 認可が persist:false で ETS peak をさらに上げる
+      assert {:ok, raised} =
+               DailyLoss.record_peak(:live, Decimal.new("150000"), persist: false)
+
+      assert Decimal.eq?(raised, Decimal.new("150000"))
+      DailyEquityPeak.upsert(trade_mode, trading_day, new_peak)
+    end
+
+    assert {:ok, flushed} =
+             DailyLoss.record_peak(:live, Decimal.new("20000"), persist: persist)
+
+    assert Decimal.eq?(flushed, Decimal.new("150000"))
+
+    assert {:ok, [row]} =
+             day
+             |> DailyEquityPeak.fetch_day()
+             |> then(fn {:ok, rows} -> {:ok, Enum.filter(rows, &(&1.trade_mode == :live))} end)
+
+    assert Decimal.eq?(row.peak, Decimal.new("100000"))
+
+    assert {:ok, %{peak: ets}} = DailyLoss.snapshot(:live)
+    assert Decimal.eq?(ets, Decimal.new("150000"))
+
+    # persisted は DB=100000 のままなので、次の enforce 相当で 150000 を flush する
+    assert {:ok, _} = DailyLoss.record_peak(:live, Decimal.new("20000"))
+
+    assert {:ok, [row_after]} =
+             day
+             |> DailyEquityPeak.fetch_day()
+             |> then(fn {:ok, rows} -> {:ok, Enum.filter(rows, &(&1.trade_mode == :live))} end)
+
+    assert Decimal.eq?(row_after.peak, Decimal.new("150000"))
+
+    assert :ok = DailyLoss.reset()
+    assert :ok = DailyLoss.reinit()
+    assert {:ok, %{peak: restored}} = DailyLoss.snapshot(:live)
+    assert Decimal.eq?(restored, Decimal.new("150000"))
+  end
+
+  test "commit stale_day after day rollover still keeps flushed peak via reload retry" do
+    today = ~U[2026-09-12 10:00:00Z]
+    tomorrow = ~U[2026-09-13 10:00:00Z]
+
+    assert :ok = DailyLoss.reset(now_dt: today)
+
+    assert {:ok, _} =
+             DailyLoss.record_peak(:live, Decimal.new("100000"),
+               persist: false,
+               now_dt: today
+             )
+
+    today_day = DailyLoss.trading_day(today)
+
+    persist = fn trade_mode, trading_day, new_peak ->
+      assert trading_day == today_day
+      assert Decimal.eq?(new_peak, Decimal.new("100000"))
+      # Ash 窓中に日付跨ぎ reload（commit が stale_day になる）
+      assert :ok = DailyLoss.reload(trade_mode: :live, now_dt: tomorrow)
+      DailyEquityPeak.upsert(trade_mode, trading_day, new_peak)
+    end
+
+    assert {:ok, peak} =
+             DailyLoss.record_peak(:live, Decimal.new("20000"),
+               persist: persist,
+               now_dt: today
+             )
+
+    # retry は today で reload し直し、DB に書いた 100000 を当日 peak として戻す
+    assert Decimal.eq?(peak, Decimal.new("100000"))
+
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(today_day)
+    live = Enum.find(rows, &(&1.trade_mode == :live))
+    assert Decimal.eq?(live.peak, Decimal.new("100000"))
+
+    assert {:ok, %{peak: ets}} = DailyLoss.snapshot(:live, now_dt: today)
+    assert Decimal.eq?(ets, Decimal.new("100000"))
+  end
+
   test "concurrent first persist retries unique collision instead of unsynced" do
     day = DailyLoss.trading_day(DateTime.utc_now())
 

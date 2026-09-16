@@ -9,9 +9,9 @@
 
 ## 消化済み（2026-09-12 計画 → コード確認）
 
-前回計画の P0 #1–#2（tip 前進骨格・ゼロ手数料ハーネス）、P1 #3–#6 の主要部（HWM 行、fee 列、spot 在庫、Feed 認可）、P2 #7–#9（ACK、有限 open age、ページング）は**部品として**両評価者がコード再読で確認した。P2 #10/#11 は証跡・部分実施まで。再掲しない。
+前回計画の P0 #1–#2（tip 前進骨格・ゼロ手数料ハーネス）、当時の P1（HWM 行・fee 列・spot 在庫・Feed 認可など）、P2 #7–#9（ACK、有限 open age、ページング）は**部品として**両評価者がコード再読で確認した。P2 #10/#11 は証跡・部分実施まで。再掲しない。
 
-**ただし「済」＝ live 解禁ではない。** P0 #1/#2（commission 単位・反証）は完了。残 P0 はないが、P1 以降（HWM 周期 flush、突合窓の片側救済、監視配備、Game Day Stage 2）が live 解禁前の出口条件として残る。
+**ただし「済」＝ live 解禁ではない。** 本計画の P0 #1/#2（commission 単位・反証）と P1 #3（HWM flush）は完了。残る live 解禁前の出口条件は P1 #4–#6（突合窓の対称化、監視配備、Game Day Stage 2）。
 
 ---
 
@@ -28,7 +28,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 3 | HWM flush | persist 点（Fill 後 / 突合 / resume）で `peak > persisted_peak` なら `DailyEquityPeak` へ書く。認可は ETS のみでよい。回帰: 認可で peak 上昇 → equity 低下 → 再起動しても drawdown が残る | 実現益後の含み損で、周期をまたいだ peak が再起動後も消えない |
+| 3 | ~~HWM flush~~ | **完了 (2026-09-16)**。ETS に `persisted_peak` を持ち、Fill / 突合 / resume の persist 点で `peak > persisted_peak` なら `DailyEquityPeak` へ flush。認可は ETS のみ。回帰: authorize → equity 低下 → enforce flush → reinit 後も drawdown 残存 | 実現益後の含み損で、周期をまたいだ peak が再起動後も消えない |
 | 4 | 突合窓の対称化 | `balance_mismatch` の直前に fill 再同期を 1 回入れるか、`getbalance` を fill 同期の前に取り向きを片側へ固定する | 同期〜残高取得のあいだに入った約定で即 halt しない。説明不能だけ halt |
 | 5 | 別ホスト監視の実配備 | 作業 PC で `register-watch-ready-task.ps1` を VLAN1 の `READY_URL` に向けて登録。証跡を [watch-ready-evidence.md](../architecture/env/watch-ready-evidence.md) に「本番向き常駐」として残す | 取引ホスト停止を外から検知した記録がある |
 | 6 | Game Day Stage 2 の縦経路 | paper Executor で建玉を作り、Feed 断中の `System.submit_order/2` 拒否と resume 後の再認可を記録。Discord 到達を目視または `last_ok` で閉じる | SQL 直投入と ready 503 だけの代替を卒業する |

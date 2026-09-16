@@ -2,7 +2,8 @@ defmodule Bitflyer.Trading.DailyEquityPeak do
   @moduledoc """
   当日 equity ピーク（HWM）の正本。
 
-  `(trade_mode, trading_day)` で一意。`DailyLoss.record_peak/3` が上昇時だけ upsert する
+  `(trade_mode, trading_day)` で一意。`DailyLoss.record_peak/3` が上昇時、および
+  認可で ETS だけ上がったピークの flush（`peak > persisted_peak`）時に upsert する
   （認可は ETS のみ。Fill 後 / 突合 / resume が persist）。
   `DailyLoss` の init / reload / reinit が当日行を読む。無い行はピーク 0（日始）。
   """

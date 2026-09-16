@@ -3,9 +3,9 @@ defmodule Bitflyer.Risk.Equity do
   当日 realized net + 建玉含み損益のドローダウン判定。
 
   `DailyLoss` ETS は実現 net と当日 equity ピーク（HWM）を持つ。
-  ピーク上昇の persist は Fill 後 / 突合 / resume。認可は `persist: false` で
-  ETS だけ上げ、ホットパスから Ash を呼ばない。再起動後は `DailyLoss.init` /
-  `reload` が当日行を読む。
+  ピーク上昇の persist / flush（`peak > persisted_peak`）は Fill 後 / 突合 / resume。
+  認可は `persist: false` で ETS だけ上げ、ホットパスから Ash を呼ばない。
+  再起動後は `DailyLoss.init` / `reload` が当日行を読む。
   未実現は判定時に `MarketData.Cache` の LTP と **内部** `Position.average_price`
   から計算する推定値。spot に取引所平均は無く、比較対象にもしない。
 
