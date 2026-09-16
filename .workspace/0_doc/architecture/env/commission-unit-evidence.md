@@ -55,3 +55,10 @@ Unit varies by Crypto Assets」である。
 - `Product.fee_currency/1` — spot は base、FX は quote
 - `Fill.fee_currency`
 - `Positions` / `LiveBalance` / `LiveExchangeHarness` が上表に一致
+
+## P0 #2 反証回帰
+
+- テスト: `apps/bitflyer/test/bitflyer/regression/commission_unit_guard_test.exs`
+- fixture の `fee_currency: "JPY"`（決め打ち）→ `balance_mismatch`
+- 旧 quote 残高（949_920 JPY / 0.51 BTC）→ 正しい fill でも `balance_mismatch`
+- Position が exec_size 全量・取引所 net が `size − fee` → `spot_inventory_inflated`

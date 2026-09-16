@@ -11,7 +11,7 @@
 
 前回計画の P0 #1–#2（tip 前進骨格・ゼロ手数料ハーネス）、P1 #3–#6 の主要部（HWM 行、fee 列、spot 在庫、Feed 認可）、P2 #7–#9（ACK、有限 open age、ページング）は**部品として**両評価者がコード再読で確認した。P2 #10/#11 は証跡・部分実施まで。再掲しない。
 
-**ただし「済」＝ live 解禁ではない。** 今回の評価で、BTC_JPY `commission` の通貨決め打ちが新たに P0 へ上がった。HWM は行があるが周期 flush が残差。突合窓の片側救済も新規 P1。
+**ただし「済」＝ live 解禁ではない。** P0 #1/#2（commission 単位・反証）は完了。残 P0 はないが、P1 以降（HWM 周期 flush、突合窓の片側救済、監視配備、Game Day Stage 2）が live 解禁前の出口条件として残る。
 
 ---
 
@@ -20,7 +20,7 @@
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
 | 1 | ~~commission 単位の確定と会計~~ | **完了 (2026-09-16)**。証跡 [commission-unit-evidence.md](../architecture/env/commission-unit-evidence.md)。`Product.fee_currency/1`、`Fill.fee_currency`、Positions / LiveBalance を BTC_JPY=BTC に統一。Decode 欠落・負は維持。fixture `getexecutions_btc_jpy_fee.json` で tip 一致を固定。売建解消・ドテンは inventory（`held`）基準 | 実応答（または公式が単位を明記した fixture）で口座 BTC/JPY の変化と内部 expected が許容幅で一致する |
-| 2 | ハーネスと反証回帰 | **未完了（live 解禁前の残リスク）**。#1 実装時にハーネスと縦回帰を実単位へ寄せただけ。「JPY 決め打ちなら必ず失敗する」反証ケースは未追加。完了扱いにしない | fixture だけで「JPY 決め打ち」を再現・防止できる |
+| 2 | ~~ハーネスと反証回帰~~ | **完了 (2026-09-16)**。`LiveExchangeHarness` は base fee。縦回帰は `live_balance_advance_test`。反証は `commission_unit_guard_test` + fixture で JPY 決め打ち / 旧 quote 残高が必ず `balance_mismatch` または `spot_inventory_inflated` になることを固定 | fixture だけで「JPY 決め打ち」を再現・防止できる |
 
 ---
 

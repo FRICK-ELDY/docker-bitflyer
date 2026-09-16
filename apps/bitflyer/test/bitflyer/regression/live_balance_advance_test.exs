@@ -1,6 +1,6 @@
 defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
   @moduledoc """
-  P0 #2 / P1 #4 縦貫通回帰。
+  P0 #2 縦貫通回帰（反証は `commission_unit_guard_test`）。P1 #4 手数料 net。
 
   Fill を Ash で直接作らず、`Exchange.Client` ハーネスだけで
   発注 → 部分約定 2 回 → 残高変動 → 定期突合 → Ready → 再起動 → Ready
@@ -210,6 +210,7 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
   end
 
   test "apply_fill deducts commission from base amount and available" do
+    # ハーネス単体の P0 #2 反証。quote だけから fee を引く旧実装は JPY 949_920 / BTC 0.51。
     {:ok, %{exchange_order_id: id}} = place_on_harness("fee-base")
 
     assert :ok =
@@ -226,6 +227,8 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
     assert Decimal.eq?(jpy.available, @after_buy_fee_jpy)
     assert Decimal.eq?(btc.amount, @after_buy_fee_btc)
     assert Decimal.eq?(btc.available, @after_buy_fee_btc)
+    refute Decimal.eq?(jpy.amount, Decimal.new("949920"))
+    refute Decimal.eq?(btc.amount, @after_buy_btc)
   end
 
   test "non-zero commission keeps ready and DailyLoss / Equity net after restart" do

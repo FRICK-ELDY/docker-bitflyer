@@ -51,9 +51,9 @@ defmodule Bitflyer.Startup.LiveBalanceTest do
     buy_fill = %{
       product_code: "BTC_JPY",
       side: :buy,
-      size: Decimal.new(buy["size"]),
-      price: Decimal.new(buy["price"]),
-      fee: Decimal.new(buy["commission"]),
+      size: Decimal.new(to_string(buy["size"])),
+      price: Decimal.new(to_string(buy["price"])),
+      fee: Decimal.new(to_string(buy["commission"])),
       fee_currency: "BTC",
       inserted_at: ~U[2026-09-01 00:01:00.000000Z]
     }
@@ -76,9 +76,9 @@ defmodule Bitflyer.Startup.LiveBalanceTest do
     sell_fill = %{
       product_code: "BTC_JPY",
       side: :sell,
-      size: Decimal.new(sell["size"]),
-      price: Decimal.new(sell["price"]),
-      fee: Decimal.new(sell["commission"]),
+      size: Decimal.new(to_string(sell["size"])),
+      price: Decimal.new(to_string(sell["price"])),
+      fee: Decimal.new(to_string(sell["commission"])),
       fee_currency: "BTC",
       inserted_at: ~U[2026-09-01 00:02:00.000000Z]
     }
