@@ -6,6 +6,7 @@ defmodule Bitflyer.Risk.BalanceCache do
 
   - paper fill: `invalidate` → DB コミット → `reload(generation:, release_barrier: true)`
   - live 突合成功: 取引所残高を `put`（barrier 中は synced 化しない）
+  - 認可: `probe/4` で `reserve` と同一比較（非減額）。正本の減額は submit 時 `reserve`
   - live/paper 発注: `reserve(..., hold_id:)` で原子的減額
   - live 部分約定: `consume_hold_proportional` / `align_hold_to_filled`
   - **終端**（cancelled 等）でのみ `release_hold`。未終端の cancel 受付では hold を残す
@@ -107,6 +108,26 @@ defmodule Bitflyer.Risk.BalanceCache do
   @spec refresh(trade_mode(), keyword()) :: reload_result()
   def refresh(trade_mode, opts \\ []) when trade_mode in @trade_modes do
     reload(Keyword.put(opts, :trade_mode, trade_mode))
+  end
+
+  @doc """
+  利用可能額を減額せず、`reserve/4` と同じ比較で可否だけ返す。
+
+  認可（`Risk.authorize/2`）から呼び、判定ロジックを予約と 1 本にする。
+  正本の減額は引き続き `reserve/4`。TOCTOU は残りうる。
+
+  通貨キー欠落は `{:error, :currency_missing, map()}`（観測用）。
+  barrier / 未同期は `{:error, :unsynced}`。`reserve/4` は欠落も `:unsynced` に畳む。
+  """
+  @spec probe(trade_mode(), String.t(), Decimal.t(), keyword()) ::
+          :ok
+          | {:error, :unsynced}
+          | {:error, :currency_missing, map()}
+          | {:error, :insufficient_balance, map()}
+  def probe(trade_mode, currency, %Decimal{} = amount, opts \\ [])
+      when trade_mode in @trade_modes and is_binary(currency) do
+    server = Keyword.get(opts, :server, @name)
+    GenServer.call(server, {:probe, trade_mode, currency, amount})
   end
 
   @doc """
@@ -321,6 +342,22 @@ defmodule Bitflyer.Risk.BalanceCache do
     {:reply, reply, table}
   end
 
+  def handle_call({:probe, trade_mode, currency, amount}, _from, table) do
+    reply =
+      case read_mode(table, trade_mode) do
+        {balances, true, 0, _gen} when map_size(balances) > 0 ->
+          case compare_available(balances, currency, amount) do
+            {:ok, _available} -> :ok
+            other -> other
+          end
+
+        _ ->
+          {:error, :unsynced}
+      end
+
+    {:reply, reply, table}
+  end
+
   def handle_call({:reserve, trade_mode, currency, amount, hold_id}, _from, table) do
     reply =
       case read_mode(table, trade_mode) do
@@ -332,32 +369,27 @@ defmodule Bitflyer.Risk.BalanceCache do
               {:error, :hold_exists}
 
             true ->
-              case Map.fetch(balances, currency) do
-                :error ->
+              case compare_available(balances, currency, amount) do
+                {:ok, available} ->
+                  next = Map.put(balances, currency, Decimal.sub(available, amount))
+                  insert_row(table, {trade_mode, next, true, 0, gen})
+
+                  if is_binary(hold_id) do
+                    write_holds!(
+                      table,
+                      trade_mode,
+                      Map.put(holds, hold_id, {currency, amount, amount})
+                    )
+                  end
+
+                  :ok
+
+                # reserve の公開契約は欠落も :unsynced（過大評価しない）
+                {:error, :currency_missing, _meta} ->
                   {:error, :unsynced}
 
-                {:ok, available} ->
-                  if Decimal.lt?(available, amount) do
-                    {:error, :insufficient_balance,
-                     %{
-                       currency: currency,
-                       available: available,
-                       required: amount
-                     }}
-                  else
-                    next = Map.put(balances, currency, Decimal.sub(available, amount))
-                    insert_row(table, {trade_mode, next, true, 0, gen})
-
-                    if is_binary(hold_id) do
-                      write_holds!(
-                        table,
-                        trade_mode,
-                        Map.put(holds, hold_id, {currency, amount, amount})
-                      )
-                    end
-
-                    :ok
-                  end
+                other ->
+                  other
               end
           end
 
@@ -554,6 +586,25 @@ defmodule Bitflyer.Risk.BalanceCache do
 
   defp hold_parts({currency, remaining, original}), do: {currency, remaining, original}
   defp hold_parts({currency, remaining}), do: {currency, remaining, remaining}
+
+  defp compare_available(balances, currency, amount) do
+    case Map.fetch(balances, currency) do
+      :error ->
+        {:error, :currency_missing, %{currency: currency}}
+
+      {:ok, available} ->
+        if Decimal.lt?(available, amount) do
+          {:error, :insufficient_balance,
+           %{
+             currency: currency,
+             available: available,
+             required: amount
+           }}
+        else
+          {:ok, available}
+        end
+    end
+  end
 
   defp read_holds(table, trade_mode) do
     case :ets.lookup(table, holds_key(trade_mode)) do

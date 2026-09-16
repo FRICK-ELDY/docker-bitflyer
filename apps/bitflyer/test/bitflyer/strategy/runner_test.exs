@@ -7,6 +7,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
   import Bitflyer.TestSupport.OrderRateHelper
   import Bitflyer.TestSupport.DailyLossHelper
   import Bitflyer.TestSupport.ReadinessHelper
+  import Bitflyer.TestSupport.BalanceCacheHelper
 
   alias Bitflyer.Readiness
   alias Bitflyer.Strategy.Runner
@@ -20,13 +21,15 @@ defmodule Bitflyer.Strategy.RunnerTest do
     reset_market_data_cache()
     reset_order_rate()
     reset_daily_loss()
+    reset_balance_cache()
 
     previous_enabled = Application.get_env(:bitflyer, Bitflyer.Strategy, [])
 
     Application.put_env(:bitflyer, Bitflyer.Strategy,
       enabled: true,
       module: Bitflyer.Strategy.FixedOnce,
-      params: [size: "0.01", side: :buy]
+      params: [size: "0.01", side: :buy],
+      insufficient_balance_backoff_ms: 60_000
     )
 
     start_runner(throttle_ms: 0)
@@ -36,6 +39,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
       reset_market_data_cache()
       reset_order_rate()
       reset_daily_loss()
+      reset_balance_cache()
       Application.put_env(:bitflyer, Bitflyer.Strategy, previous_enabled)
     end)
 
@@ -305,6 +309,42 @@ defmodule Bitflyer.Strategy.RunnerTest do
 
     assert {:ok, after_orders} = Ash.read(Order)
     assert length(after_orders) == length(before)
+
+    assert {:ok, nil} =
+             Order
+             |> Ash.Query.filter(internal_order_id == ^@order_id)
+             |> Ash.read_one()
+  end
+
+  test "insufficient_balance applies product backoff instead of throttle-only retry loop" do
+    previous_mode = Application.get_env(:bitflyer, :trade_mode)
+    Application.put_env(:bitflyer, :trade_mode, :paper)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous_mode)
+    end)
+
+    # 成行買いに足りない JPY。probe/reserve で insufficient_balance
+    seed_balance_cache!(:paper, %{"JPY" => Decimal.new("1"), "BTC" => Decimal.new("0")})
+
+    assert Readiness.mark_ready() == :ok
+    assert put_fresh_ticker(@market_key) == :ok
+
+    assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
+    state1 = :sys.get_state(Runner)
+
+    assert Map.has_key?(state1.balance_retry_after, "FX_BTC_JPY")
+    assert state1.submitted == MapSet.new()
+
+    evaluated_at = Map.fetch!(state1.last_evaluated, "FX_BTC_JPY")
+
+    # throttle=0 でもバックオフ中は再評価しない
+    assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
+    state2 = :sys.get_state(Runner)
+
+    assert Map.fetch!(state2.last_evaluated, "FX_BTC_JPY") == evaluated_at
+    assert state2.balance_retry_after["FX_BTC_JPY"] == state1.balance_retry_after["FX_BTC_JPY"]
+    assert state2.submitted == MapSet.new()
 
     assert {:ok, nil} =
              Order

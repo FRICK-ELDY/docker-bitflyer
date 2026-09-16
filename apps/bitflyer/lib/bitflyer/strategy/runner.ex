@@ -10,6 +10,11 @@ defmodule Bitflyer.Strategy.Runner do
   ロード完了時刻より前に送られた tick（メールボックス滞留分）は破棄する。
   復元は lookback＋戦略 ID 接頭辞で絞り、古い行の二重 REST は Executor 冪等に委ねる。
   銘柄ごとに `throttle_ms` で評価頻度を制限する。
+
+  `:insufficient_balance` は再試行可だが、認可→reserve の TOCTOU や残高枯渇で
+  throttle だけの Tight loop にならないよう、銘柄単位のバックオフ
+  （既定 5s。`Bitflyer.Strategy` の `:insufficient_balance_backoff_ms`）を掛ける。
+  同一 tick 内で先頭が不足したら後続 command は送らない。
   """
 
   use GenServer
@@ -22,6 +27,7 @@ defmodule Bitflyer.Strategy.Runner do
   alias Bitflyer.Trading.StrategyParameterRevision
 
   @name __MODULE__
+  @default_insufficient_balance_backoff_ms 5_000
 
   # 一時的（再試行可）。それ以外の明確な永続失敗は settled に入れる。
   @retryable_errors [
@@ -98,7 +104,9 @@ defmodule Bitflyer.Strategy.Runner do
       revision_id: revision_id,
       submitted: submitted,
       ticks_ready_at: ticks_ready_at,
-      last_evaluated: %{}
+      last_evaluated: %{},
+      # product_code => monotonic_ms（insufficient_balance 後の再試行抑制）
+      balance_retry_after: %{}
     }
 
     case continue do
@@ -163,12 +171,15 @@ defmodule Bitflyer.Strategy.Runner do
         throttled?(state, product_code, now) ->
           state
 
+        balance_backed_off?(state, product_code, now) ->
+          state
+
         not Strategy.enabled?() ->
           state
 
         true ->
           state = %{state | last_evaluated: Map.put(state.last_evaluated, product_code, now)}
-          maybe_submit(product_code, key, value, state)
+          maybe_submit(product_code, key, value, state, now)
       end
 
     {:noreply, state}
@@ -194,7 +205,14 @@ defmodule Bitflyer.Strategy.Runner do
     end
   end
 
-  defp maybe_submit(product_code, key, value, state) do
+  defp balance_backed_off?(%{balance_retry_after: cooldowns}, product_code, now) do
+    case Map.fetch(cooldowns, product_code) do
+      {:ok, until} when until > now -> true
+      _ -> false
+    end
+  end
+
+  defp maybe_submit(product_code, key, value, state, now) do
     case build_market(product_code, key, value) do
       {:ok, market} ->
         commands = evaluate_commands(state.module, market, state.params, product_code)
@@ -231,17 +249,70 @@ defmodule Bitflyer.Strategy.Runner do
             }
           )
 
-          submitted =
-            Enum.reduce(pending_commands, state.submitted, fn command, acc ->
-              result = submit_command(command, state)
-              maybe_settle(acc, command, result)
-            end)
+          {submitted, balance_retry_after} =
+            Enum.reduce_while(
+              pending_commands,
+              {state.submitted, state.balance_retry_after},
+              fn command, {acc, cooldowns} ->
+                result = submit_command(command, state)
+                acc = maybe_settle(acc, command, result)
+                cooldowns = maybe_balance_backoff(cooldowns, product_code, result, now)
 
-          %{state | submitted: submitted}
+                # 同一 tick 内で残高不足になったら後続 command は送らない
+                if match?(
+                     {:error, :limit_exceeded, %{limit: :insufficient_balance}},
+                     result
+                   ) do
+                  {:halt, {acc, cooldowns}}
+                else
+                  {:cont, {acc, cooldowns}}
+                end
+              end
+            )
+
+          %{state | submitted: submitted, balance_retry_after: balance_retry_after}
         end
 
       :error ->
         state
+    end
+  end
+
+  defp maybe_balance_backoff(cooldowns, product_code, result, now) do
+    case result do
+      {:error, :limit_exceeded, %{limit: :insufficient_balance}} ->
+        until = now + insufficient_balance_backoff_ms()
+
+        Bitflyer.Telemetry.log(
+          :info,
+          "strategy insufficient_balance backoff",
+          %{
+            product_code: product_code,
+            backoff_ms: insufficient_balance_backoff_ms(),
+            trade_mode: Bitflyer.TradeMode.current()
+          }
+        )
+
+        Map.put(cooldowns, product_code, until)
+
+      {:ok, _} ->
+        Map.delete(cooldowns, product_code)
+
+      {:ok, _, :idempotent} ->
+        Map.delete(cooldowns, product_code)
+
+      _ ->
+        cooldowns
+    end
+  end
+
+  defp insufficient_balance_backoff_ms do
+    :bitflyer
+    |> Application.get_env(Bitflyer.Strategy, [])
+    |> Keyword.get(:insufficient_balance_backoff_ms, @default_insufficient_balance_backoff_ms)
+    |> case do
+      ms when is_integer(ms) and ms >= 0 -> ms
+      _ -> @default_insufficient_balance_backoff_ms
     end
   end
 
