@@ -1,6 +1,6 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-13
+最終更新: 2026-09-16
 根拠: [evaluation-2026-09-13.md](./evaluation-2026-09-13.md) / [specific-weaknesses-2026-09-13.md](./specific-weaknesses-2026-09-13.md)
 
 方針: **利益機能より資金保全・復帰・観測を先に直す。** live 実発注は下記 P0 の完了まで禁止。戦略の高度化は縦貫通の安全化の後。
@@ -19,8 +19,8 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 1 | commission 単位の確定と会計 | 非ゼロ `commission` の private `getexecutions` を秘密なしで証跡化。公式「単位は通貨ペアで異なる」に合わせ、BTC_JPY が BTC なら `Fill.fee` の通貨を product ごとに持ち、base amount・Position・JPY mark 損益へ同じ単位で載せる。Decode 欠落・負は現状どおり fail-closed | 実応答（または公式が単位を明記した fixture）で口座 BTC/JPY の変化と内部 expected が許容幅で一致する |
-| 2 | ハーネスと反証回帰 | `LiveExchangeHarness` を実単位に直す。非ゼロ fee の買い・売り・部分約定・周期突合・再起動を通す。誤って quote だけから引く実装は必ず失敗するケースを足す | fixture だけで「JPY 決め打ち」を再現・防止できる |
+| 1 | ~~commission 単位の確定と会計~~ | **完了 (2026-09-16)**。証跡 [commission-unit-evidence.md](../architecture/env/commission-unit-evidence.md)。`Product.fee_currency/1`、`Fill.fee_currency`、Positions / LiveBalance を BTC_JPY=BTC に統一。Decode 欠落・負は維持。fixture `getexecutions_btc_jpy_fee.json` で tip 一致を固定。売建解消・ドテンは inventory（`held`）基準 | 実応答（または公式が単位を明記した fixture）で口座 BTC/JPY の変化と内部 expected が許容幅で一致する |
+| 2 | ハーネスと反証回帰 | **未完了（live 解禁前の残リスク）**。#1 実装時にハーネスと縦回帰を実単位へ寄せただけ。「JPY 決め打ちなら必ず失敗する」反証ケースは未追加。完了扱いにしない | fixture だけで「JPY 決め打ち」を再現・防止できる |
 
 ---
 

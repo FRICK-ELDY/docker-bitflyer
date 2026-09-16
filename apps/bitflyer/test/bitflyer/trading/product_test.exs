@@ -18,4 +18,10 @@ defmodule Bitflyer.Trading.ProductTest do
     assert Product.fx?("FX_BTC_JPY")
     refute Product.fx?("BTC_JPY")
   end
+
+  test "fee_currency is base for spot and quote for fx" do
+    assert Product.fee_currency("BTC_JPY") == "BTC"
+    assert Product.fee_currency("ETH_BTC") == "ETH"
+    assert Product.fee_currency("FX_BTC_JPY") == "JPY"
+  end
 end

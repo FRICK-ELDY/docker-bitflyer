@@ -6,9 +6,11 @@ defmodule Bitflyer.Trading.Fill do
   `realized_pnl` は決済の売買差から `fee` を引いた net（建増しも手数料だけ負）。
   日次損失・Equity・Status はここから集計する。
 
-  live の `fee` は getexecutions の `commission`（spot は quote 通貨。BTC_JPY は JPY）。
-  欠落は記帳しない（Decode fail-closed）。paper は価格に fee を載せるため `fee` は 0。
-  本変更以前の行は `fee` が NULL（未記録）。残高説明は NULL 行だけ bps 許容を残す。
+  live の `fee` は getexecutions の `commission`。通貨は `fee_currency`
+  （`Product.fee_currency/1`。spot の BTC_JPY は BTC）。欠落・負は記帳しない
+  （Decode fail-closed）。paper は価格に fee を載せるため `fee` は 0。
+  `fee` が NULL の行は未記録（残高説明は bps 許容）。`fee` あり・`fee_currency`
+  NULL は本サイクル前の live 記帳で、読取時に `Product.fee_currency/1` で補完する。
 
   live は取引所 execution 単位で書き、`(trade_mode, exchange_execution_id)` で二重記帳を拒む。
   paper は `exchange_execution_id` を nil のまま残す（一意制約の対象外）。
@@ -55,6 +57,7 @@ defmodule Bitflyer.Trading.Fill do
         :price,
         :realized_pnl,
         :fee,
+        :fee_currency,
         :trade_mode,
         :filled_at
       ]
@@ -113,6 +116,12 @@ defmodule Bitflyer.Trading.Fill do
       allow_nil? true
       public? true
       constraints min: 0
+    end
+
+    # fee 記録時の通貨。NULL はレガシー（読取時は Product.fee_currency/1）。
+    attribute :fee_currency, :string do
+      allow_nil? true
+      public? true
     end
 
     attribute :trade_mode, :atom do

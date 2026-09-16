@@ -1,9 +1,9 @@
 defmodule Bitflyer.TestSupport.LiveExchangeHarness do
   @moduledoc false
 
-  # P0 #2 / P1 #4 用の擬似取引所。Agent に注文・約定・残高を持ち、
+  # P0 #1/#2 用の擬似取引所。Agent に注文・約定・残高を持ち、
   # テストプロセスと Reconciler の両方から同じ正本を読む。
-  # 約定の `commission` は quote 通貨の amount / available から引く（拘束に含めない）。
+  # 約定の `commission` は `Product.fee_currency/1` に従う（BTC_JPY は BTC）。
 
   @behaviour Bitflyer.Exchange.Client
   use Bitflyer.TestSupport.ExchangeClientStubs
@@ -192,27 +192,47 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
 
   # 拘束は place 時に available から引く。約定では amount だけ動かし、
   # 他注文の残拘束を available=amount で消さない。
-  # commission は拘束外なので quote の amount と available の両方から引く。
+  # commission は拘束外。spot（BTC_JPY）は base から差し引き、売りは quote へ mark。
   defp apply_execution_balances(state, %{side: :buy} = order, exec) do
-    quote = Decimal.mult(exec.size, exec.price)
+    notional = Decimal.mult(exec.size, exec.price)
     fee = execution_fee(exec)
-    quote_ccy = Bitflyer.Trading.Product.quote_currency(order.product_code)
-    base = Bitflyer.Trading.Product.base_currency(order.product_code)
+    product = order.product_code
+    quote_ccy = Bitflyer.Trading.Product.quote_currency(product)
+    base = Bitflyer.Trading.Product.base_currency(product)
+    fee_ccy = Bitflyer.Trading.Product.fee_currency(product)
 
     balances =
-      state.balances
-      |> adjust_balance(quote_ccy, Decimal.negate(Decimal.add(quote, fee)), Decimal.negate(fee))
-      |> adjust_balance(base, exec.size, exec.size)
+      if fee_ccy == base do
+        state.balances
+        |> adjust_balance(quote_ccy, Decimal.negate(notional), Decimal.new(0))
+        |> adjust_balance(base, Decimal.sub(exec.size, fee), Decimal.sub(exec.size, fee))
+      else
+        state.balances
+        |> adjust_balance(
+          quote_ccy,
+          Decimal.negate(Decimal.add(notional, fee)),
+          Decimal.negate(fee)
+        )
+        |> adjust_balance(base, exec.size, exec.size)
+      end
 
     %{state | balances: balances}
   end
 
   defp apply_execution_balances(state, %{side: :sell} = order, exec) do
-    quote = Decimal.mult(exec.size, exec.price)
+    notional = Decimal.mult(exec.size, exec.price)
     fee = execution_fee(exec)
-    quote_ccy = Bitflyer.Trading.Product.quote_currency(order.product_code)
-    base = Bitflyer.Trading.Product.base_currency(order.product_code)
-    credited = Decimal.sub(quote, fee)
+    product = order.product_code
+    quote_ccy = Bitflyer.Trading.Product.quote_currency(product)
+    base = Bitflyer.Trading.Product.base_currency(product)
+    fee_ccy = Bitflyer.Trading.Product.fee_currency(product)
+
+    credited =
+      if fee_ccy == base do
+        Decimal.sub(notional, Decimal.mult(fee, exec.price))
+      else
+        Decimal.sub(notional, fee)
+      end
 
     balances =
       state.balances

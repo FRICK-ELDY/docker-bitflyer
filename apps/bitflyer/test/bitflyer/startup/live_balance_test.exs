@@ -39,6 +39,78 @@ defmodule Bitflyer.Startup.LiveBalanceTest do
     assert Decimal.eq?(tip.amount, @jpy)
   end
 
+  test "BTC_JPY fee fixture matches LiveBalance expected amounts" do
+    path =
+      Path.expand("../../fixtures/exchange/getexecutions_btc_jpy_fee.json", __DIR__)
+
+    [buy, sell] =
+      path
+      |> File.read!()
+      |> Jason.decode!()
+
+    buy_fill = %{
+      product_code: "BTC_JPY",
+      side: :buy,
+      size: Decimal.new(buy["size"]),
+      price: Decimal.new(buy["price"]),
+      fee: Decimal.new(buy["commission"]),
+      fee_currency: "BTC",
+      inserted_at: ~U[2026-09-01 00:01:00.000000Z]
+    }
+
+    after_buy_jpy = Decimal.new("950000")
+    after_buy_btc = Decimal.new("0.50999")
+
+    assert {:ok, plan} =
+             LiveBalance.explain(
+               tips(),
+               exchange(after_buy_jpy, after_buy_jpy, after_buy_btc, after_buy_btc),
+               ["JPY", "BTC"],
+               fills: [buy_fill],
+               fee_tolerance_bps: 0
+             )
+
+    assert Enum.any?(plan.rows, & &1.changed?)
+    assert :ok = LiveBalance.advance(plan)
+
+    sell_fill = %{
+      product_code: "BTC_JPY",
+      side: :sell,
+      size: Decimal.new(sell["size"]),
+      price: Decimal.new(sell["price"]),
+      fee: Decimal.new(sell["commission"]),
+      fee_currency: "BTC",
+      inserted_at: ~U[2026-09-01 00:02:00.000000Z]
+    }
+
+    after_sell_jpy = Decimal.new("999900")
+    after_sell_btc = @btc
+
+    assert {:ok, plan2} =
+             LiveBalance.explain(
+               [
+                 %{
+                   currency: "JPY",
+                   amount: after_buy_jpy,
+                   available: after_buy_jpy,
+                   captured_at: @captured
+                 },
+                 %{
+                   currency: "BTC",
+                   amount: after_buy_btc,
+                   available: after_buy_btc,
+                   captured_at: @captured
+                 }
+               ],
+               exchange(after_sell_jpy, after_sell_jpy, after_sell_btc, after_sell_btc),
+               ["JPY", "BTC"],
+               fills: [sell_fill],
+               fee_tolerance_bps: 0
+             )
+
+    assert Enum.any?(plan2.rows, & &1.changed?)
+  end
+
   test "spot buy fill plus fee within tolerance advances" do
     fills = [spot_buy_fill()]
     # 50_000 notional, 20bps = 100. Exchange took 80 JPY fee.
@@ -130,10 +202,14 @@ defmodule Bitflyer.Startup.LiveBalanceTest do
              )
   end
 
-  test "recorded fee advances without bps allowance" do
-    fills = [spot_buy_fill(%{fee: Decimal.new("80")})]
-    jpy = Decimal.new("949920")
-    btc = Decimal.new("0.51")
+  test "recorded base fee advances without bps allowance" do
+    fills = [
+      spot_buy_fill(%{fee: Decimal.new("0.00001"), fee_currency: "BTC"})
+    ]
+
+    # JPY = tip - notional。BTC = tip + size - fee
+    jpy = Decimal.new("950000")
+    btc = Decimal.new("0.50999")
 
     assert {:ok, plan} =
              LiveBalance.explain(tips(), exchange(jpy, jpy, btc, btc), ["JPY", "BTC"],
@@ -145,11 +221,16 @@ defmodule Bitflyer.Startup.LiveBalanceTest do
     assert :ok = LiveBalance.advance(plan)
     assert {:ok, rows} = BalanceSnapshot.latest_tips(:live)
     assert Decimal.eq?(Enum.find(rows, &(&1.currency == "JPY")).amount, jpy)
+    assert Decimal.eq?(Enum.find(rows, &(&1.currency == "BTC")).amount, btc)
   end
 
-  test "recorded sell fee advances without bps allowance" do
-    fills = [Map.put(spot_sell_fill(), :fee, Decimal.new("80"))]
-    jpy = Decimal.new("1049920")
+  test "recorded sell base fee advances without bps allowance" do
+    fills = [
+      Map.merge(spot_sell_fill(), %{fee: Decimal.new("0.00001"), fee_currency: "BTC"})
+    ]
+
+    # JPY = tip + notional - fee*price。BTC = tip - size
+    jpy = Decimal.new("1049950")
     btc = Decimal.new("0.49")
 
     assert {:ok, plan} =
@@ -163,7 +244,7 @@ defmodule Bitflyer.Startup.LiveBalanceTest do
 
   test "spot sell fill plus fee within tolerance advances" do
     fills = [spot_sell_fill()]
-    # expected JPY 1_050_000, fee 80 → 1_049_920. BTC 0.49
+    # fee 未記録。expected JPY 1_050_000、BTC 0.49。20bps 内の減額を許容
     jpy = Decimal.new("1049920")
     btc = Decimal.new("0.49")
 

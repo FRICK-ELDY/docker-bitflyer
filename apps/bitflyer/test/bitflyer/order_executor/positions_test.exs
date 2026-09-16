@@ -188,6 +188,187 @@ defmodule Bitflyer.OrderExecutor.PositionsTest do
       |> Ash.read()
 
     assert Decimal.eq?(fill.fee, Decimal.new("50"))
+    assert fill.fee_currency == "JPY"
     assert Decimal.eq?(fill.realized_pnl, Decimal.new("-10050"))
+  end
+
+  test "BTC_JPY base fee reduces position size and marks realized in JPY" do
+    {:ok, open_order} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "pos-btc-fee-open",
+        product_code: "BTC_JPY",
+        side: :buy,
+        size: Decimal.new("0.01"),
+        order_type: :market,
+        price: Decimal.new("5000000"),
+        status: :filled,
+        filled_size: Decimal.new("0.01"),
+        trade_mode: :paper
+      })
+      |> Ash.create()
+
+    assert {:ok, _, %{realized_pnl: open_pnl}} =
+             Positions.apply_fill(open_order, Decimal.new("5000000"), fee: Decimal.new("0.00001"))
+
+    # fee 0.00001 BTC × 5_000_000 = 50 JPY
+    assert Decimal.eq?(open_pnl, Decimal.new("-50"))
+
+    assert {:ok, %Position{size: pos_size, average_price: avg}} =
+             Position
+             |> Ash.Query.filter(product_code == "BTC_JPY" and trade_mode == :paper)
+             |> Ash.read_one()
+
+    assert Decimal.eq?(pos_size, Decimal.new("0.00999"))
+    assert Decimal.eq?(avg, Decimal.new("5000000"))
+
+    {:ok, [fill]} =
+      Fill
+      |> Ash.Query.filter(internal_order_id == "pos-btc-fee-open")
+      |> Ash.read()
+
+    assert Decimal.eq?(fill.fee, Decimal.new("0.00001"))
+    assert fill.fee_currency == "BTC"
+    assert Decimal.eq?(fill.size, Decimal.new("0.01"))
+    assert Decimal.eq?(fill.realized_pnl, Decimal.new("-50"))
+  end
+
+  test "base fee buy covering equal short leaves residual short of fee" do
+    {:ok, short_order} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "pos-btc-short-open",
+        product_code: "BTC_JPY",
+        side: :sell,
+        size: Decimal.new("0.01"),
+        order_type: :market,
+        price: Decimal.new("5000000"),
+        status: :filled,
+        filled_size: Decimal.new("0.01"),
+        trade_mode: :paper
+      })
+      |> Ash.create()
+
+    assert {:ok, _, _} = Positions.apply_fill(short_order, Decimal.new("5000000"))
+
+    {:ok, cover} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "pos-btc-short-cover",
+        product_code: "BTC_JPY",
+        side: :buy,
+        size: Decimal.new("0.01"),
+        order_type: :market,
+        price: Decimal.new("5000000"),
+        status: :filled,
+        filled_size: Decimal.new("0.01"),
+        trade_mode: :paper
+      })
+      |> Ash.create()
+
+    # held = 0.01 − 0.00001。exec_size で潰すとフラットになり腐敗する。
+    assert {:ok, _, %{realized_pnl: realized}} =
+             Positions.apply_fill(cover, Decimal.new("5000000"), fee: Decimal.new("0.00001"))
+
+    assert Decimal.eq?(realized, Decimal.new("-50"))
+
+    assert {:ok, %Position{side: :sell, size: residual}} =
+             Position
+             |> Ash.Query.filter(product_code == "BTC_JPY" and trade_mode == :paper)
+             |> Ash.read_one()
+
+    assert Decimal.eq?(residual, Decimal.new("0.00001"))
+  end
+
+  test "base fee buy partially covering short reduces by held not exec_size" do
+    {:ok, short_order} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "pos-btc-short-partial-open",
+        product_code: "BTC_JPY",
+        side: :sell,
+        size: Decimal.new("0.01"),
+        order_type: :market,
+        price: Decimal.new("5000000"),
+        status: :filled,
+        filled_size: Decimal.new("0.01"),
+        trade_mode: :paper
+      })
+      |> Ash.create()
+
+    assert {:ok, _, _} = Positions.apply_fill(short_order, Decimal.new("5000000"))
+
+    {:ok, cover} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "pos-btc-short-partial-cover",
+        product_code: "BTC_JPY",
+        side: :buy,
+        size: Decimal.new("0.005"),
+        order_type: :market,
+        price: Decimal.new("5000000"),
+        status: :filled,
+        filled_size: Decimal.new("0.005"),
+        trade_mode: :paper
+      })
+      |> Ash.create()
+
+    assert {:ok, _, _} =
+             Positions.apply_fill(cover, Decimal.new("5000000"), fee: Decimal.new("0.000005"))
+
+    assert {:ok, %Position{side: :sell, size: residual}} =
+             Position
+             |> Ash.Query.filter(product_code == "BTC_JPY" and trade_mode == :paper)
+             |> Ash.read_one()
+
+    # 0.01 − (0.005 − 0.000005) = 0.005005
+    assert Decimal.eq?(residual, Decimal.new("0.005005"))
+  end
+
+  test "base fee buy flipping short opens long remainder of held minus short" do
+    {:ok, short_order} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "pos-btc-flip-short",
+        product_code: "BTC_JPY",
+        side: :sell,
+        size: Decimal.new("0.005"),
+        order_type: :market,
+        price: Decimal.new("5000000"),
+        status: :filled,
+        filled_size: Decimal.new("0.005"),
+        trade_mode: :paper
+      })
+      |> Ash.create()
+
+    assert {:ok, _, _} = Positions.apply_fill(short_order, Decimal.new("5000000"))
+
+    {:ok, flip} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "pos-btc-flip-buy",
+        product_code: "BTC_JPY",
+        side: :buy,
+        size: Decimal.new("0.01"),
+        order_type: :market,
+        price: Decimal.new("5000000"),
+        status: :filled,
+        filled_size: Decimal.new("0.01"),
+        trade_mode: :paper
+      })
+      |> Ash.create()
+
+    assert {:ok, _, %{realized_pnl: realized}} =
+             Positions.apply_fill(flip, Decimal.new("5000000"), fee: Decimal.new("0.00001"))
+
+    assert Decimal.eq?(realized, Decimal.new("-50"))
+
+    assert {:ok, %Position{side: :buy, size: remainder}} =
+             Position
+             |> Ash.Query.filter(product_code == "BTC_JPY" and trade_mode == :paper)
+             |> Ash.read_one()
+
+    # held 0.00999 − short 0.005 = 0.00499
+    assert Decimal.eq?(remainder, Decimal.new("0.00499"))
   end
 end
