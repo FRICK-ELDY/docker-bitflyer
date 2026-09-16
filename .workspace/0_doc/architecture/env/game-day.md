@@ -66,9 +66,15 @@ docker compose run --rm app mix bitflyer.contract --private
 6. Status の復帰手順どおり resume / reconcile（[prod.md](./prod.md)）
 7. 下の記録表に残す
 
-## 最小ロット段階解禁（記録。live は P0 後）
+再現用（同一 BEAM の縦経路）:
 
-P0 #1–#5 がコード上で閉じるまで Stage 3 以降は実施しない。
+```bash
+docker compose run --rm -e TRADE_MODE=paper app mix bitflyer.game_day_stage2
+```
+
+## 最小ロット段階解禁（記録。live は解禁条件後）
+
+現行計画の **P0（#1–#2）完了** かつ **P1 #5（監視配備）完了** まで Stage 3 以降は実施しない。
 
 | Stage | 内容 | 実施条件 | 記録すること |
 | --- | --- | --- | --- |
@@ -150,3 +156,21 @@ P0 #1–#5 がコード上で閉じるまで Stage 3 以降は実施しない。
 | 復帰 | ready 復帰は手順どおり。Mix は別 BEAM のため resume 後に `docker compose restart app` |
 | 次アクション | Stage 3 は P0 後。Discord HEARTBEAT / halt の目視。halt 後のホスト認可拒否と paper executor 経路での建玉は未実施 |
 | 備考 | FixedOnce の internal_order_id は dry_run pending と衝突したため、paper 建玉は SQL 投入（paper executor は `order_executor_test` のみ）。halt 後の新規発注停止は ready 503 で代替し、ホスト上の `submit` は試していない。発注・取消 REST は呼んでいない |
+
+### 実施記録（2026-09-16）— P1 #6 Game Day Stage 2 縦経路
+
+| 項目 | 記入 |
+| --- | --- |
+| 実施日 (UTC) | 2026-09-16 |
+| 実施者 | 開発（作業 PC `FRICK`） |
+| Stage | 2（縦経路） |
+| モード | paper（`docker compose run --rm -e TRADE_MODE=paper app mix bitflyer.game_day_stage2`。常駐 app は dry_run のまま） |
+| product_code | BTC_JPY |
+| 公開 contract | 対象外（本記録は Executor 縦経路） |
+| `--private` | skipped |
+| 注入 | Feed を `wss://127.0.0.1:1/json-rpc` に差し替え（同一 BEAM）。SQL 建玉は使わない |
+| ready / submit | paper `System.submit_order/2` で建玉 → Feed 断中は `{:error, :stale, %{reason: :feed_disconnected}}` → Feed 復帰後に再 submit `:filled` |
+| Discord | Webhook HTTP 2xx（probe content。URL は残していない）。`last_ok` フィールドは無いため HTTP 到達で閉じた |
+| 復帰 | Feed 子を公式 URL に戻し `clear_circuit` + `mark_ready` 後に再認可成功 |
+| 次アクション | Stage 3 は live 解禁条件（P0 完了 + P1 残）後。P1 #5 VLAN1 常駐は別途 |
+| 備考 | 再現は `mix bitflyer.game_day_stage2`。発注・取消 REST は呼んでいない。前回の SQL / ready-503 代替を卒業。終了時に Feed 復帰・paper 建玉削除・gameday Order/Fill 削除・tip 再種（共有 DB / 長寿命 BEAM 汚染防止） |

@@ -11,7 +11,7 @@
 
 前回計画の P0 #1–#2（tip 前進骨格・ゼロ手数料ハーネス）、当時の P1（HWM 行・fee 列・spot 在庫・Feed 認可など）、P2 #7–#9（ACK、有限 open age、ページング）は**部品として**両評価者がコード再読で確認した。P2 #10/#11 は証跡・部分実施まで。再掲しない。
 
-**ただし「済」＝ live 解禁ではない。** 本計画の P0 #1/#2（commission 単位・反証）と P1 #3（HWM flush）・#4（突合窓の対称化）は完了。残る live 解禁前の出口条件は P1 #5–#6（監視配備、Game Day Stage 2）。
+**ただし「済」＝ live 解禁ではない。** 本計画の P0 #1/#2（commission 単位・反証）と P1 #3（HWM flush）・#4（突合窓の対称化）・#6（Game Day Stage 2 縦経路）は完了。残る live 解禁前の出口条件は P1 #5（監視配備）。
 
 ---
 
@@ -31,7 +31,7 @@
 | 3 | ~~HWM flush~~ | **完了 (2026-09-16)**。ETS に `persisted_peak` を持ち、Fill / 突合 / resume の persist 点で `peak > persisted_peak` なら `DailyEquityPeak` へ flush。認可は ETS のみ。回帰: authorize → equity 低下 → enforce flush → reinit 後も drawdown 残存 | 実現益後の含み損で、周期をまたいだ peak が再起動後も消えない |
 | 4 | ~~突合窓の対称化~~ | **完了 (2026-09-16)**。`balance_mismatch` 時に fill 再同期→restore→snapshot 再取得を 1 回（`fill_sync_retries`）。既存の `balance_exchange_lag` 残高再取得と対になる。入金など説明不能は再同期後も halt | 同期〜残高取得のあいだに入った約定で即 halt しない。説明不能だけ halt |
 | 5 | 別ホスト監視の実配備 | 作業 PC で `register-watch-ready-task.ps1` を VLAN1 の `READY_URL` に向けて登録。証跡を [watch-ready-evidence.md](../architecture/env/watch-ready-evidence.md) に「本番向き常駐」として残す | 取引ホスト停止を外から検知した記録がある |
-| 6 | Game Day Stage 2 の縦経路 | paper Executor で建玉を作り、Feed 断中の `System.submit_order/2` 拒否と resume 後の再認可を記録。Discord 到達を目視または `last_ok` で閉じる | SQL 直投入と ready 503 だけの代替を卒業する |
+| 6 | ~~Game Day Stage 2 の縦経路~~ | **完了 (2026-09-16)**。`mix bitflyer.game_day_stage2` で paper `submit_order` 建玉 → Feed 断拒否 → 復帰後再認可。Discord は Webhook HTTP 2xx。証跡 [game-day.md](../architecture/env/game-day.md) | SQL 直投入と ready 503 だけの代替を卒業する |
 
 ---
 
