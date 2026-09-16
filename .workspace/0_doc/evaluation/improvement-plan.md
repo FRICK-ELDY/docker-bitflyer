@@ -9,9 +9,11 @@
 
 ## 消化済み（2026-09-12 計画 → コード確認）
 
-前回計画の P0 #1–#2（tip 前進骨格・ゼロ手数料ハーネス）、当時の P1（HWM 行・fee 列・spot 在庫・Feed 認可など）、P2 #7–#9（ACK、有限 open age、ページング）は**部品として**両評価者がコード再読で確認した。P2 #10/#11 は証跡・部分実施まで。再掲しない。
+前回計画の P0 #1–#2（tip 前進骨格・ゼロ手数料ハーネス）、当時の P1（HWM 行・fee 列・spot 在庫・Feed 認可など）、**当時の** P2 #7–#9（ACK、有限 open age、ページング）は**部品として**両評価者がコード再読で確認した。当時の P2 #10/#11 は証跡・部分実施まで。再掲しない。
 
-**ただし「済」＝ live 解禁ではない。** 本計画の P0 #1/#2（commission 単位・反証）と P1 #3（HWM flush）・#4（突合窓の対称化）・#6（Game Day Stage 2 縦経路）は完了。P2 #7（残高 probe）も完了だが **live 解禁ゲートではない**（観測・自己修復の残差）。**残る live 解禁前の出口条件は P1 #5（監視配備）のみ。**
+**番号注意:** 下表の **本計画 P2 #7–#9**（残高 probe / spread ゲート / 軽微 3 件）は、上記「当時の P2 #7–#9」とは別物である。
+
+**ただし「済」＝ live 解禁ではない。** 本計画の P0 #1/#2 と P1 #3/#4/#6、および本計画 P2 #7–#9 は完了。P2 は **live 解禁ゲートではない**（観測・自己修復・軽微負債）。**残る live 解禁前の出口条件は P1 #5（監視配備）のみ。**
 
 ---
 
@@ -41,7 +43,7 @@
 |:---:|:---|:---|:---|
 | 7 | ~~残高 probe~~ | **完了 (2026-09-16)**。`BalanceCache.probe/4` を認可から呼び `reserve` と同一比較。Risk moduledoc に近似（probe→reserve TOCTOU）を明記。Runner は `:insufficient_balance` に銘柄バックオフ（既定 5s） | 認可通過→予約失敗の Tight loop が消える |
 | 8 | ~~ticker bid/ask → spread ゲート~~ | **完了 (2026-09-16)**。`Normalize.from_ticker/1` が `best_bid`/`best_ask` を必須化。成行は `max_spread_pct`（既定 0.5%、live は `BITFLYER_MAX_SPREAD_PCT`）で拒否。指値は従来どおり LTP 乖離 | 薄商いの market を認可で止められる |
-| 9 | 軽微負債をこのサイクルで 3 件消す | **必ず 3 件**: `ash.codegen --check`、両 `test_helper` の Sandbox mode、`apps/bitflyer/README.md`。残り（Dockerfile USER、websockex 記録、保持方針）は次 | 「必ず」を守った記録がある。守らないなら宣言から「必ず」を消す |
+| 9 | ~~軽微負債をこのサイクルで 3 件消す~~ | **完了 (2026-09-16)**。① `ash.codegen --check` を precommit に追加し手書き migration 後の snapshot を同期（再生成 DDL は **削除禁止の no-op** migration）。② 両 `test_helper` に `Sandbox.mode(..., :manual)`。③ `apps/bitflyer/README.md` を責務説明に置換。**コミット必須（未追跡になりやすい）:** `priv/repo/migrations/20260916101043_sync_handwritten_snapshots.exs` と `priv/resource_snapshots/repo/{balance_snapshots,orders,strategy_parameter_revisions}/2026091610104*.json`。残り（Dockerfile USER、websockex 記録、保持方針）は次 | 「必ず」を守った記録がある。守らないなら宣言から「必ず」を消す |
 
 ---
 
