@@ -573,6 +573,7 @@ defmodule Bitflyer.OrderExecutor.LiveFillsTest do
 
     {:ok, [fill]} = fills_for(order.internal_order_id)
     assert Decimal.eq?(fill.fee, Decimal.new("80"))
+    assert fill.fee_currency == "JPY"
     assert Decimal.eq?(fill.realized_pnl, Decimal.new("-80"))
 
     assert :ok = DailyLoss.reload(trade_mode: :live)

@@ -11,8 +11,9 @@ defmodule Bitflyer.Startup.LiveBalance do
 
   手数料許容は **支払超過（actual < expected）だけ**。増加は入金として即
   `balance_mismatch`（20bps 以内でも前進しない）。Fill が無い通貨の絶対床は 0。
-  減る側の床は Fill があるときの丸め専用。`Fill.fee` が揃っていれば quote 側に
-  実手数料を織り込み、許容は絶対床だけ。fee 未記録（NULL）の Fill だけ 20bps を残す。
+  減る側の床は Fill があるときの丸め専用。`Fill.fee` が揃っていれば
+  `fee_currency`（spot の BTC_JPY は BTC）に応じて base / quote へ織り込み、
+  許容は絶対床だけ。fee 未記録（NULL）の Fill だけ 20bps を残す。
   取引所 amount が tip のままで Fill が減額を予測しているときは `balance_exchange_lag`
   （突合側が getbalance を 1 回再取得する）。
 
@@ -266,35 +267,65 @@ defmodule Bitflyer.Startup.LiveBalance do
   defp fill_delta(fill, currency) do
     base = Product.base_currency(fill.product_code)
     quote = Product.quote_currency(fill.product_code)
+    fee_ccy = resolve_fee_currency(fill)
     size = fill.size
     notional = Decimal.mult(size, fill.price)
+    fee = recorded_fee_amount(fill)
 
     case fill.side do
       :buy when currency == quote ->
-        Decimal.negate(Decimal.add(notional, recorded_fee(fill, currency, quote)))
+        if fee_ccy == quote do
+          Decimal.negate(Decimal.add(notional, fee))
+        else
+          Decimal.negate(notional)
+        end
 
       :buy when currency == base ->
-        size
+        if fee_ccy == base do
+          Decimal.sub(size, fee)
+        else
+          size
+        end
 
       :sell when currency == base ->
         Decimal.negate(size)
 
       :sell when currency == quote ->
-        Decimal.sub(notional, recorded_fee(fill, currency, quote))
+        cond do
+          fee_ccy == quote ->
+            Decimal.sub(notional, fee)
+
+          fee_ccy == base ->
+            Decimal.sub(notional, Decimal.mult(fee, fill.price))
+
+          true ->
+            notional
+        end
 
       _ ->
         Decimal.new(0)
     end
   end
 
-  defp recorded_fee(fill, currency, quote) when currency == quote do
+  defp recorded_fee_amount(fill) do
     case Map.get(fill, :fee) do
       %Decimal{} = fee -> fee
       _ -> Decimal.new(0)
     end
   end
 
-  defp recorded_fee(_fill, _currency, _quote), do: Decimal.new(0)
+  defp resolve_fee_currency(fill) do
+    case Map.get(fill, :fee_currency) do
+      ccy when is_binary(ccy) and ccy != "" ->
+        ccy
+
+      _ ->
+        case Map.get(fill, :fee) do
+          %Decimal{} -> Product.fee_currency(fill.product_code)
+          _ -> nil
+        end
+    end
+  end
 
   # 減る側のみ。fee 未記録 Fill だけ bps 見積り。記録済みは絶対床（丸め）。
   defp fee_allowance(currency, fills, opts) do
