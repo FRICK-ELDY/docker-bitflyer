@@ -3,7 +3,9 @@ defmodule Bitflyer.Startup.Reconciler do
   起動時・定期の突合を実行し、Ready 状態を更新する。
 
   - 成功 → `Readiness.mark_ready/0`（halted 中は拒否される）
-  - 失敗 → `Readiness.halt/1` と RiskState 永続化。Ready にはしない
+  - 失敗 → `Readiness.halt/1` と RiskState 永続化。Ready にはしない。
+    既に同じ reason で halted なら、起動・`run_now`・定期のどれでも `halted_at` は残す。
+    reason が変わるときだけ新しい停止時刻を書く
   - boot / `run_now` / 定期 tick の前に `OpenOrderPolicy.cancel_aged_opens/1`
 
   起動時の重い突合は `handle_continue/2` で行い、`init/1` はすぐ返す。
@@ -69,7 +71,7 @@ defmodule Bitflyer.Startup.Reconciler do
 
     state =
       state
-      |> then(&apply_result(run_reconcile(&1), &1))
+      |> then(&apply_result(run_reconcile(&1), &1, :boot))
       |> maybe_enforce_drawdown()
       |> Map.put(:booted?, true)
       |> schedule_periodic()
@@ -84,7 +86,7 @@ defmodule Bitflyer.Startup.Reconciler do
 
     state =
       result
-      |> apply_result(state)
+      |> apply_result(state, :run_now)
       |> maybe_enforce_drawdown()
       |> Map.put(:booted?, true)
 
@@ -107,7 +109,7 @@ defmodule Bitflyer.Startup.Reconciler do
 
     state =
       state
-      |> then(&apply_result(run_reconcile(&1), &1))
+      |> then(&apply_result(run_reconcile(&1), &1, :periodic))
       |> maybe_enforce_drawdown()
 
     {:noreply, schedule_periodic(state)}
@@ -138,12 +140,12 @@ defmodule Bitflyer.Startup.Reconciler do
     Reconcile.run(trade_mode: Bitflyer.TradeMode.current(), exchange: state.exchange)
   end
 
-  defp apply_result(result, state) do
+  defp apply_result(result, state, source) do
     # ローカル印、または既に DB にある halt を Ready 判定より先に ETS へ載せる。
     # 印を消したあとの起動でも、成功した突合が persist_failed を消して Ready にしない。
     _ = Bitflyer.Risk.DrainHalt.enforce(readiness: state.readiness)
     _ = halt_if_persisted(state)
-    do_apply_result(result, state)
+    do_apply_result(result, state, source)
   end
 
   defp halt_if_persisted(state) do
@@ -157,7 +159,7 @@ defmodule Bitflyer.Startup.Reconciler do
     end
   end
 
-  defp do_apply_result({:ok, internal}, state) do
+  defp do_apply_result({:ok, internal}, state, _source) do
     trade_mode = Bitflyer.TradeMode.current()
 
     balance_result = sync_balance_cache(trade_mode, internal)
@@ -230,7 +232,7 @@ defmodule Bitflyer.Startup.Reconciler do
     end
   end
 
-  defp do_apply_result({:error, reason, details}, state) do
+  defp do_apply_result({:error, reason, details}, state, source) do
     detail_meta =
       if is_map(details) do
         Map.take(details, [
@@ -265,10 +267,11 @@ defmodule Bitflyer.Startup.Reconciler do
 
     Bitflyer.Telemetry.log(
       :warning,
-      "boot reconcile halted",
+      halt_log_message(source),
       Map.merge(
         %{
           reason: reason,
+          source: source,
           trade_mode: Bitflyer.TradeMode.current()
         },
         detail_meta
@@ -387,37 +390,57 @@ defmodule Bitflyer.Startup.Reconciler do
     end
   end
 
+  # 同じ reason の再失敗は起点の halted_at を残す。別 reason は新しい停止として時刻を書く。
   defp persist_risk_halt(reason) do
-    halted_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-
-    attrs = %{
-      name: "default",
-      halted: true,
-      reason: Reconcile.reason_to_string(reason),
-      halted_at: halted_at
-    }
+    reason_string = Reconcile.reason_to_string(reason)
 
     case RiskState
          |> Ash.Query.filter(name == "default")
          |> Ash.read_one() do
       {:ok, nil} ->
-        case RiskState
-             |> Ash.Changeset.for_create(:create, attrs)
-             |> Ash.create() do
-          {:ok, _} -> :ok
-          {:error, error} -> {:error, error}
-        end
+        write_risk_halt(nil, reason_string)
+
+      {:ok, %RiskState{halted: true, reason: ^reason_string}} ->
+        :ok
 
       {:ok, %RiskState{} = risk} ->
-        case risk
-             |> Ash.Changeset.for_update(:update, Map.take(attrs, [:halted, :reason, :halted_at]))
-             |> Ash.update() do
-          {:ok, _} -> :ok
-          {:error, error} -> {:error, error}
-        end
+        write_risk_halt(risk, reason_string)
 
       {:error, error} ->
         {:error, error}
+    end
+  end
+
+  defp halt_log_message(:boot), do: "boot reconcile halted"
+  defp halt_log_message(:periodic), do: "periodic reconcile halted"
+  defp halt_log_message(:run_now), do: "reconcile halted"
+
+  defp write_risk_halt(existing, reason_string) do
+    halted_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    attrs = %{
+      name: "default",
+      halted: true,
+      reason: reason_string,
+      halted_at: halted_at
+    }
+
+    result =
+      case existing do
+        nil ->
+          RiskState
+          |> Ash.Changeset.for_create(:create, attrs)
+          |> Ash.create()
+
+        risk ->
+          risk
+          |> Ash.Changeset.for_update(:update, Map.take(attrs, [:halted, :reason, :halted_at]))
+          |> Ash.update()
+      end
+
+    case result do
+      {:ok, _} -> :ok
+      {:error, error} -> {:error, error}
     end
   end
 

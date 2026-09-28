@@ -465,6 +465,61 @@ defmodule Bitflyer.Startup.ReconcileTest do
     refute Readiness.ready?()
   end
 
+  test "second periodic reconcile keeps halted_at for the same halt reason" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, EmptyExchange)
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+    end)
+
+    tick_periodic_reconcile()
+
+    assert {:ok, %RiskState{halted: true, reason: "reconcile_mismatch"} = risk} =
+             read_default_risk_state()
+
+    origin = DateTime.add(risk.halted_at, -3600, :second)
+
+    assert {:ok, _} =
+             risk
+             |> Ash.Changeset.for_update(:update, %{halted_at: origin})
+             |> Ash.update()
+
+    tick_periodic_reconcile()
+
+    assert {:ok, %RiskState{halted: true, reason: "reconcile_mismatch", halted_at: halted_at}} =
+             read_default_risk_state()
+
+    assert DateTime.compare(halted_at, origin) == :eq
+  end
+
+  test "reconcile advances halted_at when the stored reason does not round-trip" do
+    origin =
+      DateTime.utc_now()
+      |> DateTime.add(-3600, :second)
+      |> DateTime.truncate(:microsecond)
+
+    assert {:ok, _} =
+             RiskState
+             |> Ash.Changeset.for_create(:create, %{
+               name: "default",
+               halted: true,
+               reason: "legacy_unmapped_halt",
+               halted_at: origin
+             })
+             |> Ash.create()
+
+    tick_periodic_reconcile()
+
+    assert {:ok, %RiskState{halted: true, reason: "risk_halted", halted_at: halted_at}} =
+             read_default_risk_state()
+
+    assert DateTime.compare(halted_at, origin) == :gt
+  end
+
   test "live invalid exchange number fails snapshot and halts" do
     previous = Application.get_env(:bitflyer, :trade_mode)
 
@@ -1435,6 +1490,17 @@ defmodule Bitflyer.Startup.ReconcileTest do
     end
 
     :ok
+  end
+
+  defp tick_periodic_reconcile do
+    send(Reconciler, :periodic_reconcile)
+    _ = :sys.get_state(Reconciler)
+  end
+
+  defp read_default_risk_state do
+    RiskState
+    |> Ash.Query.filter(name == "default")
+    |> Ash.read_one()
   end
 
   defp clear_default_risk_state do
