@@ -117,12 +117,14 @@ defmodule Bitflyer.GameDayStage2Test do
 
     with_application_reconciler(fn ->
       assert Reconciler.booted?() == true
+      send(Reconciler, :periodic_reconcile)
+      _ = :sys.get_state(Reconciler)
     end)
 
-    assert {:ok, %RiskState{halted: true, reason: "manual_halt", halted_at: rewritten}} =
+    assert {:ok, %RiskState{halted: true, reason: "manual_halt", halted_at: halted_at}} =
              read_default_risk_state()
 
-    assert DateTime.compare(rewritten, risk.halted_at) == :gt
+    assert DateTime.compare(halted_at, risk.halted_at) == :eq
   end
 
   test "order gate refuses a persisted halt while this BEAM is still ready" do
