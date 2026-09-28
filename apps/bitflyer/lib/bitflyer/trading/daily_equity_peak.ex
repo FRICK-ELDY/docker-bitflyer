@@ -79,10 +79,12 @@ defmodule Bitflyer.Trading.DailyEquityPeak do
   end
 
   @doc """
-  ピークが正で、既存より高いときだけ書く。0 や同値は何もしない。
+  ピークが正のとき、単調な upsert を 1 文で書く。0 以下は何もしない。
 
-  更新は `peak < 新値` の条件付きなので、並行 upsert で低い値が
-  高い値を上書きしない（HWM は単調増加）。
+  `INSERT ... ON CONFLICT DO UPDATE SET peak = GREATEST(...)` なので、
+  並行した低い値は高い値を上書きしない（HWM は単調増加）。一意制約の
+  衝突を文字列で拾って読み直す必要はない。`id` と時刻は文中で渡す。
+  列 default は本番の Ash create では使わない。
   """
   @spec upsert(atom(), Date.t(), Decimal.t()) :: :ok | {:error, term()}
   def upsert(trade_mode, %Date{} = day, %Decimal{} = peak)
@@ -94,107 +96,38 @@ defmodule Bitflyer.Trading.DailyEquityPeak do
     end
   end
 
+  # AshPostgres 2.13 の upsert は PostgreSQL 17 で MERGE になる。MERGE は
+  # 同じキーの並行 insert を待たず、敗者が一意制約で落ちる。HWM は
+  # INSERT ... ON CONFLICT の 1 文で仲裁する。
   defp do_upsert(trade_mode, day, peak) do
-    do_upsert(trade_mode, day, peak, false)
-  end
+    now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:microsecond)
 
-  defp do_upsert(trade_mode, day, peak, retried?) do
-    case __MODULE__
-         |> Ash.Query.filter(trade_mode == ^trade_mode and trading_day == ^day)
-         |> Ash.read_one() do
-      {:ok, nil} ->
-        create_peak(trade_mode, day, peak, retried?)
+    sql = """
+    INSERT INTO daily_equity_peaks (
+      id, trade_mode, trading_day, peak, inserted_at, updated_at
+    )
+    VALUES ($1::uuid, $2, $3, $4, $5, $6)
+    ON CONFLICT (trade_mode, trading_day)
+    DO UPDATE SET
+      peak = GREATEST(daily_equity_peaks.peak, EXCLUDED.peak),
+      updated_at = CASE
+        WHEN EXCLUDED.peak > daily_equity_peaks.peak THEN EXCLUDED.updated_at
+        ELSE daily_equity_peaks.updated_at
+      END
+    """
 
-      {:ok, row} ->
-        if Decimal.compare(peak, row.peak) == :gt do
-          update_peak(row, peak)
-        else
-          :ok
-        end
+    params = [
+      Ash.UUIDv7.bingenerate(),
+      Atom.to_string(trade_mode),
+      day,
+      peak,
+      now,
+      now
+    ]
 
-      {:error, error} ->
-        {:error, error}
-    end
-  end
-
-  defp create_peak(trade_mode, day, peak, retried?) do
-    case __MODULE__
-         |> Ash.Changeset.for_create(:create, %{
-           trade_mode: trade_mode,
-           trading_day: day,
-           peak: peak
-         })
-         |> Ash.create() do
-      {:ok, _} ->
-        :ok
-
-      {:error, error} ->
-        # 同時 insert の一意制約だけ読み直す。Invalid 全体を再試行すると
-        # 検証エラーで do_upsert が再帰し続ける。
-        if not retried? and unique_mode_day_taken?(error) do
-          do_upsert(trade_mode, day, peak, true)
-        else
-          {:error, error}
-        end
-    end
-  end
-
-  defp unique_mode_day_taken?(error) do
-    unique_mode_day_name?(inspect(error)) or
-      error |> error_leaves() |> Enum.any?(&identity_collision?/1)
-  end
-
-  defp identity_collision?(%{identity: :unique_mode_day}), do: true
-
-  defp identity_collision?(%{vars: %{key: :unique_mode_day}}), do: true
-
-  defp identity_collision?(%{constraint: constraint}) when is_binary(constraint) do
-    unique_mode_day_name?(constraint)
-  end
-
-  defp identity_collision?(%{postgres: %{constraint: constraint}}) when is_binary(constraint) do
-    unique_mode_day_name?(constraint)
-  end
-
-  defp identity_collision?(%{private_vars: vars}) when is_list(vars) do
-    Enum.any?(vars, fn
-      {:constraint, name} when is_binary(name) -> unique_mode_day_name?(name)
-      _ -> false
-    end)
-  end
-
-  defp identity_collision?(other) do
-    other
-    |> Exception.message()
-    |> unique_mode_day_name?()
-  rescue
-    _ -> false
-  end
-
-  defp unique_mode_day_name?(text) when is_binary(text) do
-    String.contains?(text, "unique_mode_day") or
-      String.contains?(text, "daily_equity_peaks_unique_mode_day")
-  end
-
-  defp error_leaves(%{errors: errors}) when is_list(errors) do
-    Enum.flat_map(errors, &error_leaves/1)
-  end
-
-  defp error_leaves(other), do: [other]
-
-  defp update_peak(row, peak) do
-    # 無条件 update だと 150 の直後に 120 が書き戻り、再起動後の drawdown が緩む。
-    case __MODULE__
-         |> Ash.Query.filter(id == ^row.id and peak < ^peak)
-         |> Ash.bulk_update(:update, %{peak: peak}, return_errors?: true, stop_on_error?: true) do
-      %Ash.BulkResult{status: :success} ->
-        :ok
-
-      %Ash.BulkResult{status: :error, errors: errors} ->
-        {:error, errors}
-
-      other ->
-        {:error, other}
+    case Bitflyer.Repo.query(sql, params) do
+      {:ok, _} -> :ok
+      {:error, error} -> {:error, error}
     end
   end
 end
