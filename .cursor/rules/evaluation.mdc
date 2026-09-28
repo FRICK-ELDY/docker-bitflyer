@@ -275,7 +275,7 @@ Safety / Recoverable / Idempotent に関わる欠如は減点寄り、後続バ�
 4. `.workspace/0_doc/evaluation/evaluation-YYYY-MM-DD.md` — 当日の総合評価レポート
 5. `.workspace/0_doc/evaluation/improvement-plan.md` — まとめのマイナス点に基づく改善提案書
 
-次回評価時、前回のまとめ（上記 1〜4）を `.workspace/0_doc/evaluation/archive/YYYY-MM-DD/` へ移す。`improvement-plan.md` は最新版を置き換える。
+次回評価時、前回のまとめ（上記 1〜4）を `.workspace/0_doc/evaluation/archive/YYYY-MM-DD/` へ移す。`improvement-plan.md` は最新版を置き換える。置き換えても、下の「improvement-plan の完了宣言」は維持する。
 
 ### アーカイブ
 
@@ -295,6 +295,18 @@ Safety / Recoverable / Idempotent に関わる欠如は減点寄り、後続バ�
 
 ---
 
+## improvement-plan の完了宣言
+
+`improvement-plan.md` に「完了」と書くとき、および前回の「完了」を判定するとき、次を守る。
+
+- 「完了」は、同じ行の「完了の見方」を満たした根拠を **1 行** 書いたときだけ使う。根拠には日付と、見方の述語が真だと分かる観測（テスト名、証跡の差分、実行結果）を含める
+- 「コード再読」や「完了」だけの語は根拠行ではない
+- 見方を満たせない項目は取り消し線を使わず **部分完了** と残す。満たした範囲と残差を同じ行に書く
+- 基準を下げるときは、先に「完了の見方」を書き換えてから状態を付ける。見方と根拠が同じ行で矛盾する「完了」は未解決として扱う
+- 次回評価は、各「完了」の根拠行が見方と矛盾しないかを、対象のコードまたは証跡を読み直して確認する。矛盾があれば、その項目の「完了」は採用しない
+
+---
+
 ## 評価の手順
 
 **過去の評価文書を参照するだけで判断しない。必ず当該コードを直接読み、現状を検証してから採点する。**
@@ -302,6 +314,7 @@ Safety / Recoverable / Idempotent に関わる欠如は減点寄り、後続バ�
 - 前回評価は直近のまとめ `.workspace/0_doc/evaluation/evaluation-YYYY-MM-DD.md` を起点とする。まとめがまだ無い場合は初回評価とし、Vision / Architecture / 現行コードのみを正とする
 - 各評価者は自系統の前回詳細（`opus/` または `gpt/`）のマイナス点が解決済みかどうかを、**対象ファイルを読み直して確認する**
 - 前回「解決済み」でなかった項目を「解決済み」と書く前に、コードの該当箇所を確認する
+- `improvement-plan.md` の「完了」は、上の「improvement-plan の完了宣言」で根拠行と「完了の見方」を突き合わせてから採用する
 - `mix precommit`（または同等の個別コマンド: format / compile --warnings-as-errors / test）の通過可否など、実行で確認すべき項目は可能な限り実行して結果を見る（実行環境の制約がある場合はその旨を明記する）
 - Docker 経由が正なら `docker compose run --rm app mix precommit` 等で確認する
 
