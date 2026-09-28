@@ -80,6 +80,7 @@ defmodule Bitflyer.TelemetryTest do
           :snapshot_hash,
           :skew_ms,
           :max_ms,
+          :detail,
           :strategy_parameter_revision_id,
           :trading_day
         ] do

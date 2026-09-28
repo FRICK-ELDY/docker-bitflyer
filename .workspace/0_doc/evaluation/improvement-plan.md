@@ -1,6 +1,6 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-28（成行拘束は ask 名目ちょうど。消化済みの P2 #7 は評価日で区別）
+最終更新: 2026-09-28（ticker は `{ltp, book}`。消化済みの P2 #7 と #8 は評価日で区別）
 根拠: [evaluation-2026-09-16.md](./evaluation-2026-09-16.md) / [specific-weaknesses-2026-09-16.md](./specific-weaknesses-2026-09-16.md)
 
 方針: **利益機能より資金保全・復帰・観測を先に直す。** P0（#1 と #2）は完了。連続 live の前に P1 が残る。戦略の高度化は縦貫通の安全化の後。
@@ -25,6 +25,7 @@
 | P0 #2 | ハーネス独立性 | **完了**（2026-09-28。`:quote_mark` の売りは発注→約定同期→Reconciler で `balance_mismatch` halt。既定の縦回帰は Ready。実測差分は `live_balance_test` が固定し、内部式を quote_mark に寄せると halt 側の期待が失敗する） |
 | P1 #3 | HWM 認可後 crash 窓 | **部分完了**（2026-09-28。writer 不在の認可は unsynced。失敗した upsert は再送する。DailyLoss か PeakWriter の片方生存なら高値は戻る。ノード強制終了で両方のメモリが消える窓は残る） |
 | P2 #7（2026-09-28） | 成行拘束の ask 化 | **完了**（2026-09-28。live 成行買いの probe/reserve は `best_ask × size` ちょうど。LTP 名目ちょうどは `insufficient_balance` で required が ask 名目。ask 名目ちょうどは JPY 残 0。paper 成行買いは LTP に FillPricing だけを載せ ask を使わない。ask 欠落は `bid_ask_missing`。ticker に気配数量が無いので、最上段を超えて歩いた超過は拘束しない） |
+| P2 #8 | ticker 2 層化 | **完了**（2026-09-28。crossed / 欠落 / ゼロの板は `book: nil` のまま LTP を Cache に載せる。成行認可は `bid_ask_missing`（telemetry の `detail`。`reason` は `:stale`）。指値は LTP で通る。live 突合の時計検査は crossed book でも LTP 時刻で Ready。`/health/ready` は LTP 鮮度のまま 200 で、JSON の `book` と tick の `status: :book_missing` で板欠落を分ける。層キーがある値は平坦な bid/ask・時刻へ落ちない） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -52,7 +53,6 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 8 | ticker 2 層化 | `{ltp, book}` に分け、板欠落でも LTP 鮮度を残す。spread は book 欠落で拒否 | 板異常が `bid_ask_missing` として止まり、時計検査は LTP で通る |
 | 9 | DailyEquityPeak の GREATEST upsert | `inspect` 文字列一致をやめ、単調 upsert 1 文へ | 並行 Fill/enforce で過剰 unsynced にならない |
 | 10 | improvement-plan 運用 | 本ファイルの完了宣言に根拠行を必須化（本サイクルから適用） | 次回評価で「完了」と証跡が矛盾しない |
 

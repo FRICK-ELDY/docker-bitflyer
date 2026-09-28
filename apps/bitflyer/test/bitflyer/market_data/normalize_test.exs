@@ -17,7 +17,7 @@ defmodule Bitflyer.MarketData.NormalizeTest do
 
   test "from_ticker normalizes REST ticker body with source_timestamp and bid/ask" do
     assert {:ok, {:ticker, "FX_BTC_JPY"},
-            %{ltp: ltp, best_bid: bid, best_ask: ask, source_timestamp: ts}} =
+            %{ltp: %{price: ltp, source_timestamp: ts}, book: %{best_bid: bid, best_ask: ask}}} =
              Normalize.from_ticker(
                ticker(%{
                  "timestamp" => "2015-07-08T02:50:59.97"
@@ -34,29 +34,66 @@ defmodule Bitflyer.MarketData.NormalizeTest do
   end
 
   test "from_ticker allows missing timestamp as nil" do
-    assert {:ok, {:ticker, "FX_BTC_JPY"}, %{ltp: ltp, source_timestamp: nil}} =
+    assert {:ok, {:ticker, "FX_BTC_JPY"}, %{ltp: %{price: ltp, source_timestamp: nil}}} =
              Normalize.from_ticker(ticker(%{}))
 
     assert Decimal.equal?(ltp, Decimal.new(5_000_000))
   end
 
-  test "from_ticker rejects missing bid/ask" do
-    assert :error =
+  test "from_ticker keeps LTP when bid/ask is missing, zero, or crossed" do
+    assert {:ok, {:ticker, "FX_BTC_JPY"}, %{ltp: %{price: ltp}, book: nil}} =
              Normalize.from_ticker(%{
                "product_code" => "FX_BTC_JPY",
                "ltp" => 5_000_000,
                "best_bid" => 4_999_000
              })
-  end
 
-  test "from_ticker rejects crossed book" do
-    assert :error =
+    assert Decimal.equal?(ltp, Decimal.new(5_000_000))
+
+    assert {:ok, _, %{book: nil}} = Normalize.from_ticker(ticker(%{"best_bid" => 0}))
+
+    assert {:ok, _, %{ltp: %{price: crossed_ltp}, book: nil}} =
              Normalize.from_ticker(
                ticker(%{
                  "best_bid" => 5_002_000,
                  "best_ask" => 5_001_000
                })
              )
+
+    assert Decimal.equal?(crossed_ltp, Decimal.new(5_000_000))
+    assert :miss = Normalize.book(%{book: nil, ltp: %{price: crossed_ltp}})
+  end
+
+  test "a present book layer does not fall through to flat quotes or timestamps" do
+    now = DateTime.utc_now() |> DateTime.truncate(:millisecond)
+
+    mixed = %{
+      ltp: %{price: Decimal.new("5000000"), source_timestamp: nil},
+      book: nil,
+      best_bid: Decimal.new("4999000"),
+      best_ask: Decimal.new("5001000"),
+      source_timestamp: now
+    }
+
+    assert :miss = Normalize.book(mixed)
+    assert Normalize.source_timestamp(mixed) == nil
+    assert Decimal.equal?(Normalize.ltp_price(mixed), Decimal.new("5000000"))
+  end
+
+  test "flat ticker without layers still reads ltp, book, and timestamp" do
+    now = DateTime.utc_now() |> DateTime.truncate(:millisecond)
+
+    flat = %{
+      ltp: Decimal.new("5000000"),
+      best_bid: Decimal.new("4999000"),
+      best_ask: Decimal.new("5001000"),
+      source_timestamp: now
+    }
+
+    assert {:ok, bid, ask} = Normalize.book(flat)
+    assert Decimal.equal?(bid, Decimal.new("4999000"))
+    assert Decimal.equal?(ask, Decimal.new("5001000"))
+    assert DateTime.compare(Normalize.source_timestamp(flat), now) == :eq
   end
 
   test "from_ticker rejects invalid timestamp without raising" do
@@ -85,7 +122,10 @@ defmodule Bitflyer.MarketData.NormalizeTest do
       })
 
     assert {:ok, {:ticker, "FX_BTC_JPY"},
-            %{ltp: ltp, best_bid: bid, best_ask: ask, source_timestamp: %DateTime{}}} =
+            %{
+              ltp: %{price: ltp, source_timestamp: %DateTime{}},
+              book: %{best_bid: bid, best_ask: ask}
+            }} =
              Normalize.from_ws_frame(frame)
 
     assert Decimal.equal?(ltp, Decimal.new("5100000"))

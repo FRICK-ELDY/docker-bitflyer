@@ -9,11 +9,13 @@ defmodule Bitflyer.OperationalStatus do
   `Health` の `/health/ready` と `Risk.authorize/2` も同じ判定を使う
   （切断直後に ALLOWED / ready / 認可が矛盾しない）。
   接続の正本は `Feed.connection_snapshot/0`。`status/0` は購読回数など表示用。
+  板の有無（`book?`）は鮮度と別に載せる。板欠落だけでは ready を落とさない。
   """
 
   alias Bitflyer.MarketData
   alias Bitflyer.MarketData.Cache
   alias Bitflyer.MarketData.Feed
+  alias Bitflyer.MarketData.Normalize
   alias Bitflyer.Readiness
   alias Bitflyer.TradeMode
 
@@ -23,6 +25,7 @@ defmodule Bitflyer.OperationalStatus do
           product_code: String.t(),
           key: {:ticker, String.t()},
           fresh?: boolean(),
+          book?: boolean(),
           age_ms: non_neg_integer() | :miss
         }
 
@@ -30,6 +33,7 @@ defmodule Bitflyer.OperationalStatus do
           enabled?: boolean(),
           max_age_ms: pos_integer(),
           all_fresh?: boolean(),
+          all_books?: boolean(),
           entries: [market_entry()]
         }
 
@@ -150,11 +154,12 @@ defmodule Bitflyer.OperationalStatus do
         key = MarketData.ticker_key(product_code)
 
         case Cache.get(key, server) do
-          {:ok, _value, received_at} ->
+          {:ok, value, received_at} ->
             %{
               product_code: product_code,
               key: key,
               fresh?: Cache.entry_fresh?(received_at, max_age_ms, now),
+              book?: book?(value),
               age_ms: max(now - received_at, 0)
             }
 
@@ -163,6 +168,7 @@ defmodule Bitflyer.OperationalStatus do
               product_code: product_code,
               key: key,
               fresh?: false,
+              book?: false,
               age_ms: :miss
             }
         end
@@ -172,8 +178,13 @@ defmodule Bitflyer.OperationalStatus do
       enabled?: enabled?,
       max_age_ms: max_age_ms,
       all_fresh?: entries != [] and Enum.all?(entries, & &1.fresh?),
+      all_books?: entries != [] and Enum.all?(entries, & &1.book?),
       entries: entries
     }
+  end
+
+  defp book?(value) do
+    match?({:ok, _bid, _ask}, Normalize.book(value))
   end
 
   @doc """

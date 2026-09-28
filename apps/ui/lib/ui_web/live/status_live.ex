@@ -598,7 +598,10 @@ defmodule UiWeb.StatusLive do
               >
                 {entry.product_code}: {format_age_ms(entry.age_ms)}
                 <span class="text-base-content/50">
-                  ({if(entry.fresh?, do: gettext("fresh"), else: gettext("stale"))})
+                  ({if(entry.fresh?, do: gettext("fresh"), else: gettext("stale"))}{if(
+                    Map.get(entry, :book?) == false,
+                    do: ", " <> gettext("no book")
+                  )})
                 </span>
               </li>
             </ul>

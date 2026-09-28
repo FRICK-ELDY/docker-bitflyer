@@ -31,7 +31,7 @@ defmodule Bitflyer.Risk.Equity do
   require Ash.Query
 
   alias Bitflyer.MarketData
-  alias Bitflyer.MarketData.Cache
+  alias Bitflyer.MarketData.{Cache, Normalize}
   alias Bitflyer.Risk.{Circuit, DailyLoss, Limits}
   alias Bitflyer.Trading.Position
 
@@ -292,7 +292,7 @@ defmodule Bitflyer.Risk.Equity do
 
     case Cache.get(key, server) do
       {:ok, value, _received_at} ->
-        case extract_ltp(value) do
+        case Normalize.ltp_price(value) do
           %Decimal{} = ltp -> {:ok, ltp}
           _ -> :miss
         end
@@ -301,16 +301,6 @@ defmodule Bitflyer.Risk.Equity do
         :miss
     end
   end
-
-  defp extract_ltp(%{ltp: %Decimal{} = ltp}) do
-    if Decimal.positive?(ltp), do: ltp, else: nil
-  end
-
-  defp extract_ltp(%{"ltp" => %Decimal{} = ltp}) do
-    if Decimal.positive?(ltp), do: ltp, else: nil
-  end
-
-  defp extract_ltp(_), do: nil
 
   defp limits(opts) do
     opts

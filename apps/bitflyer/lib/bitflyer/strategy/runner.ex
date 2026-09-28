@@ -21,6 +21,7 @@ defmodule Bitflyer.Strategy.Runner do
 
   require Ash.Query
 
+  alias Bitflyer.MarketData.Normalize
   alias Bitflyer.Strategy
   alias Bitflyer.Strategy.Revision
   alias Bitflyer.Trading.Order
@@ -408,18 +409,14 @@ defmodule Bitflyer.Strategy.Runner do
   defp terminal_rejection?(_), do: false
 
   defp build_market(product_code, key, value) do
-    case Map.get(value, :ltp) || Map.get(value, "ltp") do
+    case Normalize.ltp_price(value) do
       %Decimal{} = ltp ->
-        if Decimal.positive?(ltp) do
-          {:ok,
-           %{
-             product_code: product_code,
-             market_key: key,
-             ltp: ltp
-           }}
-        else
-          :error
-        end
+        {:ok,
+         %{
+           product_code: product_code,
+           market_key: key,
+           ltp: ltp
+         }}
 
       _ ->
         :error

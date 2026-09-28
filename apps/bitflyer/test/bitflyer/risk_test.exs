@@ -9,7 +9,7 @@ defmodule Bitflyer.RiskTest do
   import Bitflyer.TestSupport.BalanceCacheHelper
   import Bitflyer.TestSupport.ReadinessHelper
 
-  alias Bitflyer.MarketData.Cache
+  alias Bitflyer.MarketData.{Cache, Normalize}
   alias Bitflyer.Readiness
   alias Bitflyer.Risk
   alias Bitflyer.Risk.{AuthorizedOrder, DailyLoss}
@@ -62,8 +62,11 @@ defmodule Bitflyer.RiskTest do
     skewed = DateTime.add(DateTime.utc_now(), -60, :second)
 
     assert Cache.put(@market_key, %{
-             ltp: Decimal.new("5000000"),
-             source_timestamp: skewed
+             ltp: %{price: Decimal.new("5000000"), source_timestamp: skewed},
+             book: %{
+               best_bid: Decimal.new("4999000"),
+               best_ask: Decimal.new("5001000")
+             }
            }) == :ok
 
     assert {:error, :clock_skew, %{skew_ms: skew_ms, max_ms: 5_000}} =
@@ -76,9 +79,11 @@ defmodule Bitflyer.RiskTest do
     assert Readiness.mark_ready() == :ok
 
     assert Cache.put(@market_key, %{
-             ltp: Decimal.new("5000000"),
-             best_bid: Decimal.new("4999000"),
-             best_ask: Decimal.new("5001000")
+             ltp: %{price: Decimal.new("5000000"), source_timestamp: nil},
+             book: %{
+               best_bid: Decimal.new("4999000"),
+               best_ask: Decimal.new("5001000")
+             }
            }) == :ok
 
     assert {:error, :clock_skew, %{reason: :missing_source_timestamp}} =
@@ -89,10 +94,14 @@ defmodule Bitflyer.RiskTest do
     assert Readiness.mark_ready() == :ok
 
     assert Cache.put(@market_key, %{
-             ltp: Decimal.new("5000000"),
-             best_bid: Decimal.new("4999000"),
-             best_ask: Decimal.new("5001000"),
-             source_timestamp: DateTime.utc_now()
+             ltp: %{
+               price: Decimal.new("5000000"),
+               source_timestamp: DateTime.utc_now()
+             },
+             book: %{
+               best_bid: Decimal.new("4999000"),
+               best_ask: Decimal.new("5001000")
+             }
            }) == :ok
 
     assert {:ok, %AuthorizedOrder{}} = Risk.authorize(valid_command(), positions: [])
@@ -750,6 +759,58 @@ defmodule Bitflyer.RiskTest do
 
     assert {:error, :stale, %{reason: :bid_ask_missing}} =
              Risk.balance_hold(valid_command(%{order_type: :market}), trade_mode: :live)
+  end
+
+  test "crossed book stays fresh and market orders stop as bid_ask_missing" do
+    assert Readiness.mark_ready() == :ok
+
+    assert {:ok, key, value} =
+             Normalize.from_ticker(%{
+               "product_code" => "BTC_JPY",
+               "ltp" => 5_000_000,
+               "best_bid" => 5_002_000,
+               "best_ask" => 5_001_000,
+               "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+             })
+
+    assert value.book == nil
+    assert :ok = Cache.put(key, value)
+    assert Cache.fresh?(key, 5_000)
+    assert :ok = Risk.check_source_timestamp(value, 5_000)
+
+    parent = self()
+    handler_id = "risk-book-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:bitflyer, :risk, :rejected],
+        fn event, measurements, metadata, _config ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert {:error, :stale, %{reason: :bid_ask_missing}} =
+             Risk.authorize(valid_command(%{order_type: :market}), positions: [])
+
+    assert_receive {:telemetry, [:bitflyer, :risk, :rejected], %{count: 1}, metadata}
+    assert metadata.rejection_code == :stale
+    assert metadata.reason == :stale
+    assert metadata.detail == :bid_ask_missing
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(
+               valid_command(%{
+                 order_type: :limit,
+                 price: Decimal.new("5000000"),
+                 size: Decimal.new("0.01")
+               }),
+               positions: [],
+               limits: %{max_price_deviation_pct: Decimal.new("1")}
+             )
   end
 
   test "authorize rejects market order when bid/ask missing from cache" do

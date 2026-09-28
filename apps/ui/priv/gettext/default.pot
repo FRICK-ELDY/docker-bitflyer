@@ -114,6 +114,11 @@ msgstr ""
 msgid "fresh"
 msgstr ""
 
+#: lib/ui_web/live/status_live.ex
+#, elixir-autogen, elixir-format
+msgid "no book"
+msgstr ""
+
 #: lib/ui_web/live/status_live.ex:757
 #, elixir-autogen, elixir-format
 msgid "miss"
