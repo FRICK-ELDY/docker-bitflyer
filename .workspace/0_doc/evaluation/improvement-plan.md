@@ -1,6 +1,6 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-29（再評価で完了主張 11 件の矛盾却下は 0。P2 #10 を完了にした。監視は未達のまま）
+最終更新: 2026-09-29（P1 #5 の完了条件を、作業PCへの登録から専用監視PCの準備と検知記録へ改めた。監視PCは未用意）
 根拠: [evaluation-2026-09-29.md](./evaluation-2026-09-29.md) / [specific-weaknesses-2026-09-29.md](./specific-weaknesses-2026-09-29.md)
 
 方針: **利益機能より資金保全・復帰・観測を先に直す。** 連続 live の前に残るハード条件は P1 #5（別ホスト監視）である。戦略の高度化はその後。
@@ -43,7 +43,7 @@ P0 に未完了は無い。前回まで P0 だった commission とハーネス�
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
 | 3 | HWM 認可後 crash 窓 | **部分完了 (2026-09-29 維持)。** writer 不在は認可しない。upsert 失敗は再送する。通常停止の drain と fsync 印は入った。残るのはノード強制終了で DailyLoss と PeakWriter の両メモリが消える窓（`peak_writer.ex` が明記。重みは `-1`） | 認可直後の強制終了でも DB 高値が残るテストがある |
-| 5 | 別ホスト監視の実配備 | 作業 PC で `register-watch-ready-task.ps1` を VLAN1 の `READY_URL` に向けて登録。証跡を [watch-ready-evidence.md](../architecture/env/watch-ready-evidence.md) に「本番向き常駐」として残す。2026-09-29 時点の証跡は 2026-09-13 の同一ホスト・未登録のまま | 取引ホスト停止を外から検知した記録がある |
+| 5 | 専用監視PCからの実配備 | **未着手。** 監視は作業用PCに載せない。開発・移動・再起動がある作業PCは 24/365 の探針にならない。専用の監視PCを一台用意し、そのPCだけが VLAN1 本番の `/health/ready` を常駐で引く。2026-09-29 時点ではそのPCは未用意。2026-09-13 の記録は作業PC上の開発 Compose に対する手順確認であり、配備には数えない。証跡は [watch-ready-evidence.md](../architecture/env/watch-ready-evidence.md) | 専用監視PC（本番PCでも作業用PCでもない）から、取引ホストの停止を検知した記録がある。作業用PCへの Scheduled Task 登録だけでは完了にしない |
 
 ---
 
