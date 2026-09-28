@@ -11,7 +11,7 @@ defmodule Bitflyer.Risk do
   live spot 売りカバー（買い建玉 − 未約定売りの base 負担。手数料余白込み） → 価格逸脱 →
   成行 spread（`max_spread_pct`。板欠落は `bid_ask_missing`。LTP 鮮度と時計は残る） →
   発注頻度予約 → 日次損失 → 日次ドローダウン（realized+unrealized） → 残高。
-  live は先に銘柄種別を検査し、spot 以外（FX/CFD）を拒否する。
+  live は先に銘柄を検査し、一次証跡の無いペア（spot の `ETH_JPY` を含む）と FX/CFD を拒否する。
   live は `max_open_age_ms` が有限でないと認可しない（GTC 無期限を防ぐ）。
   live spot の売りは Position なしのベースライン在庫を対象にしない。
 
@@ -258,7 +258,8 @@ defmodule Bitflyer.Risk do
     end
   end
 
-  # live は spot のみ（getbalance モデル）。FX は証拠金未実装のため拒否。
+  # live は Product.live_evidenced?/1 が真の銘柄だけ通す。当面は BTC_JPY。
+  # 証跡の無い spot（ETH_JPY など）と FX は unsupported_product_for_live。
   defp check_live_product(command, opts) do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
     product_code = Map.get(command, :product_code)
@@ -267,7 +268,7 @@ defmodule Bitflyer.Risk do
       trade_mode != :live ->
         :ok
 
-      Product.spot?(product_code) ->
+      is_binary(product_code) and Product.live_evidenced?(product_code) ->
         :ok
 
       true ->
@@ -275,10 +276,15 @@ defmodule Bitflyer.Risk do
          %{
            reason: :unsupported_product_for_live,
            product_code: product_code,
-           market_type: Product.market_type(product_code)
+           market_type: market_type(product_code)
          }}
     end
   end
+
+  defp market_type(product_code) when is_binary(product_code),
+    do: Product.market_type(product_code)
+
+  defp market_type(_product_code), do: :unsupported
 
   defp check_live_open_age(opts) do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)

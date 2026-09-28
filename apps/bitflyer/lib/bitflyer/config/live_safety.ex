@@ -26,7 +26,7 @@ defmodule Bitflyer.Config.LiveSafety do
   live 向けに Strategy / Risk を上書きする（runtime 結合の入口）。
 
   成功時は `{strategy_cfg, risk_cfg}`。不正時は `ArgumentError`。
-  併せて `MarketData.product_codes` がすべて spot であることを要求する。
+  併せて `MarketData.product_codes` がすべて一次証跡のある銘柄であることを要求する。
   """
   @spec apply_live_overrides!(keyword(), keyword(), (String.t() -> String.t() | nil)) ::
           {keyword(), keyword()}
@@ -44,7 +44,7 @@ defmodule Bitflyer.Config.LiveSafety do
   end
 
   @doc """
-  live は spot 銘柄のみ。FX/CFD が混ざっていれば起動停止。
+  live は手数料の一次証跡がある銘柄のみ。他の spot と FX/CFD は起動停止。
   """
   @spec assert_live_products!([String.t()]) :: :ok
   def assert_live_products!(product_codes) when is_list(product_codes) do
@@ -53,21 +53,21 @@ defmodule Bitflyer.Config.LiveSafety do
     if codes == [] do
       raise ArgumentError, """
       MarketData product_codes must be non-empty when TRADE_MODE=live.
-      Set a spot product such as BTC_JPY.
+      Set an evidenced product such as BTC_JPY.
       """
     end
 
-    bad =
-      Enum.reject(codes, fn code ->
-        Bitflyer.Trading.Product.spot?(code)
-      end)
+    bad = Enum.reject(codes, &Bitflyer.Trading.Product.live_evidenced?/1)
 
     if bad != [] do
+      allowed = Bitflyer.Trading.Product.live_evidenced_products() |> Enum.join(", ")
+
       raise ArgumentError, """
-      TRADE_MODE=live only supports spot products (e.g. BTC_JPY).
+      TRADE_MODE=live only supports products with commission evidence (currently #{allowed}).
 
       Unsupported product_codes: #{Enum.join(bad, ", ")}.
-      FX/CFD requires getcollateral (not implemented). Keep Bitflyer.MarketData product_codes on spot.
+      Other spot pairs stay out until a measured buy/sell table is added.
+      FX/CFD requires getcollateral (not implemented).
       """
     end
 

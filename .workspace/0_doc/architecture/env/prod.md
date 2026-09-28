@@ -28,6 +28,7 @@
 | 未約定 TTL | `BITFLYER_MAX_OPEN_AGE_MS`（正の整数 ms、上限 7 日）。live 必須。欠落・`infinity`・上限超過は起動停止 |
 | 取引所エラー | 401/403 は即 `:auth_failed` サーキット。その他の確定拒否は窓内 N 回（既定 60s / 5 回）で `:consecutive_exchange_errors`。鍵を直したあとは突合→`mix bitflyer.resume` |
 | Strategy | 既定無効。`BITFLYER_STRATEGY_ENABLED=true` が必要。`FixedOnce` は live で有効化不可 |
+| 銘柄 | `Product.live_evidenced?/1` のみ。当面 `BTC_JPY`。`ETH_JPY` など証跡の無い spot と `FX_*` は起動と認可で拒否する。追加は [commission-unit-evidence.md](./commission-unit-evidence.md) に買い・売りの `size` / `price` / `commission` / 実差分を足してから集合へ入れる |
 
 ## bitFlyer API キー
 

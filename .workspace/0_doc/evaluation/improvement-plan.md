@@ -22,13 +22,14 @@
 | P2 #8 | ticker bid/ask → spread ゲート | **完了**（2026-09-16。`risk_test` は spread 4%・上限 0.5% の成行を `max_spread_pct` で拒否する。2026-09-29 再読で見方との矛盾なし） |
 | P2 #9（ash.codegen） | ash.codegen --check / Sandbox manual / README | **完了**（2026-09-16。precommit に `ash.codegen --check --domains Bitflyer.Trading`。両 `test_helper.exs` は Sandbox `:manual`。2026-09-29 再読で見方との矛盾なし） |
 | P2 #10 | improvement-plan 運用 | **完了**（2026-09-29。完了主張 11 件をコードまたは証跡と突き合わせ、見方と矛盾して却下した項目は 0。記録は [evaluation-2026-09-29.md](./evaluation-2026-09-29.md) の採否表） |
-| P0 #1 | commission 一次証跡 | **完了**（2026-09-28。買い …6098 / 売り …6123 の実差分が更新後 expected と JPY 1 円・BTC 1 satoshi 以内。2026-09-29 再読で見方との矛盾なし。適用範囲は BTC_JPY。他銘柄は P2 #16） |
+| P0 #1 | commission 一次証跡 | **完了**（2026-09-28。買い …6098 / 売り …6123 の実差分が更新後 expected と JPY 1 円・BTC 1 satoshi 以内。2026-09-29 再読で見方との矛盾なし。適用範囲は BTC_JPY。他銘柄の live 通過は P2 #16 で証跡集合に閉じた） |
 | P0 #2 | ハーネス独立性 | **完了**（2026-09-28。`:quote_mark` の売りは発注→約定同期→Reconciler で `balance_mismatch` halt。既定の縦回帰は Ready。2026-09-29 再読で見方との矛盾なし） |
 | P2 #7（2026-09-28） | 成行拘束の ask 化 | **完了**（2026-09-28。live 成行買いの probe/reserve は `best_ask × size` ちょうど。ask 欠落は `bid_ask_missing`。最上段を超える超過は未拘束のまま。見方（ask 拘束）は満たす。超過は P2 #19） |
 | P2 #8 | ticker 2 層化 | **完了**（2026-09-28。crossed / 欠落 / ゼロの板は `book: nil` のまま LTP を Cache に載せる。成行認可は `bid_ask_missing`。2026-09-29 再読で見方との矛盾なし） |
 | P2 #9（2026-09-29） | DailyEquityPeak の GREATEST upsert | **完了**（2026-09-29。`upsert/3` は `INSERT ... ON CONFLICT DO UPDATE SET peak = GREATEST(...)` の 1 文。別接続 3 本で保存 peak は最高値。2026-09-29 再読で見方との矛盾なし） |
 | P1 #3 | HWM 認可後 crash 窓 | **完了**（2026-09-29。`peak_writer_test` の `write-behind success leaves the DB peak after both processes are discarded` は `record_peak` が `160000` を返したあと PeakWriter を kill し `DailyLoss.reinit` してもその peak が残る。upsert 失敗の enqueue は `{:error, :unsynced}`） |
 | P1 #5 | 作業PCでの ready 常駐 | **完了**（2026-09-29。見方を先に「作業PCの `BitflyerWatchReady` が `/health/ready` を引き、失敗が証跡ログに残り、解除手順がある」へ書き換えた。`Get-ScheduledTask -TaskName BitflyerWatchReady` の State は Running。`%LOCALAPPDATA%\bitflyer\watch-ready.log` に `2026-09-28T17:28:41Z result=fail http=000` と `2026-09-28T17:29:43Z result=fail http=000`。解除は `bin/unregister-watch-ready-task.ps1`） |
+| P2 #16 | live 銘柄を一次証跡へ合わせる | **完了**（2026-09-29。`live_safety_test` の `apply_live_overrides! rejects ETH_JPY alone or mixed with BTC_JPY` は `["ETH_JPY"]` と `["BTC_JPY", "ETH_JPY"]` の両方で `ArgumentError`。`risk_test` の `live rejects ETH_JPY because commission evidence is BTC_JPY only` は live 認可が `unsupported_product_for_live`。82 tests, 0 failures） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -50,7 +51,6 @@ P0 に未完了は無い。前回まで P0 だった commission とハーネス�
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 16 | live 銘柄を一次証跡へ合わせる | `Risk` と `LiveSafety` が `Product.spot?/1` 全体ではなく、証跡のある銘柄（当面 `BTC_JPY`）だけを live で通す。他ペアは実測表を足してから集合に入れる | `ETH_JPY` を live の product_codes にすると起動または認可不通過になるテストがある |
 | 17 | `halted_at` を起点のまま残す | 既に halted かつ同一 reason の再突合では `halted_at` を更新しない | 周期失敗の 2 回目で `halted_at` が変わらないテストがある |
 | 18 | PeakWriter の再試行間隔 | 50ms 固定を上限付きの退避にし、同一失敗の error ログは初回と間引きだけにする | DB 失敗が続くテストで再試行間隔が延び、同じ error が連続しない |
 | 19 | 成行買いの板厚超過 | 深さ付き板か、保守的な余白を best ask の拘束に足す。P2 #7 の ask 拘束は完了のまま、この残差だけを閉じる | 最上段数量を超えるサイズで、拘束額が ask×size より大きい回帰がある |
