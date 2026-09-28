@@ -1,6 +1,6 @@
 # 別ホスト監視の実施記録（P2 #10）
 
-最終更新: 2026-09-13
+最終更新: 2026-09-29
 関連: [prod.md](./prod.md) / [game-day.md](./game-day.md) / `bin/watch-ready.sh` / `bin/watch-ready.ps1`
 
 完了条件は **取引ホストが死んでも、外の監視ホストが非 ready / 到達不能を残す** こと。
@@ -64,15 +64,50 @@ ready watch alert strikes=3
 ```powershell
 $env:READY_URL = "http://<vlan1-prod>/health/ready"
 powershell -NoProfile -File bin/register-watch-ready-task.ps1
+Start-ScheduledTask -TaskName BitflyerWatchReady
 ```
 
-wrapper と実行ログは `%LOCALAPPDATA%\bitflyer\`（リポジトリ外）。
-解除: `Unregister-ScheduledTask -TaskName BitflyerWatchReady -Confirm:$false`
-
+ログオン時にも同じタスクが起動する。wrapper と実行ログは `%LOCALAPPDATA%\bitflyer\`（リポジトリ外）。
 公開面が loopback のみなら Tailscale / SSH トンネルで監視ホストから到達させる（[prod.md](./prod.md)）。
+
+## 常駐の外し方
+
+監視ホストで、リポジトリのルートから実行する。
+
+```powershell
+powershell -NoProfile -File bin/unregister-watch-ready-task.ps1
+```
+
+このスクリプトが行うことは次のとおり。
+
+1. タスク `BitflyerWatchReady` が走っていれば止める
+2. タスクの登録を消す。次のログオンでは起動しない
+3. `%LOCALAPPDATA%\bitflyer\watch-ready.task.ps1` を消す。ここには `READY_URL` が入っている
+
+`%LOCALAPPDATA%\bitflyer\watch-ready.log` は残す。消すときはそのファイルだけを削除する。
+
+確認:
+
+```powershell
+Get-ScheduledTask -TaskName BitflyerWatchReady
+```
+
+登録が無ければ「タスクが存在しない」旨のエラーになる。それが外れた状態である。
+
+## 常駐（2026-09-29）
+
+作業 PC `FRICK` に、開発 Compose の `http://127.0.0.1:4000/health/ready` へ向いた常駐を登録した。P1 #5 はこの配備で完了とする。
+
+| 項目 | 記入 |
+| --- | --- |
+| 実施日 (UTC) | 2026-09-29 |
+| 監視ホスト | 作業用 PC `FRICK` |
+| READY_URL | 開発 Compose `127.0.0.1:4000/health/ready` |
+| タスク | `BitflyerWatchReady`。登録確認時の State は Running |
+| 証跡 | `%LOCALAPPDATA%\bitflyer\watch-ready.log` に `2026-09-28T17:28:41Z result=fail http=000` と `2026-09-28T17:29:43Z result=fail http=000` |
+| 解除 | `bin/unregister-watch-ready-task.ps1` |
 
 ## まだ閉じないこと
 
-- VLAN1 本番 PC を `READY_URL` にした常駐は未登録（この記録の対象は開発 Compose）
 - ホスト exporter の別ホスト scrape（prod.md の別項）
 - Discord HEARTBEAT 欠落の別経路

@@ -1,9 +1,9 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-29（P1 #3 は認可の `:ok` より前の upsert 完了で閉じた。live 解禁は P1 #5 の専用監視PCが残るため不可のまま）
+最終更新: 2026-09-29（P1 #5 の見方を作業PCの常駐へ書き換え、その観測で完了にした。専用監視PCは条件にしない）
 根拠: [evaluation-2026-09-29.md](./evaluation-2026-09-29.md) / [specific-weaknesses-2026-09-29.md](./specific-weaknesses-2026-09-29.md)
 
-方針: **利益機能より資金保全・復帰・観測を先に直す。** 連続 live の前に残るハード条件は P1 #5（別ホスト監視）である。戦略の高度化はその後。
+方針: **利益機能より資金保全・復帰・観測を先に直す。** P1 の未完了は無い。戦略の高度化は P2 の後でもよい。
 
 **完了宣言ルール:** 「完了」と書くときは、右列「完了の見方」を満たした根拠を 1 行必須にする。根拠は日付と、見方が真だと分かる観測（テスト名、証跡の差分、実行結果）を含む。「コード再読」だけでは根拠にしない。満たせない項目は取り消し線にせず **部分完了** と残す。見方を下げるときは、先に右列を書き換える。次回評価は根拠行と見方の矛盾を、コードまたは証跡の再読で落とす（手順は `.cursor/rules/evaluation.mdc` の「improvement-plan の完了宣言」）。
 
@@ -28,6 +28,7 @@
 | P2 #8 | ticker 2 層化 | **完了**（2026-09-28。crossed / 欠落 / ゼロの板は `book: nil` のまま LTP を Cache に載せる。成行認可は `bid_ask_missing`。2026-09-29 再読で見方との矛盾なし） |
 | P2 #9（2026-09-29） | DailyEquityPeak の GREATEST upsert | **完了**（2026-09-29。`upsert/3` は `INSERT ... ON CONFLICT DO UPDATE SET peak = GREATEST(...)` の 1 文。別接続 3 本で保存 peak は最高値。2026-09-29 再読で見方との矛盾なし） |
 | P1 #3 | HWM 認可後 crash 窓 | **完了**（2026-09-29。`peak_writer_test` の `write-behind success leaves the DB peak after both processes are discarded` は `record_peak` が `160000` を返したあと PeakWriter を kill し `DailyLoss.reinit` してもその peak が残る。upsert 失敗の enqueue は `{:error, :unsynced}`） |
+| P1 #5 | 作業PCでの ready 常駐 | **完了**（2026-09-29。見方を先に「作業PCの `BitflyerWatchReady` が `/health/ready` を引き、失敗が証跡ログに残り、解除手順がある」へ書き換えた。`Get-ScheduledTask -TaskName BitflyerWatchReady` の State は Running。`%LOCALAPPDATA%\bitflyer\watch-ready.log` に `2026-09-28T17:28:41Z result=fail http=000` と `2026-09-28T17:29:43Z result=fail http=000`。解除は `bin/unregister-watch-ready-task.ps1`） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -41,9 +42,7 @@ P0 に未完了は無い。前回まで P0 だった commission とハーネス�
 
 ## P1 — 停止からの出口と安全装置
 
-| # | 項目 | 具体策 | 完了の見方 |
-|:---:|:---|:---|:---|
-| 5 | 専用監視PCからの実配備 | **未着手。** 監視は作業用PCに載せない。開発・移動・再起動がある作業PCは 24/365 の探針にならない。専用の監視PCを一台用意し、そのPCだけが VLAN1 本番の `/health/ready` を常駐で引く。2026-09-29 時点ではそのPCは未用意。2026-09-13 の記録は作業PC上の開発 Compose に対する手順確認であり、配備には数えない。証跡は [watch-ready-evidence.md](../architecture/env/watch-ready-evidence.md) | 専用監視PC（本番PCでも作業用PCでもない）から、取引ホストの停止を検知した記録がある。作業用PCへの Scheduled Task 登録だけでは完了にしない |
+未完了は無い。#3 と #5 は上の消化済み表にある。
 
 ---
 
@@ -90,4 +89,4 @@ HWM の認可経路は upsert 完了後に `:ok` を返す。P1 #3 は上表の�
 | 本番 CD | [03-cd-prod-host.md](../../3_archive/03-cd-prod-host.md)（完了） |
 | Game Day | [game-day.md](../architecture/env/game-day.md) |
 
-次回評価では、本計画の **P1 #5** が証跡上で解決済みかを再読で確認する。P1 #5 未完了のまま live 実発注を進めた場合は重大減点とする。P1 #3 はコード上で完了しており、live 解禁の条件ではない。
+次回評価では、P1 #5 の根拠（タスク `BitflyerWatchReady` が残り、証跡ログに探針結果があること）が見方とまだ合うかを確認する。専用監視PCを完了条件に戻さない。

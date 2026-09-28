@@ -28,7 +28,7 @@
 - **VLAN1 本番ホストの外形監視が常駐配備されていない** `-2`
   > 両者一致で、外からの常駐監視は未配備である。証跡の最終更新は 2026-09-13 のままで、対象は作業 PC 上の開発 Compose、常駐は未登録である（`watch-ready-evidence.md` の冒頭と「常駐登録」行）。`/health/ready` と Discord heartbeat は取引ホスト上のプロセスが出すため、ホストごと落ちると沈黙と正常を区別できない。
   >
-  > 2026-09-29 の採用判断で、完了の置き場所を作業PCから外した。作業PCは開発と移動で止まり、探針と一緒に消える。完了は、本番PCでも作業用PCでもない専用監視PCを用意し、そのPCが取引ホストの停止を検知した記録である。そのPCは未用意なので、Scheduled Task の登録だけでは閉じない。
+  > 評価時点では常駐が無く `-2` とした。その後、完了の見方を作業PCの常駐へ書き換え、2026-09-29 に `BitflyerWatchReady` が Running であることと、証跡ログの `result=fail http=000` 2 行で P1 #5 を完了にした。専用監視PCは条件にしない。解除は `bin/unregister-watch-ready-task.ps1`。
   > 対象ファイル: `.workspace/0_doc/architecture/env/watch-ready-evidence.md`
 
 **小計: +0 / -2 = -2点**

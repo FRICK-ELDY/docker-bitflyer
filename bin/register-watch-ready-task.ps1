@@ -5,7 +5,7 @@
 #   $env:READY_URL = "http://<prod>/health/ready"
 #   powershell -NoProfile -File bin/register-watch-ready-task.ps1
 #
-# 解除: Unregister-ScheduledTask -TaskName BitflyerWatchReady -Confirm:$false
+# 解除: powershell -NoProfile -File bin/unregister-watch-ready-task.ps1
 
 $ErrorActionPreference = "Stop"
 
@@ -41,7 +41,7 @@ $lines += "& `"$script`""
 Set-Content -LiteralPath $wrapper -Value $lines -Encoding UTF8
 
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument (
-    "-NoProfile -WindowStyle Hidden -File `"$wrapper`""
+    "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$wrapper`""
 )
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet `

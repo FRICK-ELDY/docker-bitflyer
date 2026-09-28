@@ -147,6 +147,7 @@ $env:READY_URL = "http://<vlan1-prod>/health/ready"
 $env:READY_EVIDENCE = "$env:LOCALAPPDATA\bitflyer\watch-ready.log"
 powershell -NoProfile -File bin/watch-ready.ps1
 # 常駐タスク: powershell -NoProfile -File bin/register-watch-ready-task.ps1
+# 解除: powershell -NoProfile -File bin/unregister-watch-ready-task.ps1
 ```
 
 Uptime Kuma（安価 VPS など）の例: Monitor type HTTP(s)、URL 上記、Keyword `"status":"ready"`、間隔 60s、retries 3。失敗で Discord / メール。Kuma 自体は取引 PC に置かない。
