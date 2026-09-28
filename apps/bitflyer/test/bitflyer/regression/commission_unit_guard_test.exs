@@ -5,8 +5,8 @@ defmodule Bitflyer.Regression.CommissionUnitGuardTest do
   `getexecutions_btc_jpy_fee.json` と取引所残高（base fee モデル）だけで、
   commission を quote（JPY）と決め打ちした旧実装が reconcile 失敗することを固定する。
 
-  ハーネスが quote だけから fee を引く退行は本ファイル外。
-  `live_balance_advance_test` の `apply_fill deducts commission from base...` が担当する。
+  ハーネスの `:base_deduct` / `:quote_mark` 縦回帰は
+  `live_balance_advance_test` の quote_mark 反証。本ファイルの JPY 決め打ちは維持する。
   """
 
   use ExUnit.Case, async: true

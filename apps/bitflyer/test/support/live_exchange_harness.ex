@@ -3,7 +3,8 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
 
   # P0 #1/#2 用の擬似取引所。Agent に注文・約定・残高を持ち、
   # テストプロセスと Reconciler の両方から同じ正本を読む。
-  # 約定の `commission` は `Product.fee_currency/1` に従う（BTC_JPY は BTC）。
+  # 既定の売りモデルは `:base_deduct`（2026-09-28 の BTC_JPY 実測）。
+  # `:quote_mark` は反証用。内部 explain とは独立に残高を動かす。
 
   @behaviour Bitflyer.Exchange.Client
   use Bitflyer.TestSupport.ExchangeClientStubs
@@ -122,6 +123,26 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
     Agent.get(__MODULE__, & &1.balances)
   end
 
+  @doc """
+  売り約定の残高モデル。既定は `:base_deduct`。
+
+  `:quote_mark` は手数料を quote の受取から引く旧仮説で、縦回帰の反証に使う。
+  """
+  @spec set_sell_fee_model(:base_deduct | :quote_mark) :: :ok
+  def set_sell_fee_model(model) when model in [:base_deduct, :quote_mark] do
+    Agent.update(__MODULE__, &Map.put(&1, :sell_fee_model, model))
+    :ok
+  end
+
+  @doc """
+  注文と残高を初期状態に戻す。`sell_fee_model` は引数で決める。
+  """
+  @spec reset!(:base_deduct | :quote_mark) :: :ok
+  def reset!(model \\ :base_deduct) when model in [:base_deduct, :quote_mark] do
+    Agent.update(__MODULE__, fn _ -> Map.put(initial_state(), :sell_fee_model, model) end)
+    :ok
+  end
+
   defp initial_state do
     %{
       orders: %{},
@@ -129,7 +150,8 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
       balances: [
         %{currency: "JPY", amount: @jpy, available: @jpy},
         %{currency: "BTC", amount: @btc, available: @btc}
-      ]
+      ],
+      sell_fee_model: :base_deduct
     }
   end
 
@@ -165,10 +187,12 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
     amount = balance_amount(state.balances, base)
     available = balance_available(state.balances, base)
 
-    # place は available からこの注文の size を既に引いている。手数料は残りの available から出る。
+    # place は available からこの注文の size を既に引いている。
+    # `:base_deduct` では手数料は残りの available から出る。`:quote_mark` では quote から出る。
     # 他注文が握っている分は amount には残っているので、available と比較する。
-    fee_need = if fee_ccy == base, do: fee, else: Decimal.new(0)
-    gross = if fee_ccy == base, do: Decimal.add(exec.size, fee), else: exec.size
+    base_fee? = fee_ccy == base and state.sell_fee_model != :quote_mark
+    fee_need = if base_fee?, do: fee, else: Decimal.new(0)
+    gross = if base_fee?, do: Decimal.add(exec.size, fee), else: exec.size
 
     cond do
       not match?(%Decimal{}, order_size) ->
@@ -242,7 +266,8 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
 
   # 拘束は place 時に available から引く。約定では amount だけ動かし、
   # 他注文の残拘束を available=amount で消さない。
-  # commission は拘束外。spot の base fee は買いも売りも base 残高から引く。
+  # commission は拘束外。買いは base fee なら base から引く。
+  # 売りは `sell_fee_model`（既定 `:base_deduct`。反証は `:quote_mark`）。
   defp apply_execution_balances(state, %{side: :buy} = order, exec) do
     notional = Decimal.mult(exec.size, exec.price)
     fee = execution_fee(exec)
@@ -277,15 +302,22 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
     base = Bitflyer.Trading.Product.base_currency(product)
     fee_ccy = Bitflyer.Trading.Product.fee_currency(product)
 
+    quote_mark? = state.sell_fee_model == :quote_mark and fee_ccy == base
+
     credited =
-      if fee_ccy == quote_ccy do
-        Decimal.sub(notional, fee)
-      else
-        notional
+      cond do
+        quote_mark? ->
+          Decimal.sub(notional, Decimal.mult(fee, exec.price))
+
+        fee_ccy == quote_ccy ->
+          Decimal.sub(notional, fee)
+
+        true ->
+          notional
       end
 
     {base_amount, base_available} =
-      if fee_ccy == base do
+      if fee_ccy == base and not quote_mark? do
         {Decimal.negate(Decimal.add(exec.size, fee)), Decimal.negate(fee)}
       else
         {Decimal.negate(exec.size), Decimal.new(0)}

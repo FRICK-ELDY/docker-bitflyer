@@ -22,7 +22,7 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
   alias Bitflyer.OrderExecutor.LiveFills
   alias Bitflyer.Readiness
   alias Bitflyer.Risk.{DailyLoss, Equity}
-  alias Bitflyer.Startup.Reconciler
+  alias Bitflyer.Startup.{LiveBalance, Reconciler}
   alias Bitflyer.System
   alias Bitflyer.TestSupport.LiveExchangeHarness
   alias Bitflyer.Trading.{BalanceSnapshot, Fill, Order, Position, RiskState}
@@ -358,6 +358,79 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
              })
 
     assert LiveExchangeHarness.balances() == before
+  end
+
+  test "quote_mark harness sell fails the observed base-deduct explain" do
+    captured = ~U[2026-09-01 00:00:00.000000Z]
+    filled_at = ~U[2026-09-01 00:01:00.000000Z]
+    size = Decimal.new("0.01")
+    fee = Decimal.new("0.00001")
+
+    fill = %{
+      product_code: @product,
+      side: :sell,
+      size: size,
+      price: @price,
+      fee: fee,
+      fee_currency: "BTC",
+      inserted_at: filled_at
+    }
+
+    tips = [
+      %{currency: "JPY", amount: @jpy, available: @jpy, captured_at: captured},
+      %{currency: "BTC", amount: @btc, available: @btc, captured_at: captured}
+    ]
+
+    for model <- [:base_deduct, :quote_mark] do
+      assert :ok = LiveExchangeHarness.reset!(model)
+
+      assert {:ok, %{exchange_order_id: id}} =
+               LiveExchangeHarness.place_order(%{
+                 product_code: @product,
+                 side: :sell,
+                 size: size,
+                 order_type: :market,
+                 price: @price,
+                 internal_order_id: "p0-2-#{model}"
+               })
+
+      assert :ok =
+               LiveExchangeHarness.apply_fill(id, %{
+                 id: "exec-p0-2-#{model}",
+                 size: size,
+                 price: @price,
+                 commission: fee
+               })
+
+      balances = LiveExchangeHarness.balances()
+      jpy = Enum.find(balances, &(&1.currency == "JPY"))
+      btc = Enum.find(balances, &(&1.currency == "BTC"))
+
+      explained =
+        LiveBalance.explain(
+          tips,
+          [
+            %{currency: "JPY", amount: jpy.amount, available: jpy.available},
+            %{currency: "BTC", amount: btc.amount, available: btc.available}
+          ],
+          ["JPY", "BTC"],
+          fills: [fill],
+          fee_tolerance_bps: "0",
+          fee_tolerance_abs: %{"JPY" => "0", "BTC" => "0"}
+        )
+
+      case model do
+        :base_deduct ->
+          assert {:ok, _} = explained
+          assert Decimal.eq?(jpy.amount, Decimal.new("1050000"))
+          assert Decimal.eq?(btc.amount, Decimal.new("0.48999"))
+
+        :quote_mark ->
+          assert {:error, :reconcile_mismatch, %{kind: :balance_mismatch}} = explained
+          assert Decimal.eq?(jpy.amount, Decimal.new("1049950"))
+          assert Decimal.eq?(btc.amount, Decimal.new("0.49"))
+      end
+    end
   end
 
   defp submit_live!(internal_order_id, overrides \\ %{}) do
