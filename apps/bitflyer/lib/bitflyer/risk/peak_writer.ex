@@ -260,17 +260,10 @@ defmodule Bitflyer.Risk.PeakWriter do
     {:noreply, flush_key(state, key)}
   end
 
-  # テストが待ちを待たずに次の試行へ進める。そのキーのタイマーだけを外す。
+  # テストが待ちを待たずに再送する。どのタイマーが先かは Map の並びに寄らない。
   def handle_info(:flush, state) do
-    case Enum.at(state.retry_timers, 0) do
-      {key, timer} ->
-        if is_reference(timer), do: Process.cancel_timer(timer)
-        state = %{state | retry_timers: Map.delete(state.retry_timers, key)}
-        {:noreply, flush_key(state, key)}
-
-      nil ->
-        {:noreply, flush_ready(state)}
-    end
+    state = cancel_all_retry_timers(state)
+    {:noreply, flush_ready(state)}
   end
 
   @impl true
@@ -324,6 +317,10 @@ defmodule Bitflyer.Risk.PeakWriter do
     end
   end
 
+  defp flush_pending(state, _rounds) when map_size(state.pending) == 0 do
+    reply_waiters(state)
+  end
+
   defp flush_pending(state, rounds) when rounds > 8 do
     Bitflyer.Telemetry.log(:critical, "peak writer terminate left peaks unpersisted", %{
       reason: :terminate_rounds
@@ -333,21 +330,21 @@ defmodule Bitflyer.Risk.PeakWriter do
   end
 
   defp flush_pending(state, rounds) do
-    case peek_pending(state) do
-      :empty ->
-        reply_waiters(state)
+    state =
+      Enum.reduce(Map.keys(state.pending), state, fn {mode, day} = key, acc ->
+        case Map.fetch(acc.pending, key) do
+          :error ->
+            acc
 
-      {mode, day, peak, daily_loss} ->
-        case persist_attempt(state, mode, day, peak, daily_loss) do
-          {:done, state} ->
-            state = drop_covered(state, mode, day, peak)
-
-            flush_pending(state, rounds + 1)
-
-          {:retry, state} ->
-            flush_pending(requeue(state, mode, day, peak, daily_loss), rounds + 1)
+          {:ok, %{peak: peak, daily_loss: daily_loss}} ->
+            case persist_attempt(acc, mode, day, peak, daily_loss) do
+              {:done, acc} -> drop_covered(acc, mode, day, peak)
+              {:retry, acc} -> requeue(acc, mode, day, peak, daily_loss)
+            end
         end
-    end
+      end)
+
+    flush_pending(state, rounds + 1)
   end
 
   defp persist_attempt(state, trade_mode, day, peak, daily_loss) do
@@ -468,19 +465,11 @@ defmodule Bitflyer.Risk.PeakWriter do
     %{state | pending: pending}
   end
 
-  defp peek_pending(%{pending: pending}) when map_size(pending) == 0, do: :empty
-
-  defp peek_pending(%{pending: pending}) do
-    [{key, entry}] = Enum.take(pending, 1)
-    {mode, day} = key
-    {mode, day, entry.peak, entry.daily_loss}
-  end
-
   defp pending_peak(state, trade_mode, day) do
     state.pending[{trade_mode, day}].peak
   end
 
-  # 末尾へ回して次の銘柄日を先に試す。値は pending の高い方を残す。
+  # 値は pending の高い方を残す。並び替えはしない。
   defp requeue(state, trade_mode, day, peak, daily_loss) do
     key = {trade_mode, day}
 
@@ -497,7 +486,7 @@ defmodule Bitflyer.Risk.PeakWriter do
           %{peak: peak, daily_loss: daily_loss}
       end
 
-    %{state | pending: Map.put(Map.delete(state.pending, key), key, entry)}
+    %{state | pending: Map.put(state.pending, key, entry)}
   end
 
   defp drop_covered(state, trade_mode, day, written_peak) do
