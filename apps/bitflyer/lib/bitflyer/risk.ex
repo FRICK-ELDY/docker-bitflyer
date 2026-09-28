@@ -27,8 +27,9 @@ defmodule Bitflyer.Risk do
   発注ホットパスでは RiskState・発注頻度・日次損失・残高・HWM 永続化のために DB 往復しない。
   頻度は `Risk.OrderRate.reserve/3`（authorize 時に原子的予約）、取引所エラー連続は `Risk.FailureRate`
   （起動 warm 失敗時は unsynced で認可拒否）、日次損失は `Risk.DailyLoss`、残高は `Risk.BalanceCache`（ETS）。
-  ドローダウン HWM の上昇は認可では ETS のみ。`DailyEquityPeak` への upsert は Fill 後 /
-  突合 / resume の `Equity.enforce`。
+  ドローダウン HWM の上昇は認可では ETS のみ。同期の `DailyEquityPeak` upsert はせず、
+  監督下 `PeakWriter` へ単調 upsert を cast する。Fill 後 / 突合 / resume の
+  `Equity.enforce` も `peak > persisted_peak` を flush する。
 
   残高は認可で `BalanceCache.probe/4`（`reserve/4` と同一比較・非減額）を呼ぶ。
   正本の減額は submit 時 `reserve/4`。probe→reserve のあいだに残高が減れば
@@ -650,6 +651,13 @@ defmodule Bitflyer.Risk do
       opts
       |> Keyword.put(:limits, limits)
       |> Keyword.put_new(:persist, false)
+      |> then(fn enforce_opts ->
+        if Keyword.get(enforce_opts, :persist) == false do
+          Keyword.put_new(enforce_opts, :write_behind, true)
+        else
+          enforce_opts
+        end
+      end)
 
     case Equity.enforce(enforce_opts) do
       {:ok, _} ->

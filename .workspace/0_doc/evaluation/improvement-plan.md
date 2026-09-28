@@ -1,6 +1,6 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-28（P0 #2 ハーネスの売りモデルを固定）
+最終更新: 2026-09-28（P1 #3 HWM write-behind）
 根拠: [evaluation-2026-09-16.md](./evaluation-2026-09-16.md) / [specific-weaknesses-2026-09-16.md](./specific-weaknesses-2026-09-16.md)
 
 方針: **利益機能より資金保全・復帰・観測を先に直す。** P0（#1 と #2）は完了。連続 live の前に P1 が残る。戦略の高度化は縦貫通の安全化の後。
@@ -22,6 +22,7 @@
 | P2 #9 | ash.codegen --check / Sandbox manual / README | **完了** |
 | P0 #1 | commission 一次証跡 | **完了**（2026-09-28。買い …6098 / 売り …6123 の実差分が更新後 expected と JPY 1 円・BTC 1 satoshi 以内） |
 | P0 #2 | ハーネス独立性 | **完了**（2026-09-28。`:quote_mark` の売りは発注→約定同期→Reconciler で `balance_mismatch` halt。既定の縦回帰は Ready。実測差分は `live_balance_test` が固定し、内部式を quote_mark に寄せると halt 側の期待が失敗する） |
+| P1 #3 | HWM 認可後 crash 窓 | **完了**（2026-09-28。認可は ETS のみ上げ `PeakWriter` へ cast。write-behind 保留中に `DailyLoss.reinit` しても drain 後の DB 高値と再 reinit が一致。`prep_stop` も保留中の高値を書く） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -40,7 +41,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 3 | HWM 認可後 crash 窓 | 認可で peak 上昇したら監督下 write-behind へ単調 upsert、または mark 非依存の flush 点。shutdown drain + 再起動回帰 | 認可直後 crash でも DB 高値が残るテストがある |
+| 3 | HWM 認可後 crash 窓 | **完了 (2026-09-28)。** 認可の peak 上昇は `PeakWriter` へ cast（ホットパスは DB を待たない）。同一日は高い方だけ upsert し、成功後に `persisted_peak` を進める。`prep_stop` が drain。write-behind を止めたまま認可 → `DailyLoss.reinit`（ETS 高値が落ちる）→ resume/drain のあと DB と再 reinit の peak が認可時の高値。停止側は `prep_stop drains a suspended peak writer so HWM is in the database` | 認可直後 crash でも DB 高値が残るテストがある |
 | 5 | 別ホスト監視の実配備 | 作業 PC で `register-watch-ready-task.ps1` を VLAN1 の `READY_URL` に向けて登録。証跡を [watch-ready-evidence.md](../architecture/env/watch-ready-evidence.md) に「本番向き常駐」として残す | 取引ホスト停止を外から検知した記録がある |
 | 6b | Game Day の停止解除副作用 | `mix bitflyer.game_day_stage2` から無条件 `Risk.clear_circuit()` を撤去。開始時に `RiskState.halted` なら理由を出して中断。`mark_ready` 押し通しをやめ、Reconciler 結果で Ready を要求 | paper ドリルが live 停止理由を消さない。Ready が突合経路でしか付かない |
 
