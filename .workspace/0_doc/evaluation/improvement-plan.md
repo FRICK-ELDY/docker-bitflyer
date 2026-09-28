@@ -1,11 +1,11 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-29（#9 は `GREATEST` の upsert 1 文。消化済みの P2 #7・#8・#9 は評価日で区別）
+最終更新: 2026-09-29（#10 は完了宣言の根拠行を評価手順へ必須化し、消化済みの「完了」に見方の観測を付けた。次回評価の矛盾検査は未了）
 根拠: [evaluation-2026-09-16.md](./evaluation-2026-09-16.md) / [specific-weaknesses-2026-09-16.md](./specific-weaknesses-2026-09-16.md)
 
 方針: **利益機能より資金保全・復帰・観測を先に直す。** P0（#1 と #2）は完了。連続 live の前に P1 が残る。戦略の高度化は縦貫通の安全化の後。
 
-**完了宣言ルール:** 「完了」と書くときは、右列「完了の見方」を満たした根拠を 1 行必須にする。満たせない項目は取り消し線にせず **部分完了** と残す。
+**完了宣言ルール:** 「完了」と書くときは、右列「完了の見方」を満たした根拠を 1 行必須にする。根拠は日付と、見方が真だと分かる観測（テスト名、証跡の差分、実行結果）を含む。「コード再読」だけでは根拠にしない。満たせない項目は取り消し線にせず **部分完了** と残す。見方を下げるときは、先に右列を書き換える。次回評価は根拠行と見方の矛盾を、コードまたは証跡の再読で落とす（手順は `.cursor/rules/evaluation.mdc` の「improvement-plan の完了宣言」）。
 
 ---
 
@@ -15,12 +15,13 @@
 |:---:|:---|:---|
 | — | tip 前進骨格・ゼロ手数料ハーネス（旧 P0） | 部品として維持 |
 | — | Feed 認可・spot 在庫・ACK・有限 open age・ページング | 維持 |
-| P1 #4 | 突合窓の対称化（`fill_sync_retries`） | **完了**（コード再読） |
-| P1 #6 | Game Day Stage 2 の paper 縦経路 | **コード経路は完了**。停止解除の副作用は P1 #6b で撤去 |
+| P1 #4 | 突合窓の対称化（`fill_sync_retries`） | **完了**（2026-09-16。`reconcile_test` の exchange-ahead は fill 再同期 1 回で `{:ok}` と tip 前進。再同期後も説明できない入金は `balance_mismatch`） |
+| P1 #6 | Game Day Stage 2 の paper 縦経路 | **コード経路は完了**（2026-09-16。`bitflyer.game_day_stage2` は paper の `System.submit_order/2` で建玉を作り、Feed 断は `feed_disconnected`。停止解除は P1 #6b で撤去） |
 | P1 #6b | Game Day の停止解除副作用 | **完了**（2026-09-28。paper の中断は Repo だけで読み、監督木は起動しない。既存停止の `halted_at` は変えない。`:unsynced` は `persisted_halt_reason` の読取失敗。`Application` の Reconciler 子は引数なしで、`boot?: true` の起動突合だけが `halted_at` を更新し、`boot?: false` では更新しない。paper 発注前に永続停止を再読する。残高同期前は Ready にならない） |
-| P2 #7（2026-09-16） | BalanceCache.probe + Runner backoff | **完了** |
-| P2 #8 | ticker bid/ask → spread ゲート | **完了**（板異常の切り分け残差は P2） |
-| P2 #9（ash.codegen） | ash.codegen --check / Sandbox manual / README | **完了** |
+| P2 #7（2026-09-16） | BalanceCache.probe + Runner backoff | **完了**（2026-09-16。`runner_test` は `insufficient_balance` のあと、throttle 0 の再 tick でも `last_evaluated` を進めず注文を作らない） |
+| P2 #8 | ticker bid/ask → spread ゲート | **完了**（2026-09-16。`risk_test` は spread 4%・上限 0.5% の成行を `max_spread_pct` で拒否し、0.5% 以内は通す。板の切り分けは P2 #8（2026-09-28）） |
+| P2 #9（ash.codegen） | ash.codegen --check / Sandbox manual / README | **完了**（2026-09-16。precommit に `ash.codegen --check --domains Bitflyer.Trading`。`apps/bitflyer` と `apps/ui` の `test_helper.exs` は Sandbox `:manual`。`apps/bitflyer/README.md` は品質ゲートを書く） |
+| P2 #10 | improvement-plan 運用 | **部分完了**（2026-09-29。根拠行は本ファイルと評価手順で必須。次回評価が「完了」と根拠の矛盾を落とすまでは完了にしない） |
 | P0 #1 | commission 一次証跡 | **完了**（2026-09-28。買い …6098 / 売り …6123 の実差分が更新後 expected と JPY 1 円・BTC 1 satoshi 以内） |
 | P0 #2 | ハーネス独立性 | **完了**（2026-09-28。`:quote_mark` の売りは発注→約定同期→Reconciler で `balance_mismatch` halt。既定の縦回帰は Ready。実測差分は `live_balance_test` が固定し、内部式を quote_mark に寄せると halt 側の期待が失敗する） |
 | P1 #3 | HWM 認可後 crash 窓 | **部分完了**（2026-09-28。writer 不在の認可は unsynced。失敗した upsert は再送する。DailyLoss か PeakWriter の片方生存なら高値は戻る。ノード強制終了で両方のメモリが消える窓は残る） |
@@ -54,7 +55,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 10 | improvement-plan 運用 | 本ファイルの完了宣言に根拠行を必須化（本サイクルから適用） | 次回評価で「完了」と証跡が矛盾しない |
+| 10 | improvement-plan 運用 | **部分完了 (2026-09-29)。** 完了宣言ルールを本ファイルと `.cursor/rules/evaluation.mdc` の評価手順に置いた。消化済みの「完了」には、当時の見方に対応する観測を 1 行付けた。残るのは次回評価が根拠行と見方の矛盾を再読で落とすこと | 次回評価で「完了」と証跡が矛盾しない |
 
 ---
 
