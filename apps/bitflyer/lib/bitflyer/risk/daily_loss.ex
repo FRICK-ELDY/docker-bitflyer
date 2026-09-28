@@ -1,15 +1,16 @@
 defmodule Bitflyer.Risk.DailyLoss do
   @moduledoc """
-  当日実現損失の ETS キャッシュ（発注ホットパスから DB を叩かない）。
+  当日実現損失の ETS キャッシュ。実現 net の判定は DB を叩かない。
+  当日高値が上がる認可だけ、`:write_behind` の upsert 完了を待つ。
 
   正本は `Fill.realized_pnl`。ETS は Fill からの再集計結果と、
   当日 equity ピーク（`DailyEquityPeak`）を持つ。ピーク上昇の persist は
   GenServer の外で行い、init / reload / reinit で当日行を読む。
   読取・永続化失敗は unsynced（fail-closed）。
 
-  認可は `persist: false` で ETS の peak だけ上げる（同期の Ash はしない）。
-  `:write_behind` が true のとき、上昇分を監督下 `PeakWriter` が受け取る。
-  writer が居ないとき、および同期 persist の失敗は `{:error, :unsynced}`。
+  認可は `persist: false` で ETS の peak を上げ、`:write_behind` では
+  `PeakWriter` の upsert が成功するまで `:ok` を返さない。
+  writer が居ないとき、および永続化の失敗は `{:error, :unsynced}`。
   Fill 後 / 突合 / resume の `Equity.enforce`（既定 persist）でも
   `peak > persisted_peak` なら DB へ flush する。HWM は Fill 合計ではない。
   reload は同日 ETS と DB の高い方を残し、日付跨ぎは当日行だけを使う。
@@ -217,18 +218,18 @@ defmodule Bitflyer.Risk.DailyLoss do
   永続化失敗は当該モードを unsynced にして `{:error, :unsynced}`。
   ETS の日付が壁時計と違うときは先に `reload` し、当日の ETS も更新する。
 
-  認可は `:persist` を `false` にし、同期 upsert をしない。`:write_behind` が
-  true なら同じ上昇を `PeakWriter` が受理するまで待つ（DB 完了は待たない）。
-  writer が受理できないときは同期 upsert に倒す。それも失敗すれば
-  `{:error, :unsynced}`。再送で後から DB に書けても `synced` は戻さない。
+  認可は `:persist` を `false` にし、同期の自家 upsert はしない。`:write_behind` が
+  true なら同じ上昇を `PeakWriter` が DB へ書いたあとで `:ok` になる。
+  writer が受理できないとき、および書込失敗は `{:error, :unsynced}`。
+  再送で後から DB に書けても、失敗で外した `synced` は戻さない。
   認可を同じプロセスで再開するには reload か再起動が要る。
 
   ## Options
   - `:persist` — `false` なら ETS の peak のみ（同期 flush もしない）。
     関数なら `(trade_mode, Date.t(), Decimal.t() -> :ok | {:error, term()})`（テスト用）
   - `:write_behind` — `true` かつ `:persist` が `false` のとき、上昇 / 未永続分を
-    `Bitflyer.Risk.PeakWriter` が受理するまで `GenServer.call` する。
-    不在なら同期 upsert。DB の完了は待たない
+    `Bitflyer.Risk.PeakWriter` が upsert するまで待つ。失敗は unsynced。
+    不在ならこのプロセス側の同期 upsert。`:ok` の時点で DB 行がある
   """
   @spec record_peak(trade_mode(), Decimal.t(), keyword()) ::
           {:ok, Decimal.t()} | {:error, :unsynced}
@@ -292,8 +293,7 @@ defmodule Bitflyer.Risk.DailyLoss do
         )
 
       {:flush, day, peak} ->
-        # 認可で ETS だけ上がったピーク。同期 persist はしない。
-        # write_behind があるときだけ監督下 writer へ渡す。
+        # 認可で ETS だけ上がったピーク。write_behind は DB upsert 後に返す。
         case persist do
           false ->
             case schedule_write_behind(trade_mode, day, peak, opts) do
@@ -389,8 +389,7 @@ defmodule Bitflyer.Risk.DailyLoss do
     end
   end
 
-  # DB 完了は待たない。writer がメッセージを受け取るまでだけ呼ぶ。
-  # 登録名への call だけなので PeakWriter をコンパイル依存にしない。
+  # DB upsert が終わるまで返す。登録名への call だけなので PeakWriter をコンパイル依存にしない。
   defp schedule_write_behind(trade_mode, day, peak, opts) do
     if Keyword.get(opts, :write_behind, false) and Decimal.compare(peak, 0) == :gt do
       writer = Keyword.get(opts, :peak_writer, Bitflyer.Risk.PeakWriter)
