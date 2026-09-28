@@ -233,6 +233,80 @@ defmodule Bitflyer.OrderExecutor.PositionsTest do
     assert Decimal.eq?(fill.realized_pnl, Decimal.new("-50"))
   end
 
+  test "spot sell whose fee exceeds the long does not open a short" do
+    {:ok, open_order} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "pos-btc-fee-full-open",
+        product_code: "BTC_JPY",
+        side: :buy,
+        size: Decimal.new("0.01"),
+        order_type: :market,
+        price: Decimal.new("5000000"),
+        status: :filled,
+        filled_size: Decimal.new("0.01"),
+        trade_mode: :paper
+      })
+      |> Ash.create()
+
+    assert {:ok, _, _} =
+             Positions.apply_fill(open_order, Decimal.new("5000000"), fee: Decimal.new("0.00001"))
+
+    {:ok, sell_order} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "pos-btc-fee-full-sell",
+        product_code: "BTC_JPY",
+        side: :sell,
+        size: Decimal.new("0.00999"),
+        order_type: :market,
+        price: Decimal.new("5000000"),
+        status: :filled,
+        filled_size: Decimal.new("0.00999"),
+        trade_mode: :paper
+      })
+      |> Ash.create()
+
+    assert {:error, :reconcile_mismatch,
+            %{kind: :position_mismatch, reason: :spot_sell_exceeds_position}} =
+             Positions.apply_fill(sell_order, Decimal.new("5000000"), fee: Decimal.new("0.00001"))
+
+    assert {:ok, %Position{side: :buy, size: pos_size}} =
+             Position
+             |> Ash.Query.filter(product_code == "BTC_JPY" and trade_mode == :paper)
+             |> Ash.read_one()
+
+    assert Decimal.eq?(pos_size, Decimal.new("0.00999"))
+  end
+
+  test "live spot sell with no position does not open a short" do
+    {:ok, sell_order} =
+      Order
+      |> Ash.Changeset.for_create(:create, %{
+        internal_order_id: "pos-btc-live-naked-sell",
+        product_code: "BTC_JPY",
+        side: :sell,
+        size: Decimal.new("0.001"),
+        order_type: :market,
+        price: Decimal.new("5000000"),
+        status: :filled,
+        filled_size: Decimal.new("0.001"),
+        trade_mode: :live
+      })
+      |> Ash.create()
+
+    assert {:error, :reconcile_mismatch,
+            %{kind: :position_mismatch, reason: :spot_short_position}} =
+             Positions.apply_fill(sell_order, Decimal.new("5000000"),
+               fee: Decimal.new("0.0000015")
+             )
+
+    assert {:ok, nil} =
+             Position
+             |> Ash.Query.filter(product_code == "BTC_JPY" and trade_mode == :live)
+             |> Ash.read_one()
+  end
+
   test "base fee buy covering equal short leaves residual short of fee" do
     {:ok, short_order} =
       Order

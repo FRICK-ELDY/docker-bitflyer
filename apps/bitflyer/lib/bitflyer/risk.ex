@@ -8,7 +8,7 @@ defmodule Bitflyer.Risk do
 
   検査: 同期 → FailureRate 同期 → Feed 接続（`market_feed_gate`）→ 鮮度 →
   時計ずれ → 注文サイズ → 建玉 →
-  live spot 売りカバー（買い建玉 − 未約定売り） → 価格逸脱 →
+  live spot 売りカバー（買い建玉 − 未約定売りの base 負担。手数料余白込み） → 価格逸脱 →
   成行 spread（`max_spread_pct`） →
   発注頻度予約 → 日次損失 → 日次ドローダウン（realized+unrealized） → 残高。
   live は先に銘柄種別を検査し、spot 以外（FX/CFD）を拒否する。
@@ -188,7 +188,15 @@ defmodule Bitflyer.Risk do
           end
 
         :sell ->
-          {:ok, %{currency: base_currency(product_code), amount: size}}
+          amount =
+            if trade_mode == :live do
+              Product.sell_base_debit(product_code, size)
+            else
+              # paper の手数料は約定価格に含まれ、建玉は size のまま減る。
+              size
+            end
+
+          {:ok, %{currency: base_currency(product_code), amount: amount}}
       end
     end
   end

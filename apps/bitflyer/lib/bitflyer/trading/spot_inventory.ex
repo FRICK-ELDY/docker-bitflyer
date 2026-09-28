@@ -2,7 +2,8 @@ defmodule Bitflyer.Trading.SpotInventory do
   @moduledoc """
   live spot の在庫不変条件。
 
-  売れるのは買い `Position.size` から未約定売りを引いた分まで。
+  売れるのは買い `Position.size` から未約定売りの base 負担（spot は size に
+  公表手数料上限を足したもの）を引いた分まで。全量と同サイズの売りは余白不足で拒む。
   ベースラインに乗っているだけの通貨（Position なし）は売らない
   （平均単価が無く、約定すると売建玉＝内部 short になる）。
   認可（`Risk`）と突合（`LiveInventory`）が同じ集計を使う。
@@ -39,7 +40,8 @@ defmodule Bitflyer.Trading.SpotInventory do
 
       if spot_sell?(code, Map.get(order, :side), unfilled) do
         currency = Product.base_currency(code)
-        Map.update(acc, currency, unfilled, &Decimal.add(&1, unfilled))
+        debit = Product.sell_base_debit(code, unfilled)
+        Map.update(acc, currency, debit, &Decimal.add(&1, debit))
       else
         acc
       end
@@ -62,7 +64,10 @@ defmodule Bitflyer.Trading.SpotInventory do
   end
 
   @doc """
-  新規売り `size` が、買い建玉 − 既存売り残に収まるか。
+  新規売りが、買い建玉 − 既存売りの base 負担に収まるか。
+
+  spot の base 手数料は `Product.sell_base_debit/2`（size に公表上限を足す）。
+  建玉ちょうどは収まりに入れない。
   """
   @spec sell_covered?([map()], [map()], String.t(), Decimal.t()) :: boolean()
   def sell_covered?(positions, open_orders, product_code, %Decimal{} = size)
@@ -71,7 +76,8 @@ defmodule Bitflyer.Trading.SpotInventory do
     claimed = Map.get(buy_claimed(positions), currency, Decimal.new(0))
     held = Map.get(sell_holds(open_orders), currency, Decimal.new(0))
     cover = Decimal.sub(claimed, held)
-    Decimal.compare(size, cover) != :gt
+    debit = Product.sell_base_debit(product_code, size)
+    Decimal.compare(debit, cover) != :gt
   end
 
   defp spot_buy?(code, :buy, size), do: spot_size?(code, size)

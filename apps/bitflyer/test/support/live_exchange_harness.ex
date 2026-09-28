@@ -80,7 +80,7 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
   @impl true
   def list_child_orders(_request), do: {:ok, []}
 
-  @spec apply_fill(String.t(), map()) :: :ok | {:error, :unknown_order}
+  @spec apply_fill(String.t(), map()) :: :ok | {:error, :unknown_order | :insufficient_funds}
   def apply_fill(exchange_order_id, attrs) when is_binary(exchange_order_id) and is_map(attrs) do
     Agent.get_and_update(__MODULE__, fn state ->
       case Map.fetch(state.orders, exchange_order_id) do
@@ -89,16 +89,23 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
 
         {:ok, order} ->
           exec = execution(order, attrs)
-          execs = Map.get(state.executions, exchange_order_id, []) ++ [exec]
-          updated = refresh_order(order, execs)
 
-          next =
-            state
-            |> put_order(updated)
-            |> Map.update!(:executions, &Map.put(&1, exchange_order_id, execs))
-            |> apply_execution_balances(order, exec)
+          case ensure_sell_funds(state, order, exec) do
+            :ok ->
+              execs = Map.get(state.executions, exchange_order_id, []) ++ [exec]
+              updated = refresh_order(order, execs)
 
-          {:ok, next}
+              next =
+                state
+                |> put_order(updated)
+                |> Map.update!(:executions, &Map.put(&1, exchange_order_id, execs))
+                |> apply_execution_balances(order, exec)
+
+              {:ok, next}
+
+            {:error, reason} ->
+              {{:error, reason}, state}
+          end
       end
     end)
   end
@@ -150,6 +157,49 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
   end
 
   defp hold_available(state, _order), do: state
+
+  defp ensure_sell_funds(state, %{side: :sell, size: order_size} = order, exec) do
+    fee = execution_fee(exec)
+    base = Bitflyer.Trading.Product.base_currency(order.product_code)
+    fee_ccy = Bitflyer.Trading.Product.fee_currency(order.product_code)
+    amount = balance_amount(state.balances, base)
+    available = balance_available(state.balances, base)
+
+    # place は available からこの注文の size を既に引いている。手数料は残りの available から出る。
+    # 他注文が握っている分は amount には残っているので、available と比較する。
+    fee_need = if fee_ccy == base, do: fee, else: Decimal.new(0)
+    gross = if fee_ccy == base, do: Decimal.add(exec.size, fee), else: exec.size
+
+    cond do
+      not match?(%Decimal{}, order_size) ->
+        {:error, :insufficient_funds}
+
+      Decimal.compare(amount, gross) == :lt ->
+        {:error, :insufficient_funds}
+
+      Decimal.compare(available, fee_need) == :lt ->
+        {:error, :insufficient_funds}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp ensure_sell_funds(_state, _order, _exec), do: :ok
+
+  defp balance_amount(balances, currency) do
+    case Enum.find(balances, &(&1.currency == currency)) do
+      %{amount: %Decimal{} = amount} -> amount
+      _ -> Decimal.new(0)
+    end
+  end
+
+  defp balance_available(balances, currency) do
+    case Enum.find(balances, &(&1.currency == currency)) do
+      %{available: %Decimal{} = available} -> available
+      _ -> Decimal.new(0)
+    end
+  end
 
   defp execution(order, attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)

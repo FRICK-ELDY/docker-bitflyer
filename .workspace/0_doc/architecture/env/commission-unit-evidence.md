@@ -60,6 +60,8 @@ execution id は末尾 4 桁のみ残す。
 
 旧売り式（JPY `+S·P−C·P`、BTC `−S`）だと JPY は約 20 円多く、BTC は `C` だけ少なく、絶対床（1 円 / 1 satoshi）の外だった。
 
+全量（available 丁度）は `insufficient_funds` だった。認可は建玉ちょうどの売りを拒み、`size` に公表上限 0.15% を足した base 負担でカバーを見る。実レートが 0.15% 未満だと、売り残が最小 0.001 BTC を下回って次の売りが通らず long が残ることがある。この口座は 0.15% なので `size = 建玉 / 1.0015` で平坦にできる。`ETH_JPY` 等の単位は未実測で、余白だけこの上限を使う。
+
 ## 会計モデル（BTC_JPY）
 
 `commission = C`（BTC）、約定 `size = S`、価格 `P`（JPY/BTC）のとき:
