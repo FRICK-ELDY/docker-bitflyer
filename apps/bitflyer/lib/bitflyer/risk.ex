@@ -35,6 +35,10 @@ defmodule Bitflyer.Risk do
   正本の減額は submit 時 `reserve/4`。probe→reserve のあいだに残高が減れば
   認可通過後に `:insufficient_balance` になりうる（近似）。Runner は同理由に
   バックオフを付け、throttle だけの Tight loop を避ける。
+  live 成行買いの拘束は `best_ask × size` ちょうど（LTP だと薄いスプレッドで過小）。
+  ticker に気配数量が無いので、最上段を超えて歩いた平均は ask を超えうる。
+  その超過は拘束せず、部分約定の解放はサイズ比のまま残る。
+  paper 成行買いは LTP に `FillPricing` の不利化だけを載せる（ask は重ねない）。
   """
 
   require Ash.Query
@@ -163,6 +167,11 @@ defmodule Bitflyer.Risk do
   発注が拘束する通貨と額。`BalanceCache.reserve/4` 用。
 
   dry_run は残高モデル無しのため `{:ok, :skip}`。
+  買いの quote 拘束は `quote_notional/2`。live 成行は `best_ask × size` ちょうど
+  （歩いた約定が ask を超える分は拘束しない）。
+  paper 成行は LTP に手数料とスリッページを載せた価格（ask は使わない）。
+  指値は指定価格（paper は手数料のみ上乗せ）。売りは base 数量
+  （live は手数料余白込み）。
   """
   @spec balance_hold(map(), keyword()) ::
           {:ok, :skip}
@@ -798,15 +807,33 @@ defmodule Bitflyer.Risk do
     price = Map.get(command, :price)
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
 
-    with {:ok, unit_price} <- base_unit_price(order_type, price, command, opts),
+    with {:ok, unit_price} <- base_unit_price(trade_mode, side, order_type, price, command, opts),
          {:ok, priced} <- paper_unit_price(trade_mode, side, order_type, unit_price) do
       {:ok, Decimal.mult(priced, size)}
     end
   end
 
-  defp base_unit_price(:limit, %Decimal{} = price, _command, _opts), do: {:ok, price}
+  defp base_unit_price(_trade_mode, _side, :limit, %Decimal{} = price, _command, _opts),
+    do: {:ok, price}
 
-  defp base_unit_price(_order_type, _price, command, opts) do
+  # live 成行買いの拘束は best_ask × size ちょうど。LTP だと薄いスプレッドで過小になる。
+  # ticker に気配数量が無いので、サイズが最上段を超えると平均約定は ask を超えうる。
+  # 部分約定後の解放はサイズ比（align_hold_to_filled）のため、その超過分だけ
+  # 利用可能 JPY が実支出より甘く残る。板厚超過はこの条項では塞がない。
+  defp base_unit_price(:live, :buy, :market, _price, command, opts) do
+    case fetch_bid_ask(command, opts) do
+      {:ok, _bid, ask} ->
+        {:ok, ask}
+
+      :miss ->
+        {:error, :stale,
+         %{market_key: Map.fetch!(command, :market_key), reason: :bid_ask_missing}}
+    end
+  end
+
+  # paper 成行買いは LTP を基準にする。不利化は次の paper_unit_price が行い、
+  # ask を重ねると手数料・スリッページが二重になる。
+  defp base_unit_price(_trade_mode, _side, _order_type, _price, command, opts) do
     case fetch_ltp(command, opts) do
       {:ok, ltp} ->
         {:ok, ltp}

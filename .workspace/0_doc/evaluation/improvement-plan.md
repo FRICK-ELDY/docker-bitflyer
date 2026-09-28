@@ -1,6 +1,6 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-28（P1 #6b Game Day 停止解除）
+最終更新: 2026-09-28（成行拘束は ask 名目ちょうど。消化済みの P2 #7 は評価日で区別）
 根拠: [evaluation-2026-09-16.md](./evaluation-2026-09-16.md) / [specific-weaknesses-2026-09-16.md](./specific-weaknesses-2026-09-16.md)
 
 方針: **利益機能より資金保全・復帰・観測を先に直す。** P0（#1 と #2）は完了。連続 live の前に P1 が残る。戦略の高度化は縦貫通の安全化の後。
@@ -18,12 +18,13 @@
 | P1 #4 | 突合窓の対称化（`fill_sync_retries`） | **完了**（コード再読） |
 | P1 #6 | Game Day Stage 2 の paper 縦経路 | **コード経路は完了**。停止解除の副作用は P1 #6b で撤去 |
 | P1 #6b | Game Day の停止解除副作用 | **完了**（2026-09-28。paper の中断は Repo だけで読み、監督木は起動しない。既存停止の `halted_at` は変えない。`:unsynced` は `persisted_halt_reason` の読取失敗。`Application` の Reconciler 子は引数なしで、`boot?: true` の起動突合だけが `halted_at` を更新し、`boot?: false` では更新しない。paper 発注前に永続停止を再読する。残高同期前は Ready にならない） |
-| P2 #7 | BalanceCache.probe + Runner backoff | **完了** |
+| P2 #7（2026-09-16） | BalanceCache.probe + Runner backoff | **完了** |
 | P2 #8 | ticker bid/ask → spread ゲート | **完了**（板異常の切り分け残差は P2） |
 | P2 #9 | ash.codegen --check / Sandbox manual / README | **完了** |
 | P0 #1 | commission 一次証跡 | **完了**（2026-09-28。買い …6098 / 売り …6123 の実差分が更新後 expected と JPY 1 円・BTC 1 satoshi 以内） |
 | P0 #2 | ハーネス独立性 | **完了**（2026-09-28。`:quote_mark` の売りは発注→約定同期→Reconciler で `balance_mismatch` halt。既定の縦回帰は Ready。実測差分は `live_balance_test` が固定し、内部式を quote_mark に寄せると halt 側の期待が失敗する） |
 | P1 #3 | HWM 認可後 crash 窓 | **部分完了**（2026-09-28。writer 不在の認可は unsynced。失敗した upsert は再送する。DailyLoss か PeakWriter の片方生存なら高値は戻る。ノード強制終了で両方のメモリが消える窓は残る） |
+| P2 #7（2026-09-28） | 成行拘束の ask 化 | **完了**（2026-09-28。live 成行買いの probe/reserve は `best_ask × size` ちょうど。LTP 名目ちょうどは `insufficient_balance` で required が ask 名目。ask 名目ちょうどは JPY 残 0。paper 成行買いは LTP に FillPricing だけを載せ ask を使わない。ask 欠落は `bid_ask_missing`。ticker に気配数量が無いので、最上段を超えて歩いた超過は拘束しない） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -51,7 +52,6 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 7 | 成行拘束の ask 化 | live 成行買いは `best_ask` 基準で probe/reserve。paper は既存方針を明示 | 薄スプレッドでも過小拘束しない回帰がある |
 | 8 | ticker 2 層化 | `{ltp, book}` に分け、板欠落でも LTP 鮮度を残す。spread は book 欠落で拒否 | 板異常が `bid_ask_missing` として止まり、時計検査は LTP で通る |
 | 9 | DailyEquityPeak の GREATEST upsert | `inspect` 文字列一致をやめ、単調 upsert 1 文へ | 並行 Fill/enforce で過剰 unsynced にならない |
 | 10 | improvement-plan 運用 | 本ファイルの完了宣言に根拠行を必須化（本サイクルから適用） | 次回評価で「完了」と証跡が矛盾しない |
