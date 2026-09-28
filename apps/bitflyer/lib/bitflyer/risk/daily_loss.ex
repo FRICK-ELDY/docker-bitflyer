@@ -742,25 +742,34 @@ defmodule Bitflyer.Risk.DailyLoss do
     {:reply, peaks, table}
   end
 
-  def handle_call({:peak_persist_failed, trade_mode, day, reason}, _from, table) do
+  def handle_call({:peak_persist_failed, trade_mode, day, reason}, from, table) do
+    handle_call({:peak_persist_failed, trade_mode, day, reason, true}, from, table)
+  end
+
+  def handle_call({:peak_persist_failed, trade_mode, day, reason, log?}, _from, table)
+      when is_boolean(log?) do
     {row_day, loss, net, _synced, barrier, gen, peak, persisted} = read_mode(table, trade_mode)
 
     if row_day == day do
       insert_row(table, {trade_mode, row_day, loss, net, false, barrier, gen, peak, persisted})
 
-      Bitflyer.Telemetry.log(
-        :error,
-        "daily equity peak persist failed; marked unsynced",
-        %{reason: inspect(reason), trade_mode: trade_mode, trading_day: Date.to_iso8601(day)}
-      )
+      if log? do
+        Bitflyer.Telemetry.log(
+          :error,
+          "daily equity peak persist failed; marked unsynced",
+          %{reason: inspect(reason), trade_mode: trade_mode, trading_day: Date.to_iso8601(day)}
+        )
+      end
 
       {:reply, :ok, table}
     else
-      Bitflyer.Telemetry.log(
-        :warning,
-        "daily equity peak persist failed on a stale trading day; left ETS day untouched",
-        %{reason: inspect(reason), trade_mode: trade_mode, trading_day: Date.to_iso8601(day)}
-      )
+      if log? do
+        Bitflyer.Telemetry.log(
+          :warning,
+          "daily equity peak persist failed on a stale trading day; left ETS day untouched",
+          %{reason: inspect(reason), trade_mode: trade_mode, trading_day: Date.to_iso8601(day)}
+        )
+      end
 
       {:reply, :stale_day, table}
     end
