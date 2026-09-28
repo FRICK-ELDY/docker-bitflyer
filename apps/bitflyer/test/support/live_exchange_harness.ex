@@ -128,10 +128,15 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
 
   `:quote_mark` は手数料を quote の受取から引く旧仮説で、縦回帰の反証に使う。
   """
-  @spec set_sell_fee_model(:base_deduct | :quote_mark) :: :ok
+  @spec set_sell_fee_model(:base_deduct | :quote_mark) :: :ok | {:error, :open_orders}
   def set_sell_fee_model(model) when model in [:base_deduct, :quote_mark] do
-    Agent.update(__MODULE__, &Map.put(&1, :sell_fee_model, model))
-    :ok
+    Agent.get_and_update(__MODULE__, fn state ->
+      if active_orders?(state.orders) do
+        {{:error, :open_orders}, state}
+      else
+        {:ok, %{state | sell_fee_model: model}}
+      end
+    end)
   end
 
   @doc """
@@ -187,29 +192,54 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
     amount = balance_amount(state.balances, base)
     available = balance_available(state.balances, base)
 
-    # place は available からこの注文の size を既に引いている。
-    # `:base_deduct` では手数料は残りの available から出る。`:quote_mark` では quote から出る。
-    # 他注文が握っている分は amount には残っているので、available と比較する。
-    base_fee? = fee_ccy == base and state.sell_fee_model != :quote_mark
-    fee_need = if base_fee?, do: fee, else: Decimal.new(0)
-    gross = if base_fee?, do: Decimal.add(exec.size, fee), else: exec.size
+    quote_mark? = state.sell_fee_model == :quote_mark and fee_ccy == base
+    quote_ccy = Bitflyer.Trading.Product.quote_currency(order.product_code)
 
     cond do
       not match?(%Decimal{}, order_size) ->
         {:error, :insufficient_funds}
 
-      Decimal.compare(amount, gross) == :lt ->
-        {:error, :insufficient_funds}
-
-      Decimal.compare(available, fee_need) == :lt ->
+      quote_mark? and quote_proceeds_short?(state, quote_ccy, exec, fee) ->
         {:error, :insufficient_funds}
 
       true ->
-        :ok
+        # place は available からこの注文の size を既に引いている。
+        # `:base_deduct` では手数料は残りの available から出る。
+        # 他注文が握っている分は amount には残っているので、available と比較する。
+        fee_need = if fee_ccy == base and not quote_mark?, do: fee, else: Decimal.new(0)
+
+        gross =
+          if fee_ccy == base and not quote_mark?, do: Decimal.add(exec.size, fee), else: exec.size
+
+        cond do
+          Decimal.compare(amount, gross) == :lt ->
+            {:error, :insufficient_funds}
+
+          Decimal.compare(available, fee_need) == :lt ->
+            {:error, :insufficient_funds}
+
+          true ->
+            :ok
+        end
     end
   end
 
   defp ensure_sell_funds(_state, _order, _exec), do: :ok
+
+  # 受取 notional − fee×price を足したあと、quote の amount と available のどちらも 0 未満なら不足。
+  # 買いが available だけを拘束しているときは amount が 0 以上でも available が負になる。
+  defp quote_proceeds_short?(state, quote_ccy, exec, fee) do
+    notional = Decimal.mult(exec.size, exec.price)
+    credited = Decimal.sub(notional, Decimal.mult(fee, exec.price))
+    balances = state.balances
+
+    Enum.any?(
+      [balance_amount(balances, quote_ccy), balance_available(balances, quote_ccy)],
+      fn held ->
+        Decimal.compare(Decimal.add(held, credited), 0) == :lt
+      end
+    )
+  end
 
   defp balance_amount(balances, currency) do
     case Enum.find(balances, &(&1.currency == currency)) do
@@ -360,5 +390,9 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
     |> Map.values()
     |> Enum.filter(&(&1.status == :active))
     |> Enum.map(&Map.take(&1, [:exchange_order_id, :product_code, :side, :size, :filled_size]))
+  end
+
+  defp active_orders?(orders) do
+    Enum.any?(orders, fn {_id, order} -> order.status == :active end)
   end
 end

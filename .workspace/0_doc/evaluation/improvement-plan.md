@@ -21,7 +21,7 @@
 | P2 #8 | ticker bid/ask → spread ゲート | **完了**（板異常の切り分け残差は P2） |
 | P2 #9 | ash.codegen --check / Sandbox manual / README | **完了** |
 | P0 #1 | commission 一次証跡 | **完了**（2026-09-28。買い …6098 / 売り …6123 の実差分が更新後 expected と JPY 1 円・BTC 1 satoshi 以内） |
-| P0 #2 | ハーネス独立性 | **完了**（2026-09-28。`:base_deduct` のハーネス売りは explain 成功、`:quote_mark` は `balance_mismatch`。JPY 決め打ち反証は維持） |
+| P0 #2 | ハーネス独立性 | **完了**（2026-09-28。`:quote_mark` の売りは発注→約定同期→Reconciler で `balance_mismatch` halt。既定の縦回帰は Ready。実測差分は `live_balance_test` が固定し、内部式を quote_mark に寄せると halt 側の期待が失敗する） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -32,7 +32,7 @@
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
 | 1 | commission 一次証跡 | **完了 (2026-09-28)。** 買い execution …6098 と売り execution …6123 の実差分が、更新後の expected（買い `−S·P` / `+S−C`、売り `+S·P` / `−(S+C)`）と JPY 1 円・BTC 1 satoshi 以内で一致。証跡は [commission-unit-evidence.md](../architecture/env/commission-unit-evidence.md) | 売買それぞれの実差分が内部 expected と許容幅で一致し、証跡に日付・execution id（匿名可）がある |
-| 2 | ハーネス独立性 | **完了 (2026-09-28)。** 売りを `:base_deduct` と `:quote_mark` の両方でハーネスが動かし、観測側だけ `LiveBalance.explain` が成功する。`:quote_mark` は `balance_mismatch`。JPY 決め打ち反証は `commission_unit_guard_test` に残した | 自モデルが誤っていても少なくとも片側モデルの失敗を検出できる、または実観測でモデルが固定されている |
+| 2 | ハーネス独立性 | **完了 (2026-09-28)。** `:quote_mark` の売りを発注・約定同期・`Reconciler.run_now` に通すと `balance_mismatch` で halt し Ready にならない。既定 `:base_deduct` の縦回帰は Ready。実測の 2026-09-28 差分は `live_balance_test` が explain に固定する。内部式を `:quote_mark` に戻すと、この halt 期待と実測 explain の少なくとも片方が失敗する。JPY 決め打ち反証は維持 | 自モデルが誤っていても少なくとも片側モデルの失敗を検出できる、または実観測でモデルが固定されている |
 
 ---
 

@@ -22,7 +22,7 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
   alias Bitflyer.OrderExecutor.LiveFills
   alias Bitflyer.Readiness
   alias Bitflyer.Risk.{DailyLoss, Equity}
-  alias Bitflyer.Startup.{LiveBalance, Reconciler}
+  alias Bitflyer.Startup.Reconciler
   alias Bitflyer.System
   alias Bitflyer.TestSupport.LiveExchangeHarness
   alias Bitflyer.Trading.{BalanceSnapshot, Fill, Order, Position, RiskState}
@@ -360,77 +360,120 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
     assert LiveExchangeHarness.balances() == before
   end
 
-  test "quote_mark harness sell fails the observed base-deduct explain" do
-    captured = ~U[2026-09-01 00:00:00.000000Z]
-    filled_at = ~U[2026-09-01 00:01:00.000000Z]
-    size = Decimal.new("0.01")
-    fee = Decimal.new("0.00001")
+  test "quote_mark sell halts reconcile while the observed model stays the default" do
+    seed_live_balance_baseline!()
+    assert Readiness.mark_ready() == :ok
+    put_fresh_ticker(@market_key, @price)
+    seed_balance_cache!(:live, %{"JPY" => @jpy, "BTC" => @btc})
 
-    fill = %{
-      product_code: @product,
-      side: :sell,
-      size: size,
-      price: @price,
-      fee: fee,
-      fee_currency: "BTC",
-      inserted_at: filled_at
-    }
+    buy = submit_live!("p0-2-qm-buy")
+    apply_partial!(buy, "exec-p0-2-qm-b1", @fee_partial)
 
-    tips = [
-      %{currency: "JPY", amount: @jpy, available: @jpy, captured_at: captured},
-      %{currency: "BTC", amount: @btc, available: @btc, captured_at: captured}
-    ]
+    assert {:ok, %Order{status: :partially_filled}} =
+             LiveFills.sync_order(buy, exchange: LiveExchangeHarness)
 
-    for model <- [:base_deduct, :quote_mark] do
-      assert :ok = LiveExchangeHarness.reset!(model)
+    assert {:error, :open_orders} = LiveExchangeHarness.set_sell_fee_model(:quote_mark)
 
-      assert {:ok, %{exchange_order_id: id}} =
-               LiveExchangeHarness.place_order(%{
-                 product_code: @product,
-                 side: :sell,
-                 size: size,
-                 order_type: :market,
-                 price: @price,
-                 internal_order_id: "p0-2-#{model}"
-               })
+    apply_partial!(buy, "exec-p0-2-qm-b2", @fee_partial)
+    assert Reconciler.run_now() == :ok
+    assert Readiness.get() == :ready
+    assert :ok = LiveExchangeHarness.set_sell_fee_model(:quote_mark)
 
-      assert :ok =
-               LiveExchangeHarness.apply_fill(id, %{
-                 id: "exec-p0-2-#{model}",
-                 size: size,
-                 price: @price,
-                 commission: fee
-               })
+    sell_size = Decimal.new("0.001")
+    sell_fee = Decimal.new("0.0000015")
+    before_sell = LiveExchangeHarness.balances()
+    sell = submit_live!("p0-2-qm-sell", %{side: :sell, size: sell_size})
 
-      balances = LiveExchangeHarness.balances()
-      jpy = Enum.find(balances, &(&1.currency == "JPY"))
-      btc = Enum.find(balances, &(&1.currency == "BTC"))
+    apply_partial!(sell, "exec-p0-2-qm-s1", sell_fee, sell_size)
 
-      explained =
-        LiveBalance.explain(
-          tips,
-          [
-            %{currency: "JPY", amount: jpy.amount, available: jpy.available},
-            %{currency: "BTC", amount: btc.amount, available: btc.available}
-          ],
-          ["JPY", "BTC"],
-          fills: [fill],
-          fee_tolerance_bps: "0",
-          fee_tolerance_abs: %{"JPY" => "0", "BTC" => "0"}
-        )
+    # quote は notional − fee×price、base は size だけ減る。これ以外の式ではここで落ちる。
+    notional = Decimal.mult(sell_size, @price)
+    fee_mark = Decimal.mult(sell_fee, @price)
+    after_sell = LiveExchangeHarness.balances()
 
-      case model do
-        :base_deduct ->
-          assert {:ok, _} = explained
-          assert Decimal.eq?(jpy.amount, Decimal.new("1050000"))
-          assert Decimal.eq?(btc.amount, Decimal.new("0.48999"))
+    assert Decimal.eq?(
+             currency_amount(after_sell, "JPY"),
+             Decimal.add(currency_amount(before_sell, "JPY"), Decimal.sub(notional, fee_mark))
+           )
 
-        :quote_mark ->
-          assert {:error, :reconcile_mismatch, %{kind: :balance_mismatch}} = explained
-          assert Decimal.eq?(jpy.amount, Decimal.new("1049950"))
-          assert Decimal.eq?(btc.amount, Decimal.new("0.49"))
-      end
-    end
+    assert Decimal.eq?(
+             currency_amount(after_sell, "BTC"),
+             Decimal.sub(currency_amount(before_sell, "BTC"), sell_size)
+           )
+
+    assert {:error, :reconcile_mismatch, %{kind: :balance_mismatch}} =
+             Bitflyer.Startup.Reconcile.run(trade_mode: :live, exchange: LiveExchangeHarness)
+
+    assert {:error, :reconcile_mismatch} = Reconciler.run_now()
+    assert Readiness.get() == {:halted, :reconcile_mismatch}
+  end
+
+  test "quote_mark refuses a sell whose quote proceeds would go negative" do
+    assert :ok = LiveExchangeHarness.reset!(:quote_mark)
+    assert :ok = LiveExchangeHarness.credit("JPY", Decimal.new("-999990"))
+
+    assert {:ok, %{exchange_order_id: id}} =
+             LiveExchangeHarness.place_order(%{
+               product_code: @product,
+               side: :sell,
+               size: Decimal.new("0.01"),
+               order_type: :market,
+               price: @price,
+               internal_order_id: "p0-2-qm-short-jpy"
+             })
+
+    before = LiveExchangeHarness.balances()
+
+    assert {:error, :insufficient_funds} =
+             LiveExchangeHarness.apply_fill(id, %{
+               id: "exec-p0-2-qm-short-jpy",
+               size: Decimal.new("0.01"),
+               price: @price,
+               commission: Decimal.new("0.02")
+             })
+
+    assert LiveExchangeHarness.balances() == before
+  end
+
+  test "quote_mark refuses a sell when a buy hold leaves quote available short" do
+    assert :ok = LiveExchangeHarness.reset!(:quote_mark)
+
+    assert {:ok, _} =
+             LiveExchangeHarness.place_order(%{
+               product_code: @product,
+               side: :buy,
+               size: Decimal.new("0.199"),
+               order_type: :limit,
+               price: @price,
+               internal_order_id: "p0-2-qm-lock-jpy"
+             })
+
+    assert {:ok, %{exchange_order_id: id}} =
+             LiveExchangeHarness.place_order(%{
+               product_code: @product,
+               side: :sell,
+               size: Decimal.new("0.01"),
+               order_type: :market,
+               price: @price,
+               internal_order_id: "p0-2-qm-avail-short"
+             })
+
+    before = LiveExchangeHarness.balances()
+    assert Decimal.compare(currency_amount(before, "JPY"), 0) == :gt
+
+    assert {:error, :insufficient_funds} =
+             LiveExchangeHarness.apply_fill(id, %{
+               id: "exec-p0-2-qm-avail-short",
+               size: Decimal.new("0.01"),
+               price: @price,
+               commission: Decimal.new("0.012")
+             })
+
+    assert LiveExchangeHarness.balances() == before
+  end
+
+  defp currency_amount(balances, currency) do
+    Enum.find(balances, &(&1.currency == currency)).amount
   end
 
   defp submit_live!(internal_order_id, overrides \\ %{}) do

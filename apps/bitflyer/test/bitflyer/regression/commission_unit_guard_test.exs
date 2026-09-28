@@ -2,11 +2,9 @@ defmodule Bitflyer.Regression.CommissionUnitGuardTest do
   @moduledoc """
   P0 #2 反証回帰（LiveBalance / LiveInventory）。
 
-  `getexecutions_btc_jpy_fee.json` と取引所残高（base fee モデル）だけで、
-  commission を quote（JPY）と決め打ちした旧実装が reconcile 失敗することを固定する。
-
-  ハーネスの `:base_deduct` / `:quote_mark` 縦回帰は
-  `live_balance_advance_test` の quote_mark 反証。本ファイルの JPY 決め打ちは維持する。
+  JPY 決め打ちはここで固定する。ハーネスの `:quote_mark` が
+  発注 → 約定同期 → Reconciler で halt することは `live_balance_advance_test`。
+  実測差分そのものは `live_balance_test` の 2026-09-28 ケース。
   """
 
   use ExUnit.Case, async: true
