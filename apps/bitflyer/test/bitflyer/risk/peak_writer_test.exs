@@ -59,7 +59,7 @@ defmodule Bitflyer.Risk.PeakWriterTest do
     assert :ok =
              PeakWriter.set_upsert(fn _mode, _day, _peak -> {:error, :boom} end)
 
-    assert :ok = PeakWriter.enqueue(:live, day, Decimal.new("100000"))
+    assert {:error, :unsynced} = PeakWriter.enqueue(:live, day, Decimal.new("100000"))
     assert PeakWriter.pending_count() == 1
     assert {:error, :unsynced} = DailyLoss.snapshot(:live)
   end
@@ -76,7 +76,7 @@ defmodule Bitflyer.Risk.PeakWriterTest do
                end
              end)
 
-    assert :ok = PeakWriter.enqueue(:paper, day, Decimal.new("130000"))
+    assert {:error, :unsynced} = PeakWriter.enqueue(:paper, day, Decimal.new("130000"))
     assert PeakWriter.pending_count() == 1
     assert {:error, :unsynced} = DailyLoss.snapshot(:paper)
 
@@ -102,7 +102,7 @@ defmodule Bitflyer.Risk.PeakWriterTest do
     assert :ok =
              PeakWriter.set_upsert(fn _mode, _day, _peak -> {:error, :db_down} end, server: name)
 
-    assert :ok =
+    assert {:error, :unsynced} =
              PeakWriter.enqueue(:live, day, Decimal.new("80000"),
                server: name,
                daily_loss: :no_such_daily_loss
@@ -134,6 +134,27 @@ defmodule Bitflyer.Risk.PeakWriterTest do
     paper = Enum.find(rows, &(&1.trade_mode == :paper))
     assert paper
     assert Decimal.eq?(paper.peak, Decimal.new("90000"))
+  end
+
+  test "write-behind success leaves the DB peak after both processes are discarded" do
+    assert {:ok, peak} =
+             DailyLoss.record_peak(:paper, Decimal.new("160000"),
+               persist: false,
+               write_behind: true
+             )
+
+    assert Decimal.eq?(peak, Decimal.new("160000"))
+    assert PeakWriter.pending_count() == 0
+
+    pid = Process.whereis(PeakWriter)
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
+    assert is_pid(await_peak_writer(pid))
+
+    assert :ok = DailyLoss.reinit()
+    assert {:ok, %{peak: restored}} = DailyLoss.snapshot(:paper)
+    assert Decimal.eq?(restored, Decimal.new("160000"))
   end
 
   defp await_peak_writer(old_pid, tries \\ 50) do

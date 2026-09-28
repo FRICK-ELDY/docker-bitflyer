@@ -4,8 +4,9 @@ defmodule Bitflyer.Risk.Equity do
 
   `DailyLoss` ETS は実現 net と当日 equity ピーク（HWM）を持つ。
   ピーク上昇の同期 persist / flush（`peak > persisted_peak`）は Fill 後 / 突合 / resume。
-  認可は `persist: false` で ETS だけ上げ、ホットパスから Ash を呼ばない。
-  同じ上昇は `:write_behind` で監督下 `PeakWriter` に単調 upsert させる（mark は不要）。
+  認可は `persist: false` で ETS を上げ、`:write_behind` の upsert 完了まで返す。
+  同じ上昇を監督下 `PeakWriter` が単調 upsert する（mark は不要）。
+  `:ok` のあとでプロセスが消えても DB の高値は残る。
   再起動後は `DailyLoss.init` / `reload` が当日行を読む。
   未実現は判定時に `MarketData.Cache` の LTP と **内部** `Position.average_price`
   から計算する推定値。spot に取引所平均は無く、比較対象にもしない。
