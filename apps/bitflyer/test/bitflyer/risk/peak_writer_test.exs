@@ -20,6 +20,10 @@ defmodule Bitflyer.Risk.PeakWriterTest do
     :ok
   end
 
+  test "traps exits so supervisor shutdown can flush pending peaks" do
+    assert Process.info(Process.whereis(PeakWriter), :trap_exit) == {:trap_exit, true}
+  end
+
   test "coalesces to the higher peak and reinit keeps it" do
     day = DailyLoss.trading_day(DateTime.utc_now())
     assert :ok = PeakWriter.suspend()

@@ -124,6 +124,10 @@ defmodule Bitflyer.Risk.PeakWriter do
 
   @impl true
   def init(%{daily_loss: daily_loss}) do
+    # 親の :shutdown を通常終了にすると terminate/2 まで届かない。
+    # 未書きのピークを flush するため、出口を捕まえる。
+    Process.flag(:trap_exit, true)
+
     state =
       Enum.reduce(load_unpersisted(daily_loss), empty_state(), fn {mode, day, peak}, acc ->
         put_pending(acc, mode, day, peak, daily_loss)
