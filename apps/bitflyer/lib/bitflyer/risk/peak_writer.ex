@@ -9,6 +9,10 @@ defmodule Bitflyer.Risk.PeakWriter do
   本番の enqueue は DB の upsert が成功するまで `:ok` を返さない。
   成功のあとでこのプロセスと DailyLoss が同時に消えても、DB の高値は残る。
   upsert 失敗は unsync にして `{:error, :unsynced}` を返し、pending を残して再送する。
+  再送間隔も待ちタイマーも銘柄日ごとで、50ms から倍々で延び、上限は 5 秒。
+  他銘柄日の成功では、間隔もタイマーも戻さない。
+  同じ失敗の error は初回と、5 秒より空いた再掲だけにする。
+  失敗した再送は pending の高い方を残す。drain は退避を待たず、未書きをすぐ流す。
   DailyLoss 再起動で ack / unsync が届かないときも pending を残す。
   自プロセスが落ちても、生存している DailyLoss の未永続高値を `init` で積み直す。
 
@@ -23,7 +27,8 @@ defmodule Bitflyer.Risk.PeakWriter do
 
   @name __MODULE__
   @drain_timeout_ms 10_000
-  @retry_ms 50
+  @retry_min_ms 50
+  @retry_max_ms 5_000
   @trade_modes [:dry_run, :paper, :live]
 
   @type trade_mode :: Bitflyer.TradeMode.t()
@@ -71,6 +76,18 @@ defmodule Bitflyer.Risk.PeakWriter do
       :exit, {:timeout, _} -> {:error, :timeout}
       :exit, {:noproc, _} -> {:error, :noproc}
       :exit, reason -> {:error, reason}
+    end
+  end
+
+  @doc false
+  @spec retry_timer_left(keyword()) :: non_neg_integer() | false | {:error, term()}
+  def retry_timer_left(opts \\ []) do
+    server = Keyword.get(opts, :server, @name)
+
+    if test_injections_allowed?() do
+      GenServer.call(server, {:retry_timer_left, Keyword.get(opts, :key)})
+    else
+      {:error, :forbidden}
     end
   end
 
@@ -147,7 +164,7 @@ defmodule Bitflyer.Risk.PeakWriter do
 
   @impl true
   def handle_continue(:flush, state) do
-    {:noreply, flush_one(state)}
+    {:noreply, flush_ready(state)}
   end
 
   @impl true
@@ -162,16 +179,17 @@ defmodule Bitflyer.Risk.PeakWriter do
 
       true ->
         state = put_pending(state, trade_mode, day, peak, daily_loss)
+        queued = pending_peak(state, trade_mode, day)
+        key = {trade_mode, day}
 
-        case persist_attempt(state, trade_mode, day, peak, daily_loss) do
-          :done ->
-            state = drop_covered(state, trade_mode, day, peak)
-            {:reply, :ok, kick(%{state | writing?: false})}
+        case persist_attempt(state, trade_mode, day, queued, daily_loss) do
+          {:done, state} ->
+            state = drop_covered(state, trade_mode, day, queued)
+            {:reply, :ok, kick(reset_retry(%{state | writing?: false}, key))}
 
-          :retry ->
-            state = requeue(state, trade_mode, day, peak, daily_loss)
-            Process.send_after(self(), :flush, @retry_ms)
-            {:reply, {:error, :unsynced}, %{state | writing?: true}}
+          {:retry, state} ->
+            state = requeue(state, trade_mode, day, queued, daily_loss)
+            {:reply, {:error, :unsynced}, schedule_retry(state, key)}
         end
     end
   end
@@ -185,7 +203,12 @@ defmodule Bitflyer.Risk.PeakWriter do
   end
 
   def handle_call(:drain, from, state) do
-    state = kick(%{state | suspended?: false})
+    # 退避の残り時間を待たない。停止の drain は未書きをすぐ流す。
+    state =
+      state
+      |> cancel_all_retry_timers()
+      |> Map.merge(%{suspended?: false, writing?: false})
+      |> kick()
 
     if idle?(state) do
       {:reply, :ok, state}
@@ -198,6 +221,18 @@ defmodule Bitflyer.Risk.PeakWriter do
     {:reply, map_size(state.pending), state}
   end
 
+  def handle_call({:retry_timer_left, key}, _from, state) do
+    timer =
+      cond do
+        key -> Map.get(state.retry_timers, key)
+        map_size(state.retry_timers) == 1 -> state.retry_timers |> Map.values() |> hd()
+        true -> nil
+      end
+
+    left = if is_reference(timer), do: Process.read_timer(timer), else: false
+    {:reply, left, state}
+  end
+
   def handle_call({:set_upsert, fun}, _from, state) do
     {:reply, :ok, %{state | upsert: fun}}
   end
@@ -207,17 +242,35 @@ defmodule Bitflyer.Risk.PeakWriter do
   end
 
   @impl true
-  def handle_info(:flush, %{suspended?: true, waiters: []} = state) do
+  def handle_info(:flush_ready, %{suspended?: true, waiters: []} = state) do
     {:noreply, %{state | writing?: false}}
   end
 
-  def handle_info(:flush, %{suspended?: true} = state) do
+  def handle_info(:flush_ready, %{suspended?: true} = state) do
     # drain が待っている。suspend より未書きの flush を優先する。
-    {:noreply, flush_one(%{state | suspended?: false})}
+    {:noreply, flush_ready(%{state | suspended?: false})}
   end
 
+  def handle_info(:flush_ready, state) do
+    {:noreply, flush_ready(state)}
+  end
+
+  def handle_info({:flush_key, key}, state) do
+    state = %{state | retry_timers: Map.delete(state.retry_timers, key)}
+    {:noreply, flush_key(state, key)}
+  end
+
+  # テストが待ちを待たずに次の試行へ進める。そのキーのタイマーだけを外す。
   def handle_info(:flush, state) do
-    {:noreply, flush_one(state)}
+    case Enum.at(state.retry_timers, 0) do
+      {key, timer} ->
+        if is_reference(timer), do: Process.cancel_timer(timer)
+        state = %{state | retry_timers: Map.delete(state.retry_timers, key)}
+        {:noreply, flush_key(state, key)}
+
+      nil ->
+        {:noreply, flush_ready(state)}
+    end
   end
 
   @impl true
@@ -226,35 +279,48 @@ defmodule Bitflyer.Risk.PeakWriter do
     :ok
   end
 
-  defp flush_one(state) do
-    case peek_pending(state) do
-      :empty ->
+  defp flush_ready(state) do
+    case ready_key(state) do
+      nil ->
         finish_if_idle(state)
 
-      {mode, day, peak, daily_loss} ->
+      key ->
+        flush_key(%{state | writing?: true}, key)
+    end
+  end
+
+  defp flush_key(state, {mode, day} = key) do
+    case Map.fetch(state.pending, key) do
+      :error ->
+        finish_if_idle(state)
+
+      {:ok, %{peak: peak, daily_loss: daily_loss}} ->
         case persist_attempt(state, mode, day, peak, daily_loss) do
-          :done ->
+          {:done, state} ->
             state = drop_covered(state, mode, day, peak)
 
-            send(self(), :flush)
-            %{state | writing?: true}
+            send(self(), :flush_ready)
+            %{reset_retry(state, key) | writing?: true}
 
-          :retry ->
+          {:retry, state} ->
             state = requeue(state, mode, day, peak, daily_loss)
-            Process.send_after(self(), :flush, @retry_ms)
-            %{state | writing?: true}
+            state = schedule_retry(state, key)
+            finish_if_idle(%{state | writing?: false})
         end
     end
   end
 
   defp finish_if_idle(state) do
-    case peek_pending(state) do
-      :empty ->
+    cond do
+      map_size(state.pending) == 0 ->
         reply_waiters(%{state | writing?: false})
 
-      _ ->
-        send(self(), :flush)
+      ready_key(state) ->
+        send(self(), :flush_ready)
         %{state | writing?: true}
+
+      true ->
+        %{state | writing?: false}
     end
   end
 
@@ -273,12 +339,12 @@ defmodule Bitflyer.Risk.PeakWriter do
 
       {mode, day, peak, daily_loss} ->
         case persist_attempt(state, mode, day, peak, daily_loss) do
-          :done ->
+          {:done, state} ->
             state = drop_covered(state, mode, day, peak)
 
             flush_pending(state, rounds + 1)
 
-          :retry ->
+          {:retry, state} ->
             flush_pending(requeue(state, mode, day, peak, daily_loss), rounds + 1)
         end
     end
@@ -288,14 +354,29 @@ defmodule Bitflyer.Risk.PeakWriter do
     case do_upsert(state, trade_mode, day, peak) do
       :ok ->
         case ack(daily_loss, trade_mode, day, peak) do
-          :ok -> :done
-          :stale_day -> :done
-          :down -> :retry
+          :ok ->
+            {:done, forget_failure(state, {trade_mode, day})}
+
+          :stale_day ->
+            {:done, forget_failure(state, {trade_mode, day})}
+
+          {:down, exit_reason} ->
+            {state, log?} = note_failure(state, {trade_mode, day}, :ack)
+
+            if log? do
+              Bitflyer.Telemetry.log(:error, "peak persist ack failed; peak kept for retry", %{
+                reason: inspect(exit_reason),
+                trade_mode: trade_mode
+              })
+            end
+
+            {:retry, state}
         end
 
       {:error, reason} ->
-        _ = mark_unsynced(daily_loss, trade_mode, day, reason)
-        :retry
+        {state, log?} = note_failure(state, {trade_mode, day}, reason)
+        _ = mark_unsynced(daily_loss, trade_mode, day, reason, log?)
+        {:retry, state}
     end
   end
 
@@ -318,25 +399,22 @@ defmodule Bitflyer.Risk.PeakWriter do
     end
   catch
     :exit, reason ->
-      Bitflyer.Telemetry.log(:error, "peak persist ack failed; peak kept for retry", %{
-        reason: inspect(reason),
-        trade_mode: trade_mode
-      })
-
-      :down
+      {:down, reason}
   end
 
-  defp mark_unsynced(daily_loss, trade_mode, day, reason) do
-    case GenServer.call(daily_loss, {:peak_persist_failed, trade_mode, day, reason}) do
+  defp mark_unsynced(daily_loss, trade_mode, day, reason, log?) do
+    case GenServer.call(daily_loss, {:peak_persist_failed, trade_mode, day, reason, log?}) do
       :ok -> :ok
       :stale_day -> :stale_day
     end
   catch
     :exit, exit_reason ->
-      Bitflyer.Telemetry.log(:error, "peak unsync failed; peak kept for retry", %{
-        reason: inspect(exit_reason),
-        trade_mode: trade_mode
-      })
+      if log? do
+        Bitflyer.Telemetry.log(:error, "peak unsync failed; peak kept for retry", %{
+          reason: inspect(exit_reason),
+          trade_mode: trade_mode
+        })
+      end
 
       :down
   end
@@ -356,12 +434,18 @@ defmodule Bitflyer.Risk.PeakWriter do
   defp kick(%{writing?: true} = state), do: state
 
   defp kick(state) do
-    if map_size(state.pending) == 0 do
+    if ready_key(state) == nil do
       state
     else
-      send(self(), :flush)
+      send(self(), :flush_ready)
       %{state | writing?: true}
     end
+  end
+
+  defp ready_key(state) do
+    Enum.find_value(state.pending, fn {key, _entry} ->
+      if Map.has_key?(state.retry_timers, key), do: nil, else: key
+    end)
   end
 
   defp idle?(state) do
@@ -392,10 +476,28 @@ defmodule Bitflyer.Risk.PeakWriter do
     {mode, day, entry.peak, entry.daily_loss}
   end
 
+  defp pending_peak(state, trade_mode, day) do
+    state.pending[{trade_mode, day}].peak
+  end
+
+  # 末尾へ回して次の銘柄日を先に試す。値は pending の高い方を残す。
   defp requeue(state, trade_mode, day, peak, daily_loss) do
     key = {trade_mode, day}
-    pending = Map.delete(state.pending, key)
-    %{state | pending: Map.put(pending, key, %{peak: peak, daily_loss: daily_loss})}
+
+    entry =
+      case Map.fetch(state.pending, key) do
+        {:ok, %{peak: current} = existing} ->
+          if Decimal.compare(peak, current) == :gt do
+            %{peak: peak, daily_loss: daily_loss}
+          else
+            existing
+          end
+
+        :error ->
+          %{peak: peak, daily_loss: daily_loss}
+      end
+
+    %{state | pending: Map.put(Map.delete(state.pending, key), key, entry)}
   end
 
   defp drop_covered(state, trade_mode, day, written_peak) do
@@ -421,13 +523,89 @@ defmodule Bitflyer.Risk.PeakWriter do
     %{state | waiters: []}
   end
 
+  defp schedule_retry(state, key) do
+    state = cancel_retry_timer(state, key)
+    stored = Map.get(state.retry_ms, key, @retry_min_ms)
+
+    # drain が待っているあいだは退避を使わず、保存してある間隔自体は進める。
+    delay = if state.waiters == [], do: stored, else: @retry_min_ms
+    timer = Process.send_after(self(), {:flush_key, key}, delay)
+
+    %{
+      state
+      | retry_timers: Map.put(state.retry_timers, key, timer),
+        last_retry_ms: delay,
+        retry_ms: Map.put(state.retry_ms, key, min(stored * 2, @retry_max_ms))
+    }
+  end
+
+  defp reset_retry(state, key) do
+    %{cancel_retry_timer(state, key) | retry_ms: Map.delete(state.retry_ms, key)}
+  end
+
+  defp cancel_retry_timer(state, key) do
+    {timer, timers} = Map.pop(state.retry_timers, key)
+    if is_reference(timer), do: Process.cancel_timer(timer)
+    %{state | retry_timers: timers}
+  end
+
+  defp cancel_all_retry_timers(state) do
+    Enum.each(state.retry_timers, fn {_key, timer} ->
+      if is_reference(timer), do: Process.cancel_timer(timer)
+    end)
+
+    %{state | retry_timers: %{}}
+  end
+
+  # 同じ {mode, day, reason} は初回と、上限間隔より空いた再掲だけを error にする。
+  defp note_failure(state, key, reason) do
+    now = System.monotonic_time(:millisecond)
+    token = failure_token(reason)
+
+    log_key = {key, token}
+
+    log? =
+      case Map.get(state.failure_logs, log_key) do
+        %{at: at} -> now - at >= @retry_max_ms
+        _ -> true
+      end
+
+    state =
+      if log? do
+        %{state | failure_logs: Map.put(state.failure_logs, log_key, %{at: now})}
+      else
+        state
+      end
+
+    {state, log?}
+  end
+
+  defp failure_token(%struct{}), do: struct
+  defp failure_token({kind, _detail}) when is_atom(kind), do: kind
+  defp failure_token(reason) when is_atom(reason) or is_binary(reason), do: reason
+  defp failure_token(_reason), do: :error
+
+  defp forget_failure(state, key) do
+    logs =
+      Map.reject(state.failure_logs, fn
+        {{^key, _token}, _entry} -> true
+        _ -> false
+      end)
+
+    %{state | failure_logs: logs}
+  end
+
   defp empty_state do
     %{
       suspended?: false,
       writing?: false,
       pending: %{},
       waiters: [],
-      upsert: &DailyEquityPeak.upsert/3
+      upsert: &DailyEquityPeak.upsert/3,
+      retry_ms: %{},
+      last_retry_ms: nil,
+      retry_timers: %{},
+      failure_logs: %{}
     }
   end
 

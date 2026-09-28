@@ -2,6 +2,7 @@ defmodule Bitflyer.Risk.PeakWriterTest do
   use Bitflyer.DataCase, async: false
 
   import Bitflyer.TestSupport.DailyLossHelper
+  import ExUnit.CaptureLog
 
   alias Bitflyer.Risk.{DailyLoss, PeakWriter}
   alias Bitflyer.Trading.DailyEquityPeak
@@ -92,6 +93,99 @@ defmodule Bitflyer.Risk.PeakWriterTest do
     assert {:ok, %{peak: restored}} = DailyLoss.snapshot(:paper)
     assert Decimal.eq?(restored, Decimal.new("130000"))
     Agent.stop(agent)
+  end
+
+  test "repeated db failures back off and do not repeat the same error" do
+    day = DailyLoss.trading_day(DateTime.utc_now())
+    name = :"peak_writer_backoff_#{System.unique_integer([:positive])}"
+    {:ok, pid} = start_supervised({PeakWriter, name: name})
+
+    assert :ok =
+             PeakWriter.set_upsert(fn _mode, _day, _peak -> {:error, :db_down} end, server: name)
+
+    first =
+      capture_log(fn ->
+        assert {:error, :unsynced} =
+                 PeakWriter.enqueue(:live, day, Decimal.new("100000"), server: name)
+      end)
+
+    assert first =~ "daily equity peak persist failed"
+    key = {:live, day}
+    assert %{last_retry_ms: 50, retry_ms: %{^key => 100}} = :sys.get_state(pid)
+    left = PeakWriter.retry_timer_left(server: name, key: key)
+    assert is_integer(left) and left >= 0 and left <= 50
+
+    later =
+      capture_log(fn ->
+        Enum.each(1..8, fn _ ->
+          send(pid, :flush)
+          _ = :sys.get_state(pid)
+        end)
+      end)
+
+    refute later =~ "daily equity peak persist failed"
+    assert %{last_retry_ms: 5_000, retry_ms: %{^key => 5_000}} = :sys.get_state(pid)
+    assert PeakWriter.retry_timer_left(server: name, key: key) > 4_000
+    assert {:error, :unsynced} = DailyLoss.snapshot(:live)
+  end
+
+  test "a failed lower enqueue keeps the higher pending peak" do
+    day = DailyLoss.trading_day(DateTime.utc_now())
+    name = :"peak_writer_keep_high_#{System.unique_integer([:positive])}"
+    {:ok, pid} = start_supervised({PeakWriter, name: name})
+
+    assert :ok =
+             PeakWriter.set_upsert(fn _mode, _day, _peak -> {:error, :db_down} end, server: name)
+
+    assert {:error, :unsynced} =
+             PeakWriter.enqueue(:live, day, Decimal.new("200000"), server: name)
+
+    assert {:error, :unsynced} =
+             PeakWriter.enqueue(:live, day, Decimal.new("100000"), server: name)
+
+    assert Decimal.eq?(
+             :sys.get_state(pid).pending[{:live, day}].peak,
+             Decimal.new("200000")
+           )
+
+    assert :ok = PeakWriter.set_upsert(&DailyEquityPeak.upsert/3, server: name)
+    assert :ok = PeakWriter.drain(server: name)
+
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    live = Enum.find(rows, &(&1.trade_mode == :live))
+    assert live
+    assert Decimal.eq?(live.peak, Decimal.new("200000"))
+  end
+
+  test "a successful paper write does not shorten the live retry wait" do
+    day = DailyLoss.trading_day(DateTime.utc_now())
+    name = :"peak_writer_per_key_#{System.unique_integer([:positive])}"
+    {:ok, pid} = start_supervised({PeakWriter, name: name})
+
+    assert :ok =
+             PeakWriter.set_upsert(
+               fn mode, _day, _peak ->
+                 if mode == :live, do: {:error, :db_down}, else: :ok
+               end,
+               server: name
+             )
+
+    assert {:error, :unsynced} =
+             PeakWriter.enqueue(:live, day, Decimal.new("100000"), server: name)
+
+    send(pid, :flush)
+    _ = :sys.get_state(pid)
+    assert %{retry_ms: %{{:live, ^day} => 200}} = :sys.get_state(pid)
+    before = PeakWriter.retry_timer_left(server: name, key: {:live, day})
+    assert is_integer(before) and before > 0
+
+    assert :ok = PeakWriter.enqueue(:paper, day, Decimal.new("90000"), server: name)
+
+    assert %{retry_ms: retries} = :sys.get_state(pid)
+    assert retries[{:live, day}] == 200
+    refute Map.has_key?(retries, {:paper, day})
+    later = PeakWriter.retry_timer_left(server: name, key: {:live, day})
+    assert is_integer(later) and later > 0
   end
 
   test "upsert failure while DailyLoss is down keeps the peak queued" do

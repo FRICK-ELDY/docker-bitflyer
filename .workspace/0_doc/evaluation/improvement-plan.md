@@ -31,6 +31,7 @@
 | P1 #5 | 作業PCでの ready 常駐 | **完了**（2026-09-29。見方を先に「作業PCの `BitflyerWatchReady` が `/health/ready` を引き、失敗が証跡ログに残り、解除手順がある」へ書き換えた。`Get-ScheduledTask -TaskName BitflyerWatchReady` の State は Running。`%LOCALAPPDATA%\bitflyer\watch-ready.log` に `2026-09-28T17:28:41Z result=fail http=000` と `2026-09-28T17:29:43Z result=fail http=000`。解除は `bin/unregister-watch-ready-task.ps1`） |
 | P2 #16 | live 銘柄を一次証跡へ合わせる | **完了**（2026-09-29。`live_safety_test` の `apply_live_overrides! rejects ETH_JPY alone or mixed with BTC_JPY` は `["ETH_JPY"]` と `["BTC_JPY", "ETH_JPY"]` の両方で `ArgumentError`。`risk_test` の `live rejects ETH_JPY because commission evidence is BTC_JPY only` は live 認可が `unsupported_product_for_live`。82 tests, 0 failures） |
 | P2 #17 | `halted_at` を起点のまま残す | **完了**（2026-09-29。`halted_at` はその reason で最初に止まった時刻。`game_day_stage2_test` の `application reconciler child boots only when env boot? is true` は `boot?: true` の起動後に `:periodic_reconcile` しても `manual_halt` の時刻を残す。`reconcile_test` の同一 reason の周期 2 回目も残す。`legacy_unmapped_halt` は `risk_halted` へ変わり時刻が進む） |
+| P2 #18 | PeakWriter の再試行間隔 | **完了**（2026-09-29。`repeated db failures back off and do not repeat the same error` は `retry_timer_left` が 50ms 以下から 4 秒超へ延び、同じ error は続かず live は unsynced のまま。`a failed lower enqueue keeps the higher pending peak` は失敗した 100000 のあとも pending と DB が 200000。paper の成功後も live の `retry_ms` は 200 のまま、待ちタイマーが残る） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -52,7 +53,6 @@ P0 に未完了は無い。前回まで P0 だった commission とハーネス�
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 18 | PeakWriter の再試行間隔 | 50ms 固定を上限付きの退避にし、同一失敗の error ログは初回と間引きだけにする | DB 失敗が続くテストで再試行間隔が延び、同じ error が連続しない |
 | 19 | 成行買いの板厚超過 | 深さ付き板か、保守的な余白を best ask の拘束に足す。P2 #7 の ask 拘束は完了のまま、この残差だけを閉じる | 最上段数量を超えるサイズで、拘束額が ask×size より大きい回帰がある |
 | 20 | ready 証跡の冒頭を見方に合わせる | `watch-ready-evidence.md` 冒頭の「外の監視ホストが無いと閉じない」を、作業PC常駐を完了とする現行の見方へ書き換える。完了の事実は取り消さない | 冒頭と 2026-09-29 の常駐記録が同じ完了条件を述べる |
 | 21 | Risk の説明を実装に合わせる | `risk.ex` の「HWM のために DB 往復しない / cast する」を、enqueue が upsert 完了まで `:ok` を返さない実装へ合わせる | moduledoc を読んだ人が、認可の戻り前に DB へ書くと分かる |
