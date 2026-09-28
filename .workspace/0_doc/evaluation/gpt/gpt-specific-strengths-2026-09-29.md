@@ -22,9 +22,9 @@
   > Feed、鮮度、時計、サイズ、建玉、spot 売りカバー、価格逸脱、成行 spread、原子的頻度予約、日次損失、HWM、残高 probe を一つの認可境界へ集約している。板欠落は成行だけ `bid_ask_missing` で拒否し（`risk.ex:569-595`）、頻度注入は本番では無視して実予約を使う（同 `:599-635`）。日次損失の未同期も認可せず fail-closed である（同 `:639-656`）。
   > 対象ファイル: `apps/bitflyer/lib/bitflyer/risk.ex`
 
-- **HWM write-behind の再送・単調更新・通常停止 drain** `+3`
-  > writer は同一日・モードの高値だけを pending に残し（`peak_writer.ex:376-418`）、upsert 失敗や DailyLoss 停止時も再送する（同 `:290-347`）。DB は `INSERT ... ON CONFLICT ... GREATEST` の一文で低い後着値を拒む（`daily_equity_peak.ex:81-130`）。別 DB 接続の競合テストも最高値 150000 を確認する（`daily_equity_peak_upsert_test.exs:14-28,32-63`）。強制終了窓は別途減点したため、ここでは実装済み範囲だけを評価する。
-  > 対象ファイル: `apps/bitflyer/lib/bitflyer/risk/peak_writer.ex`, `apps/bitflyer/lib/bitflyer/trading/daily_equity_peak.ex`, `apps/bitflyer/test/bitflyer/trading/daily_equity_peak_upsert_test.exs`
+- **認可復帰前に HWM を単調永続化する fail-closed 境界** `+4`
+  > 非 suspend の `enqueue` は upsert と DailyLoss ack が `:done` になるまで `:ok` を返さず、失敗時は pending を残して `{:error, :unsynced}` を返す（`peak_writer.ex:153-175,286-299`）。DB は `INSERT ... ON CONFLICT ... GREATEST` の一文で低い後着値を拒む。認可成功後に PeakWriter を kill し DailyLoss を DB から再初期化しても 160000 が復元される回帰があり（`peak_writer_test.exs:139-158`）、認可後の両メモリ消失窓を閉じている。
+  > 対象ファイル: `apps/bitflyer/lib/bitflyer/risk/peak_writer.ex`, `apps/bitflyer/lib/bitflyer/trading/daily_equity_peak.ex`, `apps/bitflyer/test/bitflyer/risk/peak_writer_test.exs`
 
 ### order-executor
 
@@ -64,7 +64,7 @@
   > bitflyer と ui は別 Application supervisor であり（`application.ex:13-45`, `apps/ui/lib/ui/application.ex:8-23`）、通知 worker も `:one_for_one` の兄弟である。停止時は Ready を先に閉じ、in-flight submit/cancel、HWM writer の順に drain し、失敗は unknown または永続 halt に倒す（`application.ex:59-143`）。UI 停止側も先回りして gate を閉じる（`apps/ui/lib/ui/application.ex:34-42`）。
   > 対象ファイル: `apps/bitflyer/lib/bitflyer/application.ex`, `apps/ui/lib/ui/application.ex`
 
-**小計: +38 / -0 = +38点**
+**小計: +39 / -0 = +39点**
 
 ## 技術評価層 — apps/ui
 
@@ -112,6 +112,12 @@
   > Stage 2 は `System.submit_order/2` で paper 建玉を作り、Feed 断拒否、復帰後再発注、Discord probe を行う（`bitflyer.game_day_stage2.ex:1-22,88-119`）。永続 halt は Repo だけで先読みし、停止中は監督木を起動せず、paper 発注直前にも再読する（同 `:60-76,217-258`）。停止時に `halted_at` を変えない回帰もある（`game_day_stage2_test.exs:52-73,128-136`）。
   > 対象ファイル: `apps/bitflyer/lib/mix/tasks/bitflyer.game_day_stage2.ex`, `apps/bitflyer/test/bitflyer/game_day_stage2_test.exs`
 
+### 可観測性・運用
+
+- **作業 PC で readiness pull を常駐化し解除手順まで閉じた** `+2`
+  > 2026-09-29 に `BitflyerWatchReady` が Running であることと、`/health/ready` 到達失敗が証跡ログへ継続記録されたことが残る（`watch-ready-evidence.md:96-108`）。登録スクリプトはログオン起動・失敗時再起動・リポジトリ外ログを設定し（`register-watch-ready-task.ps1:18-54`）、解除スクリプトはタスク停止・登録削除・URL を含む wrapper 削除を行いログだけを残す（`unregister-watch-ready-task.ps1:10-32`）。所有者が定めた P1 #5 の運用条件を再現可能な形で満たす。
+  > 対象ファイル: `.workspace/0_doc/architecture/env/watch-ready-evidence.md`, `bin/register-watch-ready-task.ps1`, `bin/unregister-watch-ready-task.ps1`
+
 ### セキュリティ・公開面
 
 - **秘密情報と管理面の露出を最小化** `+3`
@@ -124,8 +130,8 @@
   > apps は `bitflyer` と `ui` の2つだけで、取引ドメインから UI への逆依存や裁量発注 UI を持たない。Architecture はモード、起動順、残高正本、health の意味を実装行動まで定義し、今回の commission 証跡や完了条件も日付・反証を持つ。文書だけでなく対応コードを再読して一致を確認できた範囲を評価した。
   > 対象ファイル: `apps/bitflyer/mix.exs`, `apps/ui/mix.exs`, `.workspace/0_doc/architecture/overview.md`, `.workspace/0_doc/architecture/env/commission-unit-evidence.md`
 
-**小計: +12 / -0 = +12点**
+**小計: +14 / -0 = +14点**
 
 ## 合計
 
-**加点合計: +62点**
+**加点合計: +65点**

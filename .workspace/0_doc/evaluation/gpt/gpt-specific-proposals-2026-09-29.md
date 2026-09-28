@@ -22,7 +22,11 @@
   > 現行 telemetry / ConsoleReporter を exporter へ接続し、Ready 率、再接続率、拒否率、突合失敗率、heartbeat 欠落をホスト外へ保持する。カーディナリティ上限と保持期間も同時に定義する。
   > 対象ファイル: `apps/bitflyer/lib/bitflyer/telemetry.ex`, `apps/ui/lib/ui_web/telemetry.ex`
 
-**小計: 3件 / 0点**
+- **監視対象 PC と別のホストへの readiness 常駐移設** `0`
+  > 現在の `BitflyerWatchReady` は所有者が定めた P1 #5 の完了条件を満たす一方、監視対象と同じ作業 PC 自身が停止すると探針も止まる。VLAN1 本番 PC 稼働時には別の作業 PC または外部監視へ同じタスクを移し、取引ホスト全停止も検知できるとさらに堅牢になる。現行の完了条件を満たした後の厚みなので減点しない。
+  > 対象ファイル: `.workspace/0_doc/architecture/env/watch-ready-evidence.md`, `bin/register-watch-ready-task.ps1`
+
+**小計: 4件 / 0点**
 
 ## Supply chain / 実行環境
 
@@ -62,4 +66,4 @@
 
 ## 合計
 
-**提案合計: 9件 / 0点**
+**提案合計: 10件 / 0点**

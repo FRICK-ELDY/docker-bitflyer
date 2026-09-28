@@ -3,15 +3,16 @@
 | 項目 | 内容 |
 |:---|:---|
 | 評価日 | 2026-09-29 |
-| 種別 | **再評価**（前回 2026-09-16） |
+| 種別 | **同日の上書き再評価**（同日の朝に書いた自系統の下書きを、P1 #3 の実装と P1 #5 の完了宣言の後で採点し直した。新しい日付のファイルは作らない） |
 | 評価者 | 第1評価者（Claude Opus 5） |
 | 基準ドキュメント | [vision.md](../../vision.md) / [architecture/overview.md](../../architecture/overview.md) / [.cursor/rules/evaluation.mdc](../../../../.cursor/rules/evaluation.mdc) |
-| 対象コミット | `afc46bb`（`Merge pull request #123 from FRICK-ELDY/fix/p2-10-completion-evidence`） |
+| 対象コミット | `80c486f`（`docs: 作業PCの ready 常駐で監視条件を閉じ、解除手順を残す`） |
 | 詳細 | [strengths](./opus-specific-strengths-2026-09-29.md) / [weaknesses](./opus-specific-weaknesses-2026-09-29.md) / [proposals](./opus-specific-proposals-2026-09-29.md) |
-    10|| 前回（自系統） | [opus/archive/2026-09-16](./archive/2026-09-16/opus-evaluation-2026-09-16.md) |
-| 前回まとめ | [archive/2026-09-16/evaluation-2026-09-16.md](../archive/2026-09-16/evaluation-2026-09-16.md) |
+| 前回（自系統） | [opus/archive/2026-09-16](./archive/2026-09-16/opus-evaluation-2026-09-16.md) |
 
 第2評価者（GPT）の当日文書および `gpt/` 配下は参照していない。すべての判定は当該コードの再読に基づく。
+行番号は本サイクルで実際に読んだ箇所だけを記した。
+`mix precommit` は**本再評価では未再実行**。親が P1 #3 実装後に実行して成功（bitflyer doctest 1 + テスト 668、ui 38、失敗 0）を確認済みという情報は受け取っているが、本評価者は再実行していない。したがって本評価にテスト結果へ依拠した判定は含めない。
 
 ---
 
@@ -19,20 +20,25 @@
 
 | 区分 | 点数 |
 |:---|---:|
-    20|| 加点合計 | **+52** |
-| 減点合計 | **-9** |
-| **純点** | **+43** |
+| 加点合計 | **+54** |
+| 減点合計 | **-8** |
+| **純点** | **+46** |
 
-前回（自系統）は +31 / -16 = +15。加点が増えた理由は 2 つある。(1) 今サイクルで資金保全の中核が実際に前進した（commission 一次証跡、HWM write-behind、drain halt の外部化、ticker 2 層化、GREATEST upsert、Game Day の停止保護）。(2) 前回は差分寄りの採点だったが、今回は指示どおり**現状のシステム全体**を積み上げ、維持されている長所もコードを読み直して再加点した。
+現状システム全体の積み上げである（差分採点ではない）。同日の朝の下書きは +52 / -9 = +43 だった。
 
-減点が -16 → -9 に下がったのは、前回 13 件のうち 7 件（-11 点分）が実際に閉じたためである。新規 3 件（-3 点分）はいずれも今サイクルで入った実装の周辺にあり、**資金を直接失う経路は見つからなかった**。
+上書きの理由は 2 件の状態変化である。
+
+1. **P1 #3（HWM 認可後の crash 窓）が実装で閉じた。** `PeakWriter.enqueue/4` が非 suspend で DB upsert 成功と ack まで待って `:ok` を返すようになった。下書きの `-1`（残差）を消し、加点を `+4` → `+5` に上げた。
+2. **P1 #5（別ホスト監視）の「完了の見方」が所有者によって書き換えられ、完了が宣言された。** 書き換え後の見方はスクリプトと証跡で満たされているので完了を採用し、下書きの `-2`（専用監視PCの欠如）を消した。常駐と解除手順に `+1`。ただし証跡文書が自分の冒頭の完了条件と矛盾したままなので、そこに `-1` を新規計上した。
+
+あわせて、認可経路が同期 DB 往復になったのに `risk.ex` の moduledoc が「往復しない / cast する」と述べたままである点を `-1` として新規に計上した。
 
 ### 観点別小計
 
 | 観点 | 加点 | 減点 | 小計 |
 |:---|---:|---:|---:|
-    30|| apps/bitflyer — order-executor / 手数料会計 | +8 | -1 | **+7** |
-| apps/bitflyer — risk-manager / HWM | +13 | -2 | **+11** |
+| apps/bitflyer — order-executor / 手数料会計 | +8 | -1 | **+7** |
+| apps/bitflyer — risk-manager / HWM | +14 | -2 | **+12** |
 | apps/bitflyer — market-data | +3 | 0 | **+3** |
 | apps/bitflyer — strategy | 0 | -1 | **-1** |
 | apps/bitflyer — 診断タスク / 運用 | +4 | 0 | **+4** |
@@ -41,88 +47,62 @@
 | 実行基盤 / 設定 | +7 | -1 | **+6** |
 | CI / CD | +3 | 0 | **+3** |
 | 横断（テスト戦略） | +6 | 0 | **+6** |
-    40|| 横断（可観測性） | +3 | -2 | **+1** |
+| 横断（可観測性） | +4 | 0 | **+4** |
 | 横断（変更容易性・保守性） | 0 | -1 | **-1** |
-| 横断（プロジェクト全体設計・プロセス） | +2 | 0 | **+2** |
-| **合計** | **+52** | **-9** | **+43** |
+| 横断（プロジェクト全体設計・プロセス） | +2 | -1 | **+1** |
+| **合計** | **+54** | **-8** | **+46** |
 
-小計の合計は加点 +52 / 減点 -9 で、総合スコア +43 と一致する。
+項目合計（加点 +54 / 減点 -8）と総合スコア +46 は一致する。同じ設計を 2 つの観点で数えていないことを確認した（`PeakWriter` の耐久経路は risk-manager / HWM の 1 件、`DrainHalt` の fsync 印は同観点の別件、`GREATEST` upsert は SQL 仲裁の別件として、根拠の重複が無いように分けている）。
 
 ---
 
-## 前回マイナス点の再検証
+## P1 #3 の採否
 
-| # | 前回の指摘 | 前回 | 判定 | 根拠（コード再読） |
-    50||:--:|:---|:---:|:---|:---|
-| 1 | commission 単位が推定のまま「完了」宣言・売り側未検証 | -2 | **解決** | `commission-unit-evidence.md` L44-62 に 2026-09-28 の買い …6098 / 売り …6123 の実差分。`live_balance.ex` L290-297 が `−(S+C)`。`live_balance_test.exs` L452-518 が実測を固定 |
-| 2 | 成行拘束が LTP 基準で `best_ask` を使わない | -1 | **解決** | `risk.ex` L825-834 が ask を返す。paper は L836-845 で LTP のまま |
-| 3 | HWM flush の点火が mark price 依存 | -1 | **部分**（残差 -1） | `risk.ex` L660-672 が `write_behind: true`。`peak_writer.ex` L292-317 が mark 非依存。残るのはノード強制終了のみ（L13-14 が明記） |
-| 4 | `DailyEquityPeak` の衝突検出が `inspect` 文字列一致 | -1 | **解決** | `daily_equity_peak.ex` L105-118 が `ON CONFLICT ... GREATEST` の 1 文。`inspect` 経路は消滅 |
-| 5 | 板が crossed / ゼロで ticker を丸ごと破棄 | -1 | **解決** | `normalize.ex` L43-50, L243-251 が `book: nil` で LTP を残す。L122-137 は層があるとき平坦へ落ちない |
-| 6 | `websockex` 依存の記録が無い | -1 | **未解決** | `mix.exs` L38 不変。`architecture/` に 0 件。`ci-cd.md` L69-76 にも無し |
-| 7 | 戦略が `FixedOnce` 1 本 | -1 | **未解決** | `strategy/` は 3 ファイル。`live_safety.ex` L93-99 が live での有効化を拒否 |
-| 8 | 開発コンテナが root | -1 | **未解決** | `Dockerfile` 全 20 行に `USER` なし |
-| 9 | ハーネスが本番と同じ式で反証になっていない | -1 | **解決** | `live_exchange_harness.ex` L127-146 の 2 モデル。`live_balance_advance_test.exs` L404-409 が `:quote_mark` の halt を固定 |
-    60|| 10 | 別ホスト監視が未配備 | -2 | **未解決** | `watch-ready-evidence.md` L2 の最終更新が 2026-09-13。L29 / L74-75 が未登録を明記 |
-| 11 | Game Day が `RiskState` / `Readiness` を無条件に書き換える | -2 | **解決** | `game_day_stage2.ex` L66-76, L122-139 が Repo だけで読み中断。`clear_circuit` / `mark_ready` の直接呼び出しは全段から消滅 |
-| 12 | improvement-plan が完了条件を満たさない項目を消している | -2 | **解決** | `improvement-plan.md` L7 のルールと `.cursor/rules/evaluation.mdc` L299-307。消化済み 11 件に観測 1 行 |
+**採用（完了）。**
 
-**解決 7 件（-11 点分）/ 部分 1 件 / 未解決 4 件（-5 点分）。**
+| 項目 | 内容 |
+|:---|:---|
+| 完了の見方 | 認可が返った時点で、上がった当日高値が DB にある（プロセスが強制終了しても戻らない） |
+| 再読で確認した観測 | `peak_writer.ex` L163-175 が非 suspend 節で `persist_attempt/5`（upsert + ack）を**返答より前に**実行し、成功時だけ `{:reply, :ok}`。失敗は `{:reply, {:error, :unsynced}}`。`enqueue/4` の doc（L43-44）も同じ契約。`daily_loss.ex` L393-403 が 5 秒タイムアウトの `call` で待ち、`risk.ex` L660-671 → L690-691 が `:unsynced` を発注拒否へ変換する |
+| テスト | `peak_writer_test.exs` L139-157 `write-behind success leaves the DB peak after both processes are discarded`。`:ok` の直後に `pending_count() == 0` を確認し、`Process.exit(pid, :kill)` → `DailyLoss.reinit()` で peak 160000 の復元を assert。失敗側も `:ok` 期待から `{:error, :unsynced}` 期待へ書き換わっている |
+| 判定 | 下書きで `-1` としていた「認可後の強制終了で高値が戻る」窓は**存在しない**。減点を削除し、strengths を `+5` に引き上げた |
 
-### 新規のマイナス点（3 件 / -3 点）
+代償は明示されている（新高値ごとに DB 1 往復、失敗・5 秒超は発注拒否）。**この代償を選んだこと自体は Safety first に沿うので加点対象とした**が、`risk.ex` の moduledoc が旧設計の記述（「ホットパスでは DB 往復しない」「`PeakWriter` へ cast する」）のまま残っているため、そこだけ `-1` とした。
+
+## P1 #5 の採否
+
+**採用（完了）。ただし証跡文書の矛盾に `-1`。**
+
+| 項目 | 内容 |
+|:---|:---|
+| 書き換え後の完了の見方 | 作業PCの `BitflyerWatchReady` が `/health/ready` を引き、失敗が証跡ログに残り、解除手順がある |
+| 証拠（常駐） | `watch-ready-evidence.md` L97-108。監視ホスト `FRICK`、タスク `BitflyerWatchReady` の State は Running |
+| 証拠（探針の失敗） | 同 L107。`%LOCALAPPDATA%\bitflyer\watch-ready.log` に `2026-09-28T17:28:41Z result=fail http=000` と `…17:29:43Z result=fail http=000` |
+| 証拠（登録） | `bin/register-watch-ready-task.ps1` L19-41（`READY_URL` を含む wrapper は `%LOCALAPPDATA%` に置きリポジトリには残さない）、L43-54（`-AtLogOn`、`RestartCount 3`、`Register-ScheduledTask -TaskName "BitflyerWatchReady"`） |
+| 証拠（解除） | `bin/unregister-watch-ready-task.ps1` L18-32（停止 → `Unregister-ScheduledTask` → `READY_URL` 入り wrapper を削除、証跡ログは残す）。`prod.md` L150 と証跡 L73-79 にも手順がある |
+| 判定 | 見方を満たす証拠は文書とスクリプトの両方にある。**専用監視PCの不在は減点しない。** |
+| 残した減点 | 証跡文書 L6-7 が「同一ホストの Compose healthcheck や localhost cron では閉じない」と書いたまま、L97-105 が `127.0.0.1:4000` の常駐で完了を宣言している。**同一ファイル内で 2 つの基準が同居**しており、次サイクルの再検証を壊すので `-1`（weaknesses / 横断・プロセス） |
+
+矛盾の所在は「見方 ↔ 根拠」ではなく「証跡文書の冒頭 ↔ 証跡文書の末尾」である。improvement-plan 側の見方は書き換え済みで根拠と整合するため、**完了そのものは却下しない**。文書の 2 行を移せば閉じる。
+
+---
+
+## 主要な減点（8 件 / -8 点）
 
 | 指摘 | 点数 | 根拠 |
 |:---|:---:|:---|
-| `PeakWriter` の再試行が 50ms 固定で、DB 障害中に毎秒 20 本の `:error` ログ | -1 | `peak_writer.ex` L23, L232-235 / `daily_loss.ex` L752-757 |
-| 一次証跡は `BTC_JPY` だけなのに live 認可は spot allowlist 8 銘柄を通す | -1 | `product.ex` L12-21, L108-119 / `risk.ex` L270-271 / `live_safety.ex` L60-72 |
-    70|| `halted_at` が周期突合のたびに上書きされ、最初の停止時刻が残らない | -1 | `reconciler.ex` L390-397, L411-414 / `game_day_stage2_test.exs` L122-125 |
+| 認可が DB 往復するのに `Risk` の moduledoc と overview が「往復しない」のまま | -1 | `risk.ex` L27, L30-31 / `peak_writer.ex` L163-175 / overview L97 |
+| `PeakWriter` の再試行が 50ms 固定で、DB 障害中に毎秒 20 本の `:error` ログ | -1 | `peak_writer.ex` L26, L242-245 / `daily_loss.ex` L751-755 |
+| 一次証跡は `BTC_JPY` だけなのに live 認可は spot allowlist 8 銘柄を通す | -1 | `product.ex` L12-21, L108-119 / `risk.ex` L262 / `live_safety.ex` L60-72 |
+| 戦略が `FixedOnce` 1 本で、live で有効化できる戦略がゼロ | -1 | `strategy/` 3 ファイル / `live_safety.ex` L93-98 |
+| `halted_at` が周期突合のたびに上書きされ、最初の停止時刻が残らない | -1 | `reconciler.ex` L390-398, L411-414（成功側 L380-383 は正しく触らない） |
+| 開発 `Dockerfile` が root で実行される | -1 | `Dockerfile` L1-20 に `USER` なし / `Dockerfile.prod` L61-67 は非 root |
+| `watch-ready-evidence.md` が自分の完了条件と矛盾したまま完了を宣言 | -1 | 証跡 L6-7 と L97-105 |
+| `websockex` 依存の記録が `architecture/` に無く、制約と lock がずれたまま | -1 | `mix.exs` L38（`~> 0.4`）/ `mix.lock` L56（0.5.1） |
 
----
+**8 件すべて fail-closed 側で、資金を直接失う経路は本サイクルでも見つからなかった。**
 
-## improvement-plan の「完了」再読と採否
-
-`.cursor/rules/evaluation.mdc` L299-307 の手順に従い、各「完了」の根拠行が右列「完了の見方」と矛盾しないかを、対象のコードまたは証跡で読み直した。**矛盾により採用を却下した項目は 0 件である。**
-
-### 完了主張（11 件）— すべて採用
-
-| # | 項目 | 完了の見方 | 再読で確認した観測 | 採否 |
-|:--|:---|:---|:---|:--:|
-    80|| P0 #1 | commission 一次証跡 | 売買それぞれの実差分が内部 expected と許容幅で一致し、証跡に日付・execution id がある | `commission-unit-evidence.md` L44-62 に 2026-09-28 UTC・execution 末尾 …6098 / …6123・size / price / commission・JPY と BTC の実差分・許容内判定。`live_balance_test.exs` L452-518 が同じ数値で `explain` を通す | **採用** |
-| P0 #2 | ハーネス独立性 | 自モデルが誤っていても少なくとも片側モデルの失敗を検出できる | `live_exchange_harness.ex` L131-146 の `set_sell_fee_model/1`、L195-212 / L300-352 で残高を独立に動かす。`live_balance_advance_test.exs` L363-409 が `:quote_mark` の売りで `Reconciler.run_now` → `{:halted, :reconcile_mismatch}` | **採用** |
-| P1 #4 | 突合窓の対称化 | — | `reconcile.ex` L290-354 に `fill_sync_retries`（既定 1）。再試行時に注入 `:fills` を削除（L345）。`reconcile_test.exs` L1168 / L1219 / L1267 に exchange-ahead の 3 ケース（前進・注入破棄・入金は依然 halt） | **採用** |
-| P1 #6 | Game Day Stage 2 paper 縦経路 | — | `game_day_stage2.ex` L282-423 が paper `System.submit_order/2` で建玉を作り、Feed 断で `feed_disconnected`、復帰後に再発注 | **採用** |
-| P1 #6b | Game Day が永続停止を消さない | — | `persisted_start_block/0`（L218-224）を `with_repo/1`（L146-157）で Repo だけ起動して読む。halted / unsynced は中断（L122-139）。`disarm_startup!/0`（L161-195）。`order_gate/0`（L244-259）が発注前に再読。`game_day_stage2_test.exs` L53-74 が `halted_at` 不変を assert | **採用** |
-| P2 #7（09-16） | BalanceCache.probe + Runner backoff | 認可通過→予約失敗の Tight loop が消える | `risk.ex` L717-745 が本番経路で `BalanceCache.probe/4`。`runner.ex` L284-321 が銘柄単位 5s バックオフ、L264-272 が同一 tick 内の後続 command を止める | **採用** |
-| P2 #8（09-16） | ticker bid/ask → spread ゲート | — | `risk.ex` L569-597 が成行のみ mid 基準で `max_spread_pct`。板欠落は `bid_ask_missing` | **採用** |
-| P2 #9（ash.codegen） | ash.codegen --check / Sandbox manual / README | — | `mix.exs` L52 に `ash.codegen --check --domains Bitflyer.Trading`。`apps/bitflyer/test/test_helper.exs` は 2 行で `Sandbox.mode(Bitflyer.Repo, :manual)` | **採用** |
-| P2 #7（09-28） | 成行拘束の ask 化 | — | `risk.ex` L825-834（live 成行買いは ask）、L836-845（paper は LTP）、L830-833（欠落は `bid_ask_missing`）。moduledoc L38-41 が板厚超過を拘束しないことを明記 | **採用** |
-| P2 #8（09-28） | ticker 2 層化 | — | `normalize.ex` L43-50（`book: nil` で LTP を残す）、L122-137 / L146-158（層があるとき平坦へ落ちない）。`health.ex` L174-191 が `book` / `all_books` を JSON に出す | **採用** |
-    90|| P2 #9（09-29） | DailyEquityPeak の GREATEST upsert | — | `daily_equity_peak.ex` L102-132 が `INSERT ... ON CONFLICT DO UPDATE SET peak = GREATEST(...)` の 1 文。`inspect` 再試行は消滅。`daily_equity_peak_upsert_test.exs` L17-30 が `sandbox: false` の別接続 3 本（`pg_backend_pid` が 3 つ）で 120000 / 150000 / 90000 を同時に投げ、保存 peak 150000 | **採用** |
-
-### 部分完了主張（2 件）— 部分完了のまま維持（昇格させない）
-
-| # | 項目 | 主張された残差 | 再読で確認した残差 | 判定 |
-|:--|:---|:---|:---|:--:|
-| P1 #3 | HWM 認可後 crash 窓 | ノード強制終了で DailyLoss と PeakWriter の両メモリが消える窓 | `daily_loss.ex` L392-408 は writer への `call` が返れば `:ok`、`peak_writer.ex` L149-161 は pending に入れて即 reply。DB 完了を待たない。残差は主張どおり存在する（`peak_writer.ex` L13-14 が自ら明記） | **部分完了を維持**（weaknesses に `-1`） |
-| P2 #10 | improvement-plan 運用 | 次回評価が根拠行と見方の矛盾を落とすまでは完了にしない | 今回の再読がその検査に当たる。消化済み 11 件すべてで見方との矛盾は見つからなかった。ただし「次回評価」は本評価が初回の検査であり、継続性はまだ 1 回分 | **部分完了を維持**（strengths に `+2`） |
-
-### 未完了として計画に残っているもの
-
-| # | 項目 | 再読結果 |
-|:--|:---|:---|
-   100|| P1 #5 | 別ホスト監視の実配備 | **未達を確認**。`watch-ready-evidence.md` は最終更新 2026-09-13 のまま。L29「常駐登録: 未登録」、L74-75「VLAN1 本番 PC を `READY_URL` にした常駐は未登録」。常駐配備の記録は無い。weaknesses に `-2` |
-| P3 #11〜#15 | 厚み | 資金保全を実際に損なうものは無いため原則提案。例外として #15 の 2 件（開発 Dockerfile の `USER`、`websockex` の記録）は **7 サイクル連続の滞留**なので `-1` ずつ計上した（過去サイクルと同じ扱い） |
-
-### 前回まとめ（2026-09-16）が未解決とした 6 項目の再検証
-
-| 項目 | 判定 | 根拠 |
-|:---|:---|:---|
-| commission 一次証跡 | **解決** | 証跡 L44-62 に実測。旧売り式が実差分と合わなかったことまで記録（L61） |
-| 別ホスト監視 | **未解決** | 証跡が 2026-09-13 のまま |
-| HWM crash 窓 | **部分** | 残差はノード強制終了のみ |
-| Game Day `clear_circuit` | **解決** | `game_day_stage2.ex` から `Risk.clear_circuit()` と `Readiness.mark_ready()` の直接呼び出しが消滅。テストが `halted_at` 不変を固定 |
-   110|| 完了宣言プロセス | **解決** | ルールが improvement-plan と evaluation.mdc の両方に入り、消化済み全件に観測が付いた |
-| ハーネス共有モデル | **解決** | `:base_deduct` / `:quote_mark` の 2 モデルと、誤モデルでの halt 固定 |
+新規 2 件（`risk.ex` の記述、証跡文書の矛盾）は同じ形をしている。**コードと運用が 1 歩進み、その正本の記述が追いついていない。**
 
 ---
 
@@ -130,31 +110,30 @@
 
 | コマンド | 結果 |
 |:---|:---|
-| `mix precommit` | **本評価者は未実行**（親プロセスが品質ゲート実行中のため `_build` を奪わない） |
-| `docker compose ...` | **未実行**（同上） |
-| `git log` / `git diff --stat` | 実行。`a387746..afc46bb` で 55 ファイル・+3300 / -549 行 |
+| `mix precommit` | **本評価者は未再実行**（本再評価では実行していない。親が #3 実装後に成功を確認済みという情報のみ受領） |
+| `docker compose ...` | **未実行** |
+| `git log` / `git diff --stat` | 実行。`afc46bb..80c486f` で 33 ファイル・+1946 / -108 行。うちコード変更は `daily_loss.ex` / `equity.ex` / `peak_writer.ex` / `peak_writer_test.exs` / `bin/*.ps1` |
 
-静的に確認した CI 定義:
+静的に確認した品質ゲート:
 
-   120|- `mix.exs` L47-55 の `precommit` は `deps.unlock --check-unused` / `format --check-formatted` / `compile --warnings-as-errors` / `ash.codegen --check --domains Bitflyer.Trading` / `test --warnings-as-errors` の 5 本
-- `.github/workflows/ci.yml` L71-72 が同じ `mix precommit` を PostgreSQL 16 サービス上で実行（`TRADE_MODE: dry_run`、L41）
-- `deps-audit` は別ジョブで、`bin/classify-deps-audit.sh` が advisory 検出とツール障害を分けて artifact に残す（L108-132）
-- `docker-prod` ジョブが `Dockerfile.prod` を push なしでビルド（L137-154）
-- Actions はすべて commit SHA ピン（L45, L49, L55 等）。本番シークレットは置かない方針が `ci-cd.md` L78-83
+- `mix.exs` L47-54 の `precommit` は `deps.unlock --check-unused` / `format --check-formatted` / `compile --warnings-as-errors` / `ash.codegen --check --domains Bitflyer.Trading` / `test --warnings-as-errors` の 5 本。`preferred_envs: [precommit: :test]`（L27）
+- `.github/workflows/ci.yml` L18, L72 が同じ `mix precommit` を 1 ステップで実行
+- `deps-audit` は別ジョブで、`bin/classify-deps-audit.sh`（ci.yml L120）が advisory 検出とツール障害を分ける
+- `docker-prod` ジョブが `Dockerfile.prod` を push なしでビルド（ci.yml L134-150）
 
-テスト規模は静的に数えて **705 件**（`apps/bitflyer/test` + `apps/ui/test` の `test` / `property` 宣言）。合否は実行していないので、本評価にテスト結果へ依拠した判定は含めていない。
+テスト規模は静的に数えて **706 件**（`apps/bitflyer/test` + `apps/ui/test` の `test` / `property` 宣言）。本サイクルで +1（`peak_writer_test.exs` の強制終了テスト）。
 
-未実行のまま残るもの: 実 bitFlyer private の再往復、VLAN1 監視常駐、隔離 restore、`Dockerfile.prod` フルビルド、本番長時間稼働。
+未実行のまま残るもの: 実 bitFlyer private の再往復、VLAN1 本番 PC を対象にした監視常駐、隔離 restore、`Dockerfile.prod` フルビルド、本番長時間稼働。
 
 ---
 
-   130|## 現状の一文
+## 現状の一文
 
-**資金会計は「公式からの類推」ではなく「実口座の実測」に乗り換わり、停止の記録は Postgres が書けないときでもディスクに残るようになった。残る live 解禁の障害は、コードではなく取引ホストの外から死活を見る監視が配備されていないことだけである。**
+**資金会計は実口座の実測に乗り、ドローダウンの基準点は認可が返る前に DB へ落ちきるようになった。残る弱点はすべて「コードが正しくなったのに、その正本の記述と適用範囲が追いついていない」種類であり、資金を直接失う経路ではない。**
 
-通っている経路は「WS ACK → Feed ゲート → Strategy（live 既定オフ）→ Risk（DailyLoss / BalanceCache / Equity / spot 在庫 / spread / ask 拘束 / 有限 open age）→ AuthorizedOrder → モード別 executor → execution 単位 Fill（`fee_currency`）→ explain 成功時の tip append → halt / resume」。HWM は認可のホットパスから外れて `PeakWriter` が書き、その drain が失敗したときは fsync した印が次回起動を止める。
+通っている経路は「WS ACK → Feed ゲート → Strategy（live 既定オフ）→ Risk（DailyLoss / BalanceCache probe / Equity / spot 在庫 / spread / ask 拘束 / 有限 open age）→ AuthorizedOrder → モード別 executor → execution 単位 Fill（`fee_currency`）→ explain 成功時の tip append → halt / resume」。HWM の上昇だけは `PeakWriter` 経由で DB upsert 完了まで待ち、書けなければ発注しない。drain が失敗したときは fsync した印が次回起動を Ready にしない。
 
-欠けているのは、取引ホストの外からの Ready 常駐監視と、`BTC_JPY` 以外の spot に対する一次証跡である。
+欠けているのは、取引ホストの**外**からの Ready 常駐監視（現在の常駐は同一ホストの開発 Compose 向き）、`BTC_JPY` 以外の spot に対する一次証跡、そして live で有効化できる戦略である。
 
 ---
 
@@ -162,23 +141,29 @@
 
 **不可。**
 
-   140|**資金保全の結論: 内部の会計・認可・停止・復帰はコード上で説明でき、実測で反証もされている。したがって残る不可の理由は資金モデルではなく「止まったことに誰も気付けない」という一点であり、VLAN1 本番 PC の `/health/ready` を別ホストから常駐監視し、取引ホスト停止を外から検知した記録が残るまで live 実発注は禁止する。**
+**資金保全の結論: 内部の会計・認可・停止・復帰はコード上で説明でき、実測で反証もされている。ドローダウン基準点の耐久性も今サイクルで閉じた。それでも実発注を解禁しない理由は 3 つある。**
+
+1. **解禁しても動かせる戦略が無い。** `FixedOnce` は `LiveSafety` が live での有効化を拒否し（live_safety.ex L93-98）、他の戦略は存在しない。解禁の意味が「observe-only の live 接続」に留まる
+2. **live 認可が一次証跡のない 7 銘柄を通す。** `MarketData.product_codes` を変えるだけで推定の会計モデルに戻る（product.ex L12-21, L108-119 / risk.ex L262）。live 対象を `BTC_JPY` に固定するか、evidence allowlist を入れる
+3. **取引ホスト死の検知がまだ無い。** P1 #5 は書き換え後の見方で完了を採用したが、常駐の `READY_URL` は同一ホストの開発 Compose（証跡 L105）である。**これは減点していない**（見方の書き換えを尊重する）が、解禁条件としては別問題として残る。Vision L122 の「Windows Update による予期しない再起動」と overview L169 の「同一ホスト死の検知は取引ホストの外」に対して、現状は沈黙と正常を区別できない
 
 解禁の最低条件:
 
-1. **P1 #5 の完了。** 作業用 PC1 で `register-watch-ready-task.ps1` を VLAN1 の `READY_URL` に向けて登録し、取引ホストを実際に止めて alert が出た記録を `watch-ready-evidence.md` に残す
-2. live 対象を `BTC_JPY` に固定する（または本 weaknesses の `-1` に対する evidence allowlist を入れる）
+1. live 対象を `BTC_JPY` に固定する（または evidence allowlist を入れる）
+2. `READY_URL` を VLAN1 本番 PC へ向けた常駐を登録し、取引ホストを止めて alert が出た記録を証跡に残す
+3. live で有効化できる薄い戦略 1 本（これが無いと解禁の実益が無い）
 
-上記 2 件が閉じれば、残る `-1` 群（HWM の強制終了残差、`halted_at` 上書き、`PeakWriter` のログ増幅、開発 Dockerfile root、`websockex` 記録、戦略 1 本）はいずれも**解禁後に直しても資金を失わない**種類である。ただし解禁後は「戦略が 1 本も無い」ため、実際に連続運用へ入るには薄い live 戦略が別途要る。
+上記が閉じれば、残る `-1` 群（`PeakWriter` のログ増幅、`halted_at` 上書き、開発 Dockerfile root、`websockex` 記録、正本記述の遅れ）はいずれも**解禁後に直しても資金を失わない**種類である。
 
 ---
 
 ## 優先して直す順
 
-   150|1. **VLAN1 本番 PC の `/health/ready` 常駐監視を登録し、停止検知を実証する**（P1 #5。live 解禁の単一残条件。1 回の作業で閉じる）
+1. **`risk.ex` の moduledoc と overview L97 を現在の設計に合わせる**（認可は HWM の upsert 完了まで待つ、という例外を明文化する。3 行。誤った前提での次の変更を防ぐ）
 2. **live 認可を一次証跡のある銘柄に狭める**（`Product` の evidence allowlist。P0 #1 で作った規律を認可側へ引き継ぐ）
-3. **`halted_at` を条件付き更新にする**（同一理由の再失敗では書き換えない。停止の起点を残す。5 行）
-4. **`PeakWriter` の再試行を指数バックオフにし、`peak_persist_failed` のログを抑制する**（DB 障害中に原因行が埋まらないようにする）
-5. **`prod.md` に強制終了時の HWM 残差と運用対策を明記する**（P1 #3 の部分完了を、コードを増やさずに確定させる）
-6. **7 サイクル連続の軽微 2 件を消す**（開発 `Dockerfile` の `USER`、`websockex` の記録または `~> 0.5` への更新）。「必ず消す」を 2 サイクル連続で守れれば、P3 滞留という構造問題そのものが閉じる
-7. **live で有効化できる薄い戦略 1 本**（解禁条件が揃ってから。判定段がダミーである限り縦経路は本物にならない）
+3. **`watch-ready-evidence.md` L6-7 を現在の見方へ書き換え、旧基準を「まだ閉じないこと」へ移す**（2 行。完了宣言の再検証可能性を戻す）
+4. **`READY_URL` を VLAN1 本番 PC へ向けて常駐を張り直し、ホスト死検知を記録する**（減点ではないが live 解禁条件）
+5. **`halted_at` を条件付き更新にする**（同一理由の再失敗では書き換えない。停止の起点を残す。5 行）
+6. **`PeakWriter` の再試行を指数バックオフにし、`peak_persist_failed` のログを抑制する**（DB 障害中に原因行が埋まらないようにする。あわせて `:write_behind` を改名し、往復レイテンシを telemetry に出す）
+7. **軽微 2 件を消す**（開発 `Dockerfile` の `USER`、`websockex` の記録または `~> 0.5` への更新）
+8. **live で有効化できる薄い戦略 1 本**（解禁条件が揃ってから。判定段がダミーである限り縦経路は本物にならない）
