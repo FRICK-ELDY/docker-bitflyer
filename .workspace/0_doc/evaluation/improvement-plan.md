@@ -1,33 +1,32 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-29（#10 は完了宣言の根拠行を評価手順へ必須化し、消化済みの「完了」に見方の観測を付けた。次回評価の矛盾検査は未了）
-根拠: [evaluation-2026-09-16.md](./evaluation-2026-09-16.md) / [specific-weaknesses-2026-09-16.md](./specific-weaknesses-2026-09-16.md)
+最終更新: 2026-09-29（再評価で完了主張 11 件の矛盾却下は 0。P2 #10 を完了にした。監視は未達のまま）
+根拠: [evaluation-2026-09-29.md](./evaluation-2026-09-29.md) / [specific-weaknesses-2026-09-29.md](./specific-weaknesses-2026-09-29.md)
 
-方針: **利益機能より資金保全・復帰・観測を先に直す。** P0（#1 と #2）は完了。連続 live の前に P1 が残る。戦略の高度化は縦貫通の安全化の後。
+方針: **利益機能より資金保全・復帰・観測を先に直す。** 連続 live の前に残るハード条件は P1 #5（別ホスト監視）である。戦略の高度化はその後。
 
 **完了宣言ルール:** 「完了」と書くときは、右列「完了の見方」を満たした根拠を 1 行必須にする。根拠は日付と、見方が真だと分かる観測（テスト名、証跡の差分、実行結果）を含む。「コード再読」だけでは根拠にしない。満たせない項目は取り消し線にせず **部分完了** と残す。見方を下げるときは、先に右列を書き換える。次回評価は根拠行と見方の矛盾を、コードまたは証跡の再読で落とす（手順は `.cursor/rules/evaluation.mdc` の「improvement-plan の完了宣言」）。
 
 ---
 
-## 消化済み（コード確認・再評価で維持）
+## 消化済み（2026-09-29 の再読で維持）
 
 | # | 項目 | 状態 |
 |:---:|:---|:---|
 | — | tip 前進骨格・ゼロ手数料ハーネス（旧 P0） | 部品として維持 |
 | — | Feed 認可・spot 在庫・ACK・有限 open age・ページング | 維持 |
-| P1 #4 | 突合窓の対称化（`fill_sync_retries`） | **完了**（2026-09-16。`reconcile_test` の exchange-ahead は fill 再同期 1 回で `{:ok}` と tip 前進。再同期後も説明できない入金は `balance_mismatch`） |
-| P1 #6 | Game Day Stage 2 の paper 縦経路 | **コード経路は完了**（2026-09-16。`bitflyer.game_day_stage2` は paper の `System.submit_order/2` で建玉を作り、Feed 断は `feed_disconnected`。停止解除は P1 #6b で撤去） |
-| P1 #6b | Game Day の停止解除副作用 | **完了**（2026-09-28。paper の中断は Repo だけで読み、監督木は起動しない。既存停止の `halted_at` は変えない。`:unsynced` は `persisted_halt_reason` の読取失敗。`Application` の Reconciler 子は引数なしで、`boot?: true` の起動突合だけが `halted_at` を更新し、`boot?: false` では更新しない。paper 発注前に永続停止を再読する。残高同期前は Ready にならない） |
-| P2 #7（2026-09-16） | BalanceCache.probe + Runner backoff | **完了**（2026-09-16。`runner_test` は `insufficient_balance` のあと、throttle 0 の再 tick でも `last_evaluated` を進めず注文を作らない） |
-| P2 #8 | ticker bid/ask → spread ゲート | **完了**（2026-09-16。`risk_test` は spread 4%・上限 0.5% の成行を `max_spread_pct` で拒否し、0.5% 以内は通す。板の切り分けは P2 #8（2026-09-28）） |
-| P2 #9（ash.codegen） | ash.codegen --check / Sandbox manual / README | **完了**（2026-09-16。precommit に `ash.codegen --check --domains Bitflyer.Trading`。`apps/bitflyer` と `apps/ui` の `test_helper.exs` は Sandbox `:manual`。`apps/bitflyer/README.md` は品質ゲートを書く） |
-| P2 #10 | improvement-plan 運用 | **部分完了**（2026-09-29。根拠行は本ファイルと評価手順で必須。次回評価が「完了」と根拠の矛盾を落とすまでは完了にしない） |
-| P0 #1 | commission 一次証跡 | **完了**（2026-09-28。買い …6098 / 売り …6123 の実差分が更新後 expected と JPY 1 円・BTC 1 satoshi 以内） |
-| P0 #2 | ハーネス独立性 | **完了**（2026-09-28。`:quote_mark` の売りは発注→約定同期→Reconciler で `balance_mismatch` halt。既定の縦回帰は Ready。実測差分は `live_balance_test` が固定し、内部式を quote_mark に寄せると halt 側の期待が失敗する） |
-| P1 #3 | HWM 認可後 crash 窓 | **部分完了**（2026-09-28。writer 不在の認可は unsynced。失敗した upsert は再送する。DailyLoss か PeakWriter の片方生存なら高値は戻る。ノード強制終了で両方のメモリが消える窓は残る） |
-| P2 #7（2026-09-28） | 成行拘束の ask 化 | **完了**（2026-09-28。live 成行買いの probe/reserve は `best_ask × size` ちょうど。LTP 名目ちょうどは `insufficient_balance` で required が ask 名目。ask 名目ちょうどは JPY 残 0。paper 成行買いは LTP に FillPricing だけを載せ ask を使わない。ask 欠落は `bid_ask_missing`。ticker に気配数量が無いので、最上段を超えて歩いた超過は拘束しない） |
-| P2 #8 | ticker 2 層化 | **完了**（2026-09-28。crossed / 欠落 / ゼロの板は `book: nil` のまま LTP を Cache に載せる。成行認可は `bid_ask_missing`（telemetry の `detail`。`reason` は `:stale`）。指値は LTP で通る。live 突合の時計検査は crossed book でも LTP 時刻で Ready。`/health/ready` は LTP 鮮度のまま 200 で、JSON の `book` と tick の `status: :book_missing` で板欠落を分ける。層キーがある値は平坦な bid/ask・時刻へ落ちない） |
-| P2 #9（2026-09-29） | DailyEquityPeak の GREATEST upsert | **完了**（2026-09-29。`upsert/3` は `id`・時刻を渡す `INSERT ... ON CONFLICT DO UPDATE SET peak = GREATEST(...)` の 1 文。`inspect` の再試行は無い。`async: true` の別接続 3 本（`pg_backend_pid` が 3 つ）で初回 90000 / 120000 / 150000 はすべて `:ok`、保存 peak は 150000。低い値の後着で peak が下がらないことは `peak_writer_test` の 150000 のあとの 100000。`:error` にならないので `peak_persist_failed` の unsynced には入らない） |
+| P1 #4 | 突合窓の対称化（`fill_sync_retries`） | **完了**（2026-09-16。`reconcile_test` の exchange-ahead は fill 再同期 1 回で `{:ok}` と tip 前進。再同期後も説明できない入金は `balance_mismatch`。2026-09-29 再読で見方との矛盾なし） |
+| P1 #6 | Game Day Stage 2 の paper 縦経路 | **コード経路は完了**（2026-09-16。`bitflyer.game_day_stage2` は paper の `System.submit_order/2` で建玉を作り、Feed 断は `feed_disconnected`。2026-09-29 再読で見方との矛盾なし） |
+| P1 #6b | Game Day の停止解除副作用 | **完了**（2026-09-28。paper の中断は Repo だけで読み、監督木は起動しない。既存停止の `halted_at` は変えない。`boot?: true` の起動突合だけが `halted_at` を更新する。2026-09-29 再読で見方との矛盾なし） |
+| P2 #7（2026-09-16） | BalanceCache.probe + Runner backoff | **完了**（2026-09-16。`runner_test` は `insufficient_balance` のあと、throttle 0 の再 tick でも `last_evaluated` を進めず注文を作らない。2026-09-29 再読で見方との矛盾なし） |
+| P2 #8 | ticker bid/ask → spread ゲート | **完了**（2026-09-16。`risk_test` は spread 4%・上限 0.5% の成行を `max_spread_pct` で拒否する。2026-09-29 再読で見方との矛盾なし） |
+| P2 #9（ash.codegen） | ash.codegen --check / Sandbox manual / README | **完了**（2026-09-16。precommit に `ash.codegen --check --domains Bitflyer.Trading`。両 `test_helper.exs` は Sandbox `:manual`。2026-09-29 再読で見方との矛盾なし） |
+| P2 #10 | improvement-plan 運用 | **完了**（2026-09-29。完了主張 11 件をコードまたは証跡と突き合わせ、見方と矛盾して却下した項目は 0。記録は [evaluation-2026-09-29.md](./evaluation-2026-09-29.md) の採否表） |
+| P0 #1 | commission 一次証跡 | **完了**（2026-09-28。買い …6098 / 売り …6123 の実差分が更新後 expected と JPY 1 円・BTC 1 satoshi 以内。2026-09-29 再読で見方との矛盾なし。適用範囲は BTC_JPY。他銘柄は P2 #16） |
+| P0 #2 | ハーネス独立性 | **完了**（2026-09-28。`:quote_mark` の売りは発注→約定同期→Reconciler で `balance_mismatch` halt。既定の縦回帰は Ready。2026-09-29 再読で見方との矛盾なし） |
+| P2 #7（2026-09-28） | 成行拘束の ask 化 | **完了**（2026-09-28。live 成行買いの probe/reserve は `best_ask × size` ちょうど。ask 欠落は `bid_ask_missing`。最上段を超える超過は未拘束のまま。見方（ask 拘束）は満たす。超過は P2 #19） |
+| P2 #8 | ticker 2 層化 | **完了**（2026-09-28。crossed / 欠落 / ゼロの板は `book: nil` のまま LTP を Cache に載せる。成行認可は `bid_ask_missing`。2026-09-29 再読で見方との矛盾なし） |
+| P2 #9（2026-09-29） | DailyEquityPeak の GREATEST upsert | **完了**（2026-09-29。`upsert/3` は `INSERT ... ON CONFLICT DO UPDATE SET peak = GREATEST(...)` の 1 文。別接続 3 本で保存 peak は最高値。2026-09-29 再読で見方との矛盾なし） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -35,10 +34,7 @@
 
 ## P0 — live 解禁の前に塞ぐ穴
 
-| # | 項目 | 具体策 | 完了の見方 |
-|:---:|:---|:---|:---|
-| 1 | commission 一次証跡 | **完了 (2026-09-28)。** 買い execution …6098 と売り execution …6123 の実差分が、更新後の expected（買い `−S·P` / `+S−C`、売り `+S·P` / `−(S+C)`）と JPY 1 円・BTC 1 satoshi 以内で一致。証跡は [commission-unit-evidence.md](../architecture/env/commission-unit-evidence.md) | 売買それぞれの実差分が内部 expected と許容幅で一致し、証跡に日付・execution id（匿名可）がある |
-| 2 | ハーネス独立性 | **完了 (2026-09-28)。** `:quote_mark` の売りを発注・約定同期・`Reconciler.run_now` に通すと `balance_mismatch` で halt し Ready にならない。既定 `:base_deduct` の縦回帰は Ready。実測の 2026-09-28 差分は `live_balance_test` が explain に固定する。内部式を `:quote_mark` に戻すと、この halt 期待と実測 explain の少なくとも片方が失敗する。JPY 決め打ち反証は維持 | 自モデルが誤っていても少なくとも片側モデルの失敗を検出できる、または実観測でモデルが固定されている |
+P0 に未完了は無い。前回まで P0 だった commission とハーネスは上表のとおり完了。
 
 ---
 
@@ -46,8 +42,8 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 3 | HWM 認可後 crash 窓 | **部分完了 (2026-09-28)。** writer 不在は `{:error, :unsynced}` で認可しない。upsert 失敗は pending に残して再送し、DailyLoss が死んでいても高値を捨てない。PeakWriter 自身の再起動は ETS の未永続高値を積み直す。`prep_stop` の drain 失敗は `persist_failed` で永続 halt。残るのはノード強制終了で DailyLoss と PeakWriter の両メモリが消える窓（認可の戻りより前に DB へ同期しない設計の残差） | 認可直後 crash でも DB 高値が残るテストがある |
-| 5 | 別ホスト監視の実配備 | 作業 PC で `register-watch-ready-task.ps1` を VLAN1 の `READY_URL` に向けて登録。証跡を [watch-ready-evidence.md](../architecture/env/watch-ready-evidence.md) に「本番向き常駐」として残す | 取引ホスト停止を外から検知した記録がある |
+| 3 | HWM 認可後 crash 窓 | **部分完了 (2026-09-29 維持)。** writer 不在は認可しない。upsert 失敗は再送する。通常停止の drain と fsync 印は入った。残るのはノード強制終了で DailyLoss と PeakWriter の両メモリが消える窓（`peak_writer.ex` が明記。重みは `-1`） | 認可直後の強制終了でも DB 高値が残るテストがある |
+| 5 | 別ホスト監視の実配備 | 作業 PC で `register-watch-ready-task.ps1` を VLAN1 の `READY_URL` に向けて登録。証跡を [watch-ready-evidence.md](../architecture/env/watch-ready-evidence.md) に「本番向き常駐」として残す。2026-09-29 時点の証跡は 2026-09-13 の同一ホスト・未登録のまま | 取引ホスト停止を外から検知した記録がある |
 
 ---
 
@@ -55,7 +51,10 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 10 | improvement-plan 運用 | **部分完了 (2026-09-29)。** 完了宣言ルールを本ファイルと `.cursor/rules/evaluation.mdc` の評価手順に置いた。消化済みの「完了」には、当時の見方に対応する観測を 1 行付けた。残るのは次回評価が根拠行と見方の矛盾を再読で落とすこと | 次回評価で「完了」と証跡が矛盾しない |
+| 16 | live 銘柄を一次証跡へ合わせる | `Risk` と `LiveSafety` が `Product.spot?/1` 全体ではなく、証跡のある銘柄（当面 `BTC_JPY`）だけを live で通す。他ペアは実測表を足してから集合に入れる | `ETH_JPY` を live の product_codes にすると起動または認可不通過になるテストがある |
+| 17 | `halted_at` を起点のまま残す | 既に halted かつ同一 reason の再突合では `halted_at` を更新しない | 周期失敗の 2 回目で `halted_at` が変わらないテストがある |
+| 18 | PeakWriter の再試行間隔 | 50ms 固定を上限付きの退避にし、同一失敗の error ログは初回と間引きだけにする | DB 失敗が続くテストで再試行間隔が延び、同じ error が連続しない |
+| 19 | 成行買いの板厚超過 | 深さ付き板か、保守的な余白を best ask の拘束に足す。P2 #7 の ask 拘束は完了のまま、この残差だけを閉じる | 最上段数量を超えるサイズで、拘束額が ask×size より大きい回帰がある |
 
 ---
 
@@ -67,14 +66,16 @@
 | 12 | Prometheus / SLO | 時系列蓄積、カーディナリティ抑制 | 率・推移がホスト外で追える |
 | 13 | Hex 外 scanner | release image / lock の Trivy 等。high の例外期限 | GitHub tag と OS がゲートに入る |
 | 14 | 隔離 restore 証跡 | backup hash → 空 DB → migration → boot/reconcile を記録 | Recoverable が手順だけでなく成功記録になる |
-| 15 | 残る軽微 | 開発 Dockerfile の USER、websockex 記録または移行 | 複数サイクル連続の `-1` が減る |
+| 15 | 残る軽微 | 開発 Dockerfile の USER、websockex の採用理由 1 行 | 開発生成物が root 所有にならない、または採用理由が architecture にある |
+
+HWM の強制終了窓を同期 upsert で閉じるか、prod.md に残差として固定するかは P1 #3 の見方を満たす作業であり、P3 ではない。
 
 ---
 
 ## 意図的に後回し（提案のみ）
 
-- 戦略アルゴリズムの高度化・パラメータ canary・二者承認（解禁後に薄い live 戦略 1 本は例外的に先行可）
-- 板の本格購読・プロパティ / モデルベース試験の本格導入
+- 戦略アルゴリズムの高度化・パラメータ canary（live で FixedOnce は拒否済み。解禁後に薄い 1 本）
+- 板の本格購読・プロパティテストの本格導入
 - private execution WS、API レート予算、起動時 `getpositions` 空検査
 - SBOM / 署名、裁量向け UI、複数取引所、ML 基盤、FX 証拠金（backlog）
 
@@ -89,4 +90,4 @@
 | 本番 CD | [03-cd-prod-host.md](../../3_archive/03-cd-prod-host.md)（完了） |
 | Game Day | [game-day.md](../architecture/env/game-day.md) |
 
-次回評価では、本計画の **P0** がコードおよび証跡上で解決済みかを対象ファイルの再読で確認する。P0 未完了のまま live 実発注を進めた場合は重大減点とする。
+次回評価では、本計画の **P1 #5** が証跡上で解決済みかを再読で確認する。P1 #5 未完了のまま live 実発注を進めた場合は重大減点とする。
