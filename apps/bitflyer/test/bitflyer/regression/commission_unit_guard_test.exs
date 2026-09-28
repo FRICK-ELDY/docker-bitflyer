@@ -81,7 +81,7 @@ defmodule Bitflyer.Regression.CommissionUnitGuardTest do
       assert {:ok, plan} =
                LiveBalance.explain(
                  tips_after_buy(after_buy_jpy, after_buy_btc),
-                 exchange(Decimal.new("999900"), @btc),
+                 exchange(Decimal.new("999950"), Decimal.new("0.49999")),
                  ["JPY", "BTC"],
                  fills: [fill],
                  fee_tolerance_bps: 0
@@ -96,7 +96,7 @@ defmodule Bitflyer.Regression.CommissionUnitGuardTest do
       assert {:error, :reconcile_mismatch, %{kind: :balance_mismatch}} =
                LiveBalance.explain(
                  tips_after_buy(Decimal.new("950000"), Decimal.new("0.50999")),
-                 exchange(Decimal.new("999900"), @btc),
+                 exchange(Decimal.new("999950"), Decimal.new("0.49999")),
                  ["JPY", "BTC"],
                  fills: [wrong],
                  fee_tolerance_bps: 0
@@ -104,8 +104,7 @@ defmodule Bitflyer.Regression.CommissionUnitGuardTest do
     end
 
     test "legacy quote-only sell balances fail reconcile with BTC fee fill", %{fill: fill} do
-      # tip は買い後 base 正。旧売り: commission を JPY 額として notional から引く
-      # → 950000 + 49950 − 0.00001 = 999949.99999 / BTC 0.5。正は 999900 / 0.5
+      # 旧売り（quote mark）: 999900 / BTC 0.5。実測後の正は 999950 / 0.49999。
       assert {:error, :reconcile_mismatch, %{kind: :balance_mismatch, currency: currency}} =
                LiveBalance.explain(
                  tips_after_buy(Decimal.new("950000"), Decimal.new("0.50999")),

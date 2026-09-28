@@ -46,11 +46,8 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
   @after_first_buy_fee_jpy Decimal.new("975000")
   @after_first_buy_fee_btc Decimal.new("0.504995")
   @after_buy_fee_jpy Decimal.new("950000")
-  @after_buy_fee_btc Decimal.new("0.50999")
   @net_position Decimal.new("0.00999")
-  @sell_partial Decimal.new("0.004995")
-  @after_roundtrip_fee_jpy Decimal.new("999900")
-  @after_roundtrip_fee_btc @btc
+  @after_buy_fee_btc Decimal.new("0.50999")
 
   setup do
     reset_readiness()
@@ -146,25 +143,35 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
     assert Readiness.get() == :ready
     assert_tips!(@after_buy_jpy, @after_buy_btc)
 
-    # 売りは DB 建玉を認可が読む（positions 注入なし）
-    sell = submit_live!("p0-2-sell", %{side: :sell})
-    apply_partial!(sell, "exec-p0-2-s1")
+    # 売りは DB 建玉を認可が読む（positions 注入なし）。
+    # 全量は公表手数料余白に収まらないので、size × 1.0015 が建玉以下の数量にする。
+    # 手数料 0 では held が size のままなので、余白分の買い建玉が残る。
+    # 全量 0.01 は size×1.0015 が建玉を超える。0.009 は余白内で、手数料 0 なら建玉が残る。
+    sell_size = Decimal.new("0.009")
+    first = Decimal.new("0.0045")
+    second = Decimal.new("0.0045")
+    sell = submit_live!("p0-2-sell", %{side: :sell, size: sell_size})
+    apply_partial!(sell, "exec-p0-2-s1", Decimal.new("0"), first)
 
     assert {:ok, %Order{status: :partially_filled}} =
              LiveFills.sync_order(sell, exchange: LiveExchangeHarness)
 
-    assert_fills!("p0-2-sell", ["exec-p0-2-s1"], @partial)
-    assert_spot_position!(@partial)
+    assert_fills!("p0-2-sell", ["exec-p0-2-s1"], first)
+    assert_spot_position!(Decimal.sub(@size, first))
     assert Reconciler.run_now() == :ok
     assert Readiness.get() == :ready
-    assert_tips!(@after_first_jpy, @after_first_btc)
 
-    apply_partial!(sell, "exec-p0-2-s2")
+    apply_partial!(sell, "exec-p0-2-s2", Decimal.new("0"), second)
     assert Reconciler.run_now() == :ok
     assert Readiness.get() == :ready
-    assert_fills!("p0-2-sell", ["exec-p0-2-s1", "exec-p0-2-s2"], @size)
-    assert_no_spot_position!()
-    assert_tips!(@jpy, @btc)
+    assert_fills!("p0-2-sell", ["exec-p0-2-s1", "exec-p0-2-s2"], sell_size)
+    leftover = Decimal.sub(@size, sell_size)
+    assert_spot_position!(leftover)
+
+    assert_tips!(
+      Decimal.add(@after_buy_jpy, Decimal.mult(sell_size, @price)),
+      Decimal.add(@btc, leftover)
+    )
   end
 
   test "unexplained deposit on the harness after fills halts" do
@@ -264,8 +271,19 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
     assert_tips!(@after_buy_fee_jpy, @after_buy_fee_btc)
     assert_net!(Decimal.negate(@fee_mark_total), @fee_mark_total)
 
-    sell = submit_live!("p1-4-fee-sell", %{side: :sell, size: @net_position})
-    apply_partial!(sell, "exec-p1-4-s1", @fee_partial, @sell_partial)
+    # 認可は size×1.0015 が建玉以下のときだけ通す。実 fee をその率にすると S+C が建玉と一致する。
+    sell_size = Decimal.div(@net_position, Decimal.add(Decimal.new("1"), Decimal.new("0.0015")))
+    sell_fee = Decimal.sub(@net_position, sell_size)
+    first = Decimal.div(sell_size, 2)
+    first_fee = Decimal.div(sell_fee, 2)
+    second = Decimal.sub(sell_size, first)
+    second_fee = Decimal.sub(sell_fee, first_fee)
+    sell_mark = Decimal.mult(sell_fee, @price)
+    roundtrip_loss = Decimal.add(@fee_mark_total, sell_mark)
+    roundtrip_jpy = Decimal.add(@after_buy_fee_jpy, Decimal.mult(sell_size, @price))
+
+    sell = submit_live!("p1-4-fee-sell", %{side: :sell, size: sell_size})
+    apply_partial!(sell, "exec-p1-4-s1", first_fee, first)
 
     assert {:ok, %Order{status: :partially_filled}} =
              LiveFills.sync_order(sell, exchange: LiveExchangeHarness)
@@ -273,15 +291,73 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
     assert Reconciler.run_now() == :ok
     assert Readiness.get() == :ready
 
-    apply_partial!(sell, "exec-p1-4-s2", @fee_partial, @sell_partial)
+    apply_partial!(sell, "exec-p1-4-s2", second_fee, second)
     assert Reconciler.run_now() == :ok
     assert Readiness.get() == :ready
-    assert_fills!("p1-4-fee-sell", ["exec-p1-4-s1", "exec-p1-4-s2"], @net_position)
-    assert_fill_fees!("p1-4-fee-sell", @fee_total, @fee_mark_total)
+    assert_fills!("p1-4-fee-sell", ["exec-p1-4-s1", "exec-p1-4-s2"], sell_size)
+    assert_fill_fees!("p1-4-fee-sell", sell_fee, sell_mark)
     assert_no_spot_position!()
-    assert_tips!(@after_roundtrip_fee_jpy, @after_roundtrip_fee_btc)
-    assert_exchange_balances!(@after_roundtrip_fee_jpy, @after_roundtrip_fee_btc)
-    assert_net!(Decimal.new("-100"), Decimal.new("100"))
+    assert_tips!(roundtrip_jpy, @btc)
+    assert_exchange_balances!(roundtrip_jpy, @btc)
+    assert_net!(Decimal.negate(roundtrip_loss), roundtrip_loss)
+  end
+
+  test "harness rejects a sell fill when base amount cannot cover size plus fee" do
+    assert {:ok, %{exchange_order_id: id}} =
+             LiveExchangeHarness.place_order(%{
+               product_code: @product,
+               side: :sell,
+               size: @btc,
+               order_type: :market,
+               price: @price,
+               internal_order_id: "p0-1-insufficient"
+             })
+
+    before = LiveExchangeHarness.balances()
+
+    assert {:error, :insufficient_funds} =
+             LiveExchangeHarness.apply_fill(id, %{
+               id: "exec-insufficient",
+               size: @btc,
+               price: @price,
+               commission: Decimal.new("0.00001")
+             })
+
+    assert LiveExchangeHarness.balances() == before
+  end
+
+  test "harness rejects a sell fill when another order holds the fee headroom" do
+    assert {:ok, _} =
+             LiveExchangeHarness.place_order(%{
+               product_code: @product,
+               side: :sell,
+               size: Decimal.new("0.49"),
+               order_type: :market,
+               price: @price,
+               internal_order_id: "p0-1-hold-other"
+             })
+
+    assert {:ok, %{exchange_order_id: id}} =
+             LiveExchangeHarness.place_order(%{
+               product_code: @product,
+               side: :sell,
+               size: Decimal.new("0.01"),
+               order_type: :market,
+               price: @price,
+               internal_order_id: "p0-1-hold-fee"
+             })
+
+    before = LiveExchangeHarness.balances()
+
+    assert {:error, :insufficient_funds} =
+             LiveExchangeHarness.apply_fill(id, %{
+               id: "exec-hold-fee",
+               size: Decimal.new("0.01"),
+               price: @price,
+               commission: Decimal.new("0.00001")
+             })
+
+    assert LiveExchangeHarness.balances() == before
   end
 
   defp submit_live!(internal_order_id, overrides \\ %{}) do

@@ -1097,13 +1097,40 @@ defmodule Bitflyer.RiskTest do
              )
   end
 
-  test "live accepts sell covered by long position" do
+  test "live rejects sell of the full long because the base fee reserve does not fit" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
 
-    assert {:ok, %AuthorizedOrder{}} =
+    assert {:error, :limit_exceeded, %{limit: :spot_sell_exceeds_position}} =
              Risk.authorize(
                valid_command(%{side: :sell, size: Decimal.new("0.01")}),
+               positions: [
+                 %{
+                   product_code: "BTC_JPY",
+                   side: :buy,
+                   size: Decimal.new("0.01"),
+                   average_price: Decimal.new("5000000")
+                 }
+               ],
+               open_orders: [],
+               trade_mode: :live,
+               balances: %{
+                 "JPY" => %{available: Decimal.new("1000000")},
+                 "BTC" => %{available: Decimal.new("0.5")}
+               }
+             )
+  end
+
+  test "live accepts sell that leaves the published fee reserve on the long" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    size =
+      Decimal.div(Decimal.new("0.01"), Decimal.add(Decimal.new("1"), Decimal.new("0.0015")))
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(
+               valid_command(%{side: :sell, size: size}),
                positions: [
                  %{
                    product_code: "BTC_JPY",

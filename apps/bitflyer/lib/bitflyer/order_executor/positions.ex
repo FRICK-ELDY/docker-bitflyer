@@ -18,8 +18,12 @@ defmodule Bitflyer.OrderExecutor.Positions do
   - `:fee` — 手数料（`Decimal`、0 以上。省略時 0。paper は価格に含む）
   - `:fee_currency` — fee の通貨。省略時は `Product.fee_currency/1`
 
-  建玉数量は inventory（買い+base fee なら `size − fee`）。Fill 行の `size` は
-  約定数量のまま残す。反対売買・ドテンの減算も inventory 基準（`held`）で揃える。
+  建玉数量は inventory（買い+base fee なら `size − fee`、売り+base fee なら `size + fee`）。
+  Fill 行の `size` は約定数量のまま残す。spot で `held` が買い建玉を超える約定は
+  売建に反転せず `:reconcile_mismatch`（`spot_sell_exceeds_position`）で失敗する。
+  建玉が無い live spot 売りも売建を作らず `:spot_short_position` で失敗する。
+  paper は fee を渡さない
+  （手数料は約定価格に含む）ので建玉は `size` のまま減る。
   """
   @spec apply_fill(Order.t(), Decimal.t(), keyword()) ::
           {:ok, list(), %{realized_pnl: Decimal.t()}} | {:error, atom(), map()}
@@ -64,45 +68,51 @@ defmodule Bitflyer.OrderExecutor.Positions do
        ) do
     case find_position(product_code, trade_mode) do
       {:ok, nil} ->
-        case create_position(
-               product_code,
-               trade_mode,
-               side,
-               held,
-               fill_price
-             ) do
-          {:ok, notifications} ->
-            realized = net_realized(Decimal.new(0), fee_quote)
+        if Product.spot?(product_code) and side == :sell and trade_mode == :live do
+          # 認可が先に拒む経路。突合の漏れで売建を作らない。
+          {:error, :reconcile_mismatch,
+           %{kind: :position_mismatch, reason: :spot_short_position, product_code: product_code}}
+        else
+          case create_position(
+                 product_code,
+                 trade_mode,
+                 side,
+                 held,
+                 fill_price
+               ) do
+            {:ok, notifications} ->
+              realized = net_realized(Decimal.new(0), fee_quote)
 
-            with {:ok, fill_notifications} <-
-                   insert_fill(
-                     order,
-                     fill_price,
-                     exec_size,
-                     realized,
-                     fee,
-                     fee_currency,
-                     opts
-                   ) do
-              {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
-            end
+              with {:ok, fill_notifications} <-
+                     insert_fill(
+                       order,
+                       fill_price,
+                       exec_size,
+                       realized,
+                       fee,
+                       fee_currency,
+                       opts
+                     ) do
+                {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
+              end
 
-          {:race, %Position{} = position} ->
-            merge_position(
-              position,
-              order,
-              side,
-              exec_size,
-              held,
-              fill_price,
-              fee,
-              fee_currency,
-              fee_quote,
-              opts
-            )
+            {:race, %Position{} = position} ->
+              merge_position(
+                position,
+                order,
+                side,
+                exec_size,
+                held,
+                fill_price,
+                fee,
+                fee_currency,
+                fee_quote,
+                opts
+              )
 
-          {:error, _, _} = error ->
-            error
+            {:error, _, _} = error ->
+              error
+          end
         end
 
       {:ok, %Position{} = position} ->
@@ -155,7 +165,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
     end
   end
 
-  # 建玉の増減は常に held（買い+base fee なら size−fee）。Fill.size は約定 exec_size のまま。
+  # 建玉の増減は常に held（買い+base fee は size−fee、売り+base fee は size+fee）。Fill.size は約定 exec_size のまま。
   # 反対売買の分岐も held 基準。exec_size で減らすと fee 分まで消し込みすぎる（過多決済）。
   defp merge_position(
          %Position{} = position,
@@ -221,25 +231,31 @@ defmodule Bitflyer.OrderExecutor.Positions do
         end
 
       true ->
-        closed = position.size
+        if Product.spot?(order.product_code) and side == :sell do
+          # 在庫超過。DB 障害の persist_failed とは分け、突合理由にする。
+          {:error, :reconcile_mismatch,
+           %{kind: :position_mismatch, reason: :spot_sell_exceeds_position}}
+        else
+          closed = position.size
 
-        realized =
-          net_realized(
-            realized_pnl(position.side, position.average_price, fill_price, closed),
-            fee_quote
-          )
+          realized =
+            net_realized(
+              realized_pnl(position.side, position.average_price, fill_price, closed),
+              fee_quote
+            )
 
-        remainder = Decimal.sub(held, position.size)
+          remainder = Decimal.sub(held, position.size)
 
-        with {:ok, notifications} <-
-               update_position(position, %{
-                 side: side,
-                 size: remainder,
-                 average_price: fill_price
-               }),
-             {:ok, fill_notifications} <-
-               insert_fill(order, fill_price, exec_size, realized, fee, fee_currency, opts) do
-          {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
+          with {:ok, notifications} <-
+                 update_position(position, %{
+                   side: side,
+                   size: remainder,
+                   average_price: fill_price
+                 }),
+               {:ok, fill_notifications} <-
+                 insert_fill(order, fill_price, exec_size, realized, fee, fee_currency, opts) do
+            {:ok, notifications ++ fill_notifications, %{realized_pnl: realized}}
+          end
         end
     end
   end
@@ -320,7 +336,8 @@ defmodule Bitflyer.OrderExecutor.Positions do
     end
   end
 
-  # 建玉に載せる数量。spot の base fee 買いでは受取 net（size − fee）。
+  # 建玉に載せる数量。spot の base fee は買いが受取 net（size − fee）、
+  # 売りが支払い gross（size + fee）。2026-09-28 の BTC_JPY 実測と同じ。
   defp held_size(:buy, size, fee, fee_currency, product_code) do
     if fee_currency == Product.base_currency(product_code) do
       held = Decimal.sub(size, fee)
@@ -335,7 +352,13 @@ defmodule Bitflyer.OrderExecutor.Positions do
     end
   end
 
-  defp held_size(:sell, size, _fee, _fee_currency, _product_code), do: {:ok, size}
+  defp held_size(:sell, size, fee, fee_currency, product_code) do
+    if fee_currency == Product.base_currency(product_code) do
+      {:ok, Decimal.add(size, fee)}
+    else
+      {:ok, size}
+    end
+  end
 
   defp insert_fill(%Order{} = order, fill_price, size, realized_pnl, fee, fee_currency, opts) do
     filled_at =

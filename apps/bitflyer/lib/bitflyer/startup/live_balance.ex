@@ -287,19 +287,20 @@ defmodule Bitflyer.Startup.LiveBalance do
           size
         end
 
+      # 2026-09-28 の BTC_JPY 実測: 売りも commission は base から出る（−(S+C)）。
+      # quote は S·P（JPY は取引所の円未満丸めで 1 円床の内側）。
       :sell when currency == base ->
-        Decimal.negate(size)
+        if fee_ccy == base do
+          Decimal.negate(Decimal.add(size, fee))
+        else
+          Decimal.negate(size)
+        end
 
       :sell when currency == quote ->
-        cond do
-          fee_ccy == quote ->
-            Decimal.sub(notional, fee)
-
-          fee_ccy == base ->
-            Decimal.sub(notional, Decimal.mult(fee, fill.price))
-
-          true ->
-            notional
+        if fee_ccy == quote do
+          Decimal.sub(notional, fee)
+        else
+          notional
         end
 
       _ ->

@@ -1,10 +1,12 @@
 # commission 単位の証跡（P0 #1）
 
-最終更新: 2026-09-16
+最終更新: 2026-09-28
 
 ## 結論
 
-**BTC_JPY（Lightning 現物）の `getexecutions.commission` は BTC（base）単位として扱う。**
+**BTC_JPY（Lightning 現物）の `getexecutions.commission` は BTC（base）単位。**
+2026-09-28 の売買各 1 回で、買いも売りもその BTC が base 残高から減ることを確認した。
+売りで quote から `C·P` を引く旧式は実差分と合わない。
 
 API レスポンス自体は単位フィールドを持たない。単位の根拠は公式手数料表と、
 かんたん取引所 BTC の Unit: BTC 明示、および「Lightning 現物は単位が通貨ペアで異なる /
@@ -21,8 +23,44 @@ Unit varies by Crypto Assets」である。
 | 同ページ・かんたん取引所 BTC | Unit: **BTC**（Lightning 現物と同系の数量×率モデル） |
 | [Private API List Executions](https://lightning.bitflyer.com/docs?lang=en#list-executions) | `commission` 数値のみ。単位の注記なし |
 
-実口座の非ゼロ `getexecutions` は鍵が要るため本リポジトリには置かない。
-単位確定は上記公式に依拠し、会計モデルは fixture で固定する。
+API は単位フィールドを返さない。単位は公式と、下の実測差分で確定する。
+execution id は末尾 4 桁のみ残す。
+
+## Stage 3a 試行（2026-09-27）
+
+署名 GET のみ。`sendchildorder` / `cancelchildorder` は呼んでいない。
+
+| 項目 | 結果 |
+|:---|:---|
+| 実施日 (UTC) | 2026-09-27 |
+| 権限 | count=33。`sendchildorder` あり。withdraw / sendcoin なし |
+| `gettradingcommission` | `BTC_JPY` の `commission_rate=0.0015`（0.15%） |
+| 建玉・未約定 | BTC amount=0、open orders=0 |
+| 板 | ask ≥ bid。0.001 BTC の ask 想定代金が利用可能 JPY を上回った |
+| 発注 | **しない**。最小数量 0.001 BTC（[手数料表の単位・最小](https://bitflyer.com/ja-jp/s/commission)）に届かない |
+
+翌日に円を足し、下の実測へ進んだ。
+
+## 実測（2026-09-28 UTC）
+
+署名つき `gettradingcommission` は `0.0015`。出金権限なし。BTC_JPY 成行を買い 1 回、続けて売り 1 回。全量売り（available 丁度）は `insufficient_funds` で拒否されたので、売り数量は available / 1.0015 に切った。残った BTC は 0.00000001（最小数量未満）。
+
+| | 買い | 売り |
+|:---|:---|:---|
+| execution id | …6098 | …6123 |
+| acceptance id | …6830 | …9600 |
+| size | 0.00101151 | 0.00100848 |
+| price | 13311678 | 13326965 |
+| commission | 0.00000151 | 0.00000151 |
+| JPY 実差分 | −13465 | +13439 |
+| JPY expected | −13464.895…（`−S·P`） | +13439.978…（`+S·P`） |
+| BTC 実差分 | +0.00101 | −0.00100999 |
+| BTC expected | +0.00101（`+S−C`） | −0.00100999（`−(S+C)`） |
+| `LiveBalance.explain` | 許容内（JPY 差 0.105 < 1） | 許容内（JPY 差 0.978 < 1、BTC は一致） |
+
+旧売り式（JPY `+S·P−C·P`、BTC `−S`）だと JPY は約 20 円多く、BTC は `C` だけ少なく、絶対床（1 円 / 1 satoshi）の外だった。
+
+全量（available 丁度）は `insufficient_funds` だった。認可は建玉ちょうどの売りを拒み、`size` に公表上限 0.15% を足した base 負担でカバーを見る。実レートが 0.15% 未満だと、売り残が最小 0.001 BTC を下回って次の売りが通らず long が残ることがある。この口座は 0.15% なので `size = 建玉 / 1.0015` で平坦にできる。`ETH_JPY` 等の単位は未実測で、余白だけこの上限を使う。
 
 ## 会計モデル（BTC_JPY）
 
@@ -30,8 +68,8 @@ Unit varies by Crypto Assets」である。
 
 | 側 | JPY amount | BTC amount | Position.size | realized mark (JPY) |
 |:---|:---|:---|:---|:---|
-| 買い | `−S·P` | `+S − C` | `+S − C`（反対売買の減算もこの inventory） | `−C·P` |
-| 売り | `+S·P − C·P` | `−S` | `−S` | `−C·P`（＋売買差） |
+| 買い | `−S·P` | `+S − C` | `+S − C` | `−C·P` |
+| 売り | `+S·P` | `−(S + C)` | `−(S + C)` | `−C·P`（＋売買差） |
 
 売建 0.01 を買い `S=0.01 / C=0.00001` でカバーすると残短は `0.00001`（フラットにしない）。
 `Fill.fee = C`、`Fill.fee_currency = "BTC"`。Decode の欠落・負は従来どおり fail-closed。
@@ -40,13 +78,13 @@ Unit varies by Crypto Assets」である。
 
 - ファイル: `apps/bitflyer/test/fixtures/exchange/getexecutions_btc_jpy_fee.json`
 - `size` / `price` / `commission` は JSON 文字列（float 経路を避ける）
-- 買い: `size=0.01`, `commission=0.00001` → 受取 BTC `0.00999`、quote mark fee `50` JPY
-- 売り: `size=0.00999`, `commission=0.00001` → 受取 JPY から mark `50` 差し引き
+- 買い: `size=0.01`, `commission=0.00001` → 受取 BTC `0.00999`、quote mark fee `50` JPY（損益のみ）
+- 売り: `size=0.00999`, `commission=0.00001` → 受取 JPY は `S·P`、BTC は `S+C` 減る
 
 初期 tip を JPY `1_000_000` / BTC `0.5` とすると:
 
 1. 買い後: JPY `950_000`、BTC `0.50999`
-2. 売り後: JPY `999_900`、BTC `0.5`
+2. 売り後: JPY `999_950`、BTC `0.49999`
 
 内部 `LiveBalance.explain` の expected が同じ値に一致することを回帰で固定する。
 

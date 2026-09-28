@@ -138,6 +138,17 @@ defmodule Bitflyer.Startup.LiveInventoryTest do
              )
   end
 
+  test "open sell of the full long exceeds once the fee reserve is counted" do
+    assert {:error, :reconcile_mismatch,
+            %{kind: :position_mismatch, reason: :spot_sell_exceeds_position, currency: "BTC"}} =
+             LiveInventory.compare(
+               [buy("BTC_JPY", "0.1")],
+               [sell_open("BTC_JPY", "0.1")],
+               [btc("0.5")],
+               position_size_tolerance_abs: @tol
+             )
+  end
+
   defp buy(product_code, size) do
     %{product_code: product_code, side: :buy, size: Decimal.new(size)}
   end

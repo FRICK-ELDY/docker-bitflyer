@@ -1,6 +1,6 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-16（再評価まとめ後）
+最終更新: 2026-09-28（P0 #1 実測で売り式を確定）
 根拠: [evaluation-2026-09-16.md](./evaluation-2026-09-16.md) / [specific-weaknesses-2026-09-16.md](./specific-weaknesses-2026-09-16.md)
 
 方針: **利益機能より資金保全・復帰・観測を先に直す。** live 実発注は下記 P0 の完了まで禁止。戦略の高度化は縦貫通の安全化の後。
@@ -20,6 +20,7 @@
 | P2 #7 | BalanceCache.probe + Runner backoff | **完了** |
 | P2 #8 | ticker bid/ask → spread ゲート | **完了**（板異常の切り分け残差は P2） |
 | P2 #9 | ash.codegen --check / Sandbox manual / README | **完了** |
+| P0 #1 | commission 一次証跡 | **完了**（2026-09-28。買い …6098 / 売り …6123 の実差分が更新後 expected と JPY 1 円・BTC 1 satoshi 以内） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -29,7 +30,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 1 | commission 一次証跡（部分完了に戻す） | **部分完了 (2026-09-16)。** 内部は `Product.fee_currency/1` で BTC 建て一貫。証跡は公式類推＋fixture のみ。Stage 3a: 最小ロット**買い**1 回で `getexecutions.commission` と前後 `getbalance`、`LiveBalance.explain` を匿名化して [commission-unit-evidence.md](../architecture/env/commission-unit-evidence.md) に貼る。一致後に Stage 3b:**売り**1 回で base/quote 帰属を確定 | 売買それぞれの実差分が内部 expected と許容幅で一致し、証跡に日付・execution id（匿名可）がある |
+| 1 | commission 一次証跡 | **完了 (2026-09-28)。** 買い execution …6098 と売り execution …6123 の実差分が、更新後の expected（買い `−S·P` / `+S−C`、売り `+S·P` / `−(S+C)`）と JPY 1 円・BTC 1 satoshi 以内で一致。証跡は [commission-unit-evidence.md](../architecture/env/commission-unit-evidence.md) | 売買それぞれの実差分が内部 expected と許容幅で一致し、証跡に日付・execution id（匿名可）がある |
 | 2 | ハーネス独立性 | 売り fee を `:base_deduct \| :quote_mark` の両モデルで縦回帰。実観測で片方に固定。現行の「JPY 決め打ち反証」は維持 | 自モデルが誤っていても少なくとも片側モデルの失敗を検出できる、または実観測でモデルが固定されている |
 
 ---
