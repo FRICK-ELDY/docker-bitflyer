@@ -83,8 +83,9 @@ defmodule Bitflyer.Startup.LiveBalanceTest do
       inserted_at: ~U[2026-09-01 00:02:00.000000Z]
     }
 
-    after_sell_jpy = Decimal.new("999900")
-    after_sell_btc = @btc
+    # 売りは JPY +S·P、BTC −(S+C)。S=0.00999, C=0.00001, P=5_000_000
+    after_sell_jpy = Decimal.new("999950")
+    after_sell_btc = Decimal.new("0.49999")
 
     assert {:ok, plan2} =
              LiveBalance.explain(
@@ -229,9 +230,9 @@ defmodule Bitflyer.Startup.LiveBalanceTest do
       Map.merge(spot_sell_fill(), %{fee: Decimal.new("0.00001"), fee_currency: "BTC"})
     ]
 
-    # JPY = tip + notional - fee*price。BTC = tip - size
-    jpy = Decimal.new("1049950")
-    btc = Decimal.new("0.49")
+    # JPY = tip + notional。BTC = tip − size − fee
+    jpy = Decimal.new("1050000")
+    btc = Decimal.new("0.48999")
 
     assert {:ok, plan} =
              LiveBalance.explain(tips(), exchange(jpy, jpy, btc, btc), ["JPY", "BTC"],
@@ -445,6 +446,74 @@ defmodule Bitflyer.Startup.LiveBalanceTest do
     assert {:error, :reconcile_mismatch, %{kind: :balance_baseline_missing, currency: "BTC"}} =
              LiveBalance.explain(only_jpy, exchange(@jpy, @jpy, @btc, @btc), ["JPY", "BTC"],
                fills: []
+             )
+  end
+
+  test "2026-09-28 BTC_JPY buy and sell match base fee within the yen floor" do
+    captured = ~U[2026-09-28 00:00:00.000000Z]
+    buy_at = ~U[2026-09-28 00:40:00.000000Z]
+    sell_at = ~U[2026-09-28 00:41:00.000000Z]
+    jpy0 = Decimal.new("100000")
+    btc0 = Decimal.new("0")
+
+    buy = %{
+      product_code: "BTC_JPY",
+      side: :buy,
+      size: Decimal.new("0.00101151"),
+      price: Decimal.new("13311678"),
+      fee: Decimal.new("0.00000151"),
+      fee_currency: "BTC",
+      inserted_at: buy_at
+    }
+
+    after_buy_jpy = Decimal.new("86535")
+    after_buy_btc = Decimal.new("0.00101")
+
+    assert {:ok, _} =
+             LiveBalance.explain(
+               [
+                 %{currency: "JPY", amount: jpy0, available: jpy0, captured_at: captured},
+                 %{currency: "BTC", amount: btc0, available: btc0, captured_at: captured}
+               ],
+               exchange(after_buy_jpy, after_buy_jpy, after_buy_btc, after_buy_btc),
+               ["JPY", "BTC"],
+               fills: [buy],
+               fee_tolerance_abs: %{"JPY" => "1", "BTC" => "0.00000001"}
+             )
+
+    sell = %{
+      product_code: "BTC_JPY",
+      side: :sell,
+      size: Decimal.new("0.00100848"),
+      price: Decimal.new("13326965"),
+      fee: Decimal.new("0.00000151"),
+      fee_currency: "BTC",
+      inserted_at: sell_at
+    }
+
+    after_sell_jpy = Decimal.new("99974")
+    after_sell_btc = Decimal.new("0.00000001")
+
+    assert {:ok, _} =
+             LiveBalance.explain(
+               [
+                 %{
+                   currency: "JPY",
+                   amount: after_buy_jpy,
+                   available: after_buy_jpy,
+                   captured_at: buy_at
+                 },
+                 %{
+                   currency: "BTC",
+                   amount: after_buy_btc,
+                   available: after_buy_btc,
+                   captured_at: buy_at
+                 }
+               ],
+               exchange(after_sell_jpy, after_sell_jpy, after_sell_btc, after_sell_btc),
+               ["JPY", "BTC"],
+               fills: [sell],
+               fee_tolerance_abs: %{"JPY" => "1", "BTC" => "0.00000001"}
              )
   end
 

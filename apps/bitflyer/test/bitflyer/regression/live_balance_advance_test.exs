@@ -48,7 +48,9 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
   @after_buy_fee_jpy Decimal.new("950000")
   @after_buy_fee_btc Decimal.new("0.50999")
   @net_position Decimal.new("0.00999")
-  @sell_partial Decimal.new("0.004995")
+  # 売り注文は在庫 0.00999 から base fee 0.00001 を残す。S+C が建玉と一致してフラットになる。
+  @sell_order Decimal.new("0.00998")
+  @sell_partial Decimal.new("0.00499")
   @after_roundtrip_fee_jpy Decimal.new("999900")
   @after_roundtrip_fee_btc @btc
 
@@ -264,7 +266,7 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
     assert_tips!(@after_buy_fee_jpy, @after_buy_fee_btc)
     assert_net!(Decimal.negate(@fee_mark_total), @fee_mark_total)
 
-    sell = submit_live!("p1-4-fee-sell", %{side: :sell, size: @net_position})
+    sell = submit_live!("p1-4-fee-sell", %{side: :sell, size: @sell_order})
     apply_partial!(sell, "exec-p1-4-s1", @fee_partial, @sell_partial)
 
     assert {:ok, %Order{status: :partially_filled}} =
@@ -276,7 +278,7 @@ defmodule Bitflyer.Regression.LiveBalanceAdvanceTest do
     apply_partial!(sell, "exec-p1-4-s2", @fee_partial, @sell_partial)
     assert Reconciler.run_now() == :ok
     assert Readiness.get() == :ready
-    assert_fills!("p1-4-fee-sell", ["exec-p1-4-s1", "exec-p1-4-s2"], @net_position)
+    assert_fills!("p1-4-fee-sell", ["exec-p1-4-s1", "exec-p1-4-s2"], @sell_order)
     assert_fill_fees!("p1-4-fee-sell", @fee_total, @fee_mark_total)
     assert_no_spot_position!()
     assert_tips!(@after_roundtrip_fee_jpy, @after_roundtrip_fee_btc)

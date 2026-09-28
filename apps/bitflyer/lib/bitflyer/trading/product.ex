@@ -75,9 +75,9 @@ defmodule Bitflyer.Trading.Product do
   公式手数料表は Lightning 現物を「単位は通貨ペアで異なる / Unit varies by Crypto Assets」
   とし、かんたん取引所の BTC は Unit: BTC。API 自体は単位を返さないため product で決める。
 
-  - `:spot` — 当面 base（BTC_JPY → BTC は証跡済み。買いでは受取 base から差し引き、
-    売りでは quote 受取から mark 換算で差し引き）。`ETH_BTC` 等で quote 建の
-    可能性は残るが、ペア別の非ゼロ execution 証跡が無い間は base に倒す
+  - `:spot` — 当面 base。BTC_JPY は 2026-09-28 の実測で、買い `+S−C` / `−S·P`、
+    売り `−(S+C)` / `+S·P`。`ETH_BTC` 等はペア別の非ゼロ execution 証跡が無い間は
+    同じ base 控除に倒す
   - `:fx` — quote（証拠金。live 未対応。paper 経路の互換）
   - その他 — quote
   """

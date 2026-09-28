@@ -155,7 +155,7 @@ defmodule Bitflyer.OrderExecutor.Positions do
     end
   end
 
-  # 建玉の増減は常に held（買い+base fee なら size−fee）。Fill.size は約定 exec_size のまま。
+  # 建玉の増減は常に held（買い+base fee は size−fee、売り+base fee は size+fee）。Fill.size は約定 exec_size のまま。
   # 反対売買の分岐も held 基準。exec_size で減らすと fee 分まで消し込みすぎる（過多決済）。
   defp merge_position(
          %Position{} = position,
@@ -320,7 +320,8 @@ defmodule Bitflyer.OrderExecutor.Positions do
     end
   end
 
-  # 建玉に載せる数量。spot の base fee 買いでは受取 net（size − fee）。
+  # 建玉に載せる数量。spot の base fee は買いが受取 net（size − fee）、
+  # 売りが支払い gross（size + fee）。2026-09-28 の BTC_JPY 実測と同じ。
   defp held_size(:buy, size, fee, fee_currency, product_code) do
     if fee_currency == Product.base_currency(product_code) do
       held = Decimal.sub(size, fee)
@@ -335,7 +336,13 @@ defmodule Bitflyer.OrderExecutor.Positions do
     end
   end
 
-  defp held_size(:sell, size, _fee, _fee_currency, _product_code), do: {:ok, size}
+  defp held_size(:sell, size, fee, fee_currency, product_code) do
+    if fee_currency == Product.base_currency(product_code) do
+      {:ok, Decimal.add(size, fee)}
+    else
+      {:ok, size}
+    end
+  end
 
   defp insert_fill(%Order{} = order, fill_price, size, realized_pnl, fee, fee_currency, opts) do
     filled_at =

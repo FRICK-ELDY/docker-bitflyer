@@ -192,7 +192,7 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
 
   # 拘束は place 時に available から引く。約定では amount だけ動かし、
   # 他注文の残拘束を available=amount で消さない。
-  # commission は拘束外。spot（BTC_JPY）は base から差し引き、売りは quote へ mark。
+  # commission は拘束外。spot の base fee は買いも売りも base 残高から引く。
   defp apply_execution_balances(state, %{side: :buy} = order, exec) do
     notional = Decimal.mult(exec.size, exec.price)
     fee = execution_fee(exec)
@@ -228,16 +228,23 @@ defmodule Bitflyer.TestSupport.LiveExchangeHarness do
     fee_ccy = Bitflyer.Trading.Product.fee_currency(product)
 
     credited =
-      if fee_ccy == base do
-        Decimal.sub(notional, Decimal.mult(fee, exec.price))
-      else
+      if fee_ccy == quote_ccy do
         Decimal.sub(notional, fee)
+      else
+        notional
+      end
+
+    {base_amount, base_available} =
+      if fee_ccy == base do
+        {Decimal.negate(Decimal.add(exec.size, fee)), Decimal.negate(fee)}
+      else
+        {Decimal.negate(exec.size), Decimal.new(0)}
       end
 
     balances =
       state.balances
       |> adjust_balance(quote_ccy, credited, credited)
-      |> adjust_balance(base, Decimal.negate(exec.size), Decimal.new(0))
+      |> adjust_balance(base, base_amount, base_available)
 
     %{state | balances: balances}
   end
