@@ -72,6 +72,13 @@ docker compose run --rm app mix bitflyer.contract --private
 docker compose run --rm -e TRADE_MODE=paper app mix bitflyer.game_day_stage2
 ```
 
+永続 `RiskState` が halted、または読めないときは、Repo だけ読んで終了する。
+Feed を含む監督木は起動しない。取消 REST は出さない。既存停止の `halted_at` は書き換えない。
+seed の `Reconciler.run_now/0` が失敗したときは、その失敗を新しい停止として `halted_at` に残す。
+Ready は seed の `run_now/0` が `:ok` のあと `Readiness` が `:ready` のときだけ付く。
+`run_now/0` の戻り値そのものは `:ready` ではない。
+paper 発注の前に永続停止を読み直す。別プロセスが共有 DB を halt していれば発注しない。
+
 ## 最小ロット段階解禁（記録。live は解禁条件後）
 
 現行計画の **P0（#1–#2）完了** かつ **P1 #5（監視配備）完了** まで Stage 3 以降は実施しない。
@@ -171,6 +178,6 @@ docker compose run --rm -e TRADE_MODE=paper app mix bitflyer.game_day_stage2
 | 注入 | Feed を `wss://127.0.0.1:1/json-rpc` に差し替え（同一 BEAM）。SQL 建玉は使わない |
 | ready / submit | paper `System.submit_order/2` で建玉 → Feed 断中は `{:error, :stale, %{reason: :feed_disconnected}}` → Feed 復帰後に再 submit `:filled` |
 | Discord | Webhook HTTP 2xx（probe content。URL は残していない）。`last_ok` フィールドは無いため HTTP 到達で閉じた |
-| 復帰 | Feed 子を公式 URL に戻し `clear_circuit` + `mark_ready` 後に再認可成功 |
+| 復帰 | 当時の記録: Feed 子を公式 URL に戻し `clear_circuit` + `mark_ready` 後に再認可成功。再実行手順ではない。現行は上の再現用（起動突合の前に halt なら終了。Ready は seed の突合が成功したあとの `Readiness`） |
 | 次アクション | Stage 3 は live 解禁条件（P0 完了 + P1 残）後。P1 #5 VLAN1 常駐は別途 |
 | 備考 | 再現は `mix bitflyer.game_day_stage2`。発注・取消 REST は呼んでいない。前回の SQL / ready-503 代替を卒業。終了時に Feed 復帰・paper 建玉削除・gameday Order/Fill 削除・tip 再種（共有 DB / 長寿命 BEAM 汚染防止） |

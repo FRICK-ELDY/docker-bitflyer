@@ -1,6 +1,6 @@
 # 改善提案書（improvement-plan）
 
-最終更新: 2026-09-28（P1 #3 HWM write-behind）
+最終更新: 2026-09-28（P1 #6b Game Day 停止解除）
 根拠: [evaluation-2026-09-16.md](./evaluation-2026-09-16.md) / [specific-weaknesses-2026-09-16.md](./specific-weaknesses-2026-09-16.md)
 
 方針: **利益機能より資金保全・復帰・観測を先に直す。** P0（#1 と #2）は完了。連続 live の前に P1 が残る。戦略の高度化は縦貫通の安全化の後。
@@ -16,7 +16,8 @@
 | — | tip 前進骨格・ゼロ手数料ハーネス（旧 P0） | 部品として維持 |
 | — | Feed 認可・spot 在庫・ACK・有限 open age・ページング | 維持 |
 | P1 #4 | 突合窓の対称化（`fill_sync_retries`） | **完了**（コード再読） |
-| P1 #6 | Game Day Stage 2 の paper 縦経路 | **コード経路は完了**。副作用は本計画 P1 #6b |
+| P1 #6 | Game Day Stage 2 の paper 縦経路 | **コード経路は完了**。停止解除の副作用は P1 #6b で撤去 |
+| P1 #6b | Game Day の停止解除副作用 | **完了**（2026-09-28。paper の中断は Repo だけで読み、監督木は起動しない。既存停止の `halted_at` は変えない。`:unsynced` は `persisted_halt_reason` の読取失敗。`Application` の Reconciler 子は引数なしで、`boot?: true` の起動突合だけが `halted_at` を更新し、`boot?: false` では更新しない。paper 発注前に永続停止を再読する。残高同期前は Ready にならない） |
 | P2 #7 | BalanceCache.probe + Runner backoff | **完了** |
 | P2 #8 | ticker bid/ask → spread ゲート | **完了**（板異常の切り分け残差は P2） |
 | P2 #9 | ash.codegen --check / Sandbox manual / README | **完了** |
@@ -43,7 +44,6 @@
 |:---:|:---|:---|:---|
 | 3 | HWM 認可後 crash 窓 | **部分完了 (2026-09-28)。** writer 不在は `{:error, :unsynced}` で認可しない。upsert 失敗は pending に残して再送し、DailyLoss が死んでいても高値を捨てない。PeakWriter 自身の再起動は ETS の未永続高値を積み直す。`prep_stop` の drain 失敗は `persist_failed` で永続 halt。残るのはノード強制終了で DailyLoss と PeakWriter の両メモリが消える窓（認可の戻りより前に DB へ同期しない設計の残差） | 認可直後 crash でも DB 高値が残るテストがある |
 | 5 | 別ホスト監視の実配備 | 作業 PC で `register-watch-ready-task.ps1` を VLAN1 の `READY_URL` に向けて登録。証跡を [watch-ready-evidence.md](../architecture/env/watch-ready-evidence.md) に「本番向き常駐」として残す | 取引ホスト停止を外から検知した記録がある |
-| 6b | Game Day の停止解除副作用 | `mix bitflyer.game_day_stage2` から無条件 `Risk.clear_circuit()` を撤去。開始時に `RiskState.halted` なら理由を出して中断。`mark_ready` 押し通しをやめ、Reconciler 結果で Ready を要求 | paper ドリルが live 停止理由を消さない。Ready が突合経路でしか付かない |
 
 ---
 

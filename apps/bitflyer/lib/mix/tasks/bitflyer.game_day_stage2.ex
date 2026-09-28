@@ -12,6 +12,13 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
       TRADE_MODE=paper mix bitflyer.game_day_stage2
 
   発注・取消の bitFlyer REST は呼ばない。
+
+  `app.start` の前に Repo だけで永続 `RiskState` を読む。halted または読めないときは
+  理由を出して終了し、Feed を含む監督木は起動しない。既存停止の `halted_at` は
+  書き換えない。起動突合・CircuitSync・halt 時取消はこの BEAM では外す。
+  Ready は seed の `Reconciler.run_now/0` が `:ok` のあと `Readiness` が `:ready`
+  のときだけ使う。その失敗は新しい停止として `halted_at` を残す。
+  建玉のあとと Feed 復帰後は突合をやり直さない。paper 発注の前に永続停止を読み直す。
   """
 
   use Mix.Task
@@ -21,8 +28,7 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
   alias Bitflyer.MarketData.{Cache, Feed}
   alias Bitflyer.Observe.Discord
   alias Bitflyer.Readiness
-  alias Bitflyer.Risk
-  alias Bitflyer.Risk.BalanceCache
+  alias Bitflyer.Risk.{BalanceCache, CircuitSync, OpenOrderPolicy}
   alias Bitflyer.Startup.Reconciler
   alias Bitflyer.System, as: TradingSystem
   alias Bitflyer.Trading.{BalanceSnapshot, Fill, Order, Position}
@@ -37,10 +43,48 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
   @feed_poll_attempts 100
 
   @impl Mix.Task
-  def run(_args) do
-    Mix.Task.run("app.start")
-    ensure_paper_mode!()
+  def run(args) when is_list(args), do: run(args, [])
 
+  @doc false
+  @spec run(list(), keyword()) :: term()
+  def run(args, opts) when is_list(args) and is_list(opts) do
+    previous = disarm_startup!()
+
+    try do
+      do_run(args, opts)
+    after
+      restore_startup!(previous)
+    end
+  end
+
+  defp do_run(_args, opts) do
+    halt = Keyword.get(opts, :halt, &System.halt/1)
+    start = Keyword.get(opts, :start, &start_app/0)
+    read_halt = Keyword.get(opts, :read_halt, &persisted_start_block/0)
+
+    case ensure_paper_mode() do
+      :ok ->
+        # 停止中に Feed まで上げない。Repo だけで読み、clear のときだけ監督木を起動する。
+        case with_repo(read_halt) do
+          :ok ->
+            start.()
+            abort_or_drill(:ok, halt)
+
+          blocked ->
+            abort_or_drill(blocked, halt)
+        end
+
+      {:error, :trade_mode, mode} ->
+        Mix.shell().error("""
+        TRADE_MODE must be paper (got #{inspect(mode)}).
+        Example: TRADE_MODE=paper mix bitflyer.game_day_stage2
+        """)
+
+        halt.(1)
+    end
+  end
+
+  defp abort_or_drill(:ok, halt) do
     stamp = System.system_time(:second)
     open_id = "#{@gameday_order_prefix}open-#{stamp}"
     reject_id = "#{@gameday_order_prefix}reject-#{stamp}"
@@ -72,19 +116,145 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
       end
 
     print_report(results)
-    halt_if_failed!(results)
+    halt_if_failed!(results, halt)
   end
 
-  defp ensure_paper_mode! do
+  defp abort_or_drill({:halted, reason}, halt) do
+    Mix.shell().error("""
+    Game Day Stage 2 aborted: RiskState is halted (reason=#{reason}).
+    This drill does not clear the circuit or rewrite halted_at.
+    Resume only through the halt recovery path.
+    """)
+
+    halt.(1)
+  end
+
+  defp abort_or_drill(:unsynced, halt) do
+    Mix.shell().error("""
+    Game Day Stage 2 aborted: RiskState could not be read (unsynced).
+    Refusing to run while a persisted halt might exist.
+    """)
+
+    halt.(1)
+  end
+
+  defp start_app do
+    Mix.Task.run("app.start")
+  end
+
+  defp with_repo(read_halt) do
+    case Bitflyer.Repo.start_link() do
+      {:ok, pid} ->
+        try do
+          read_halt.()
+        after
+          GenServer.stop(pid)
+        end
+
+      {:error, {:already_started, _pid}} ->
+        read_halt.()
+    end
+  end
+
+  # 起動突合と CircuitSync は app.start 中に live 取消へ進む。
+  # start より先にこの BEAM だけ外す。常駐側の設定は別プロセスのまま。
+  defp disarm_startup! do
+    previous = %{
+      reconciler: Application.get_env(:bitflyer, Reconciler),
+      circuit_sync: Application.get_env(:bitflyer, CircuitSync),
+      open_order_policy: Application.get_env(:bitflyer, OpenOrderPolicy)
+    }
+
+    reconciler = Application.get_env(:bitflyer, Reconciler, [])
+
+    Application.put_env(
+      :bitflyer,
+      Reconciler,
+      reconciler |> Keyword.put(:boot?, false) |> Keyword.put(:interval_ms, :infinity)
+    )
+
+    circuit_sync = Application.get_env(:bitflyer, CircuitSync, [])
+
+    Application.put_env(
+      :bitflyer,
+      CircuitSync,
+      Keyword.put(circuit_sync, :interval_ms, :disabled)
+    )
+
+    policy = Application.get_env(:bitflyer, OpenOrderPolicy, [])
+
+    Application.put_env(
+      :bitflyer,
+      OpenOrderPolicy,
+      policy
+      |> Keyword.put(:cancel_on_halt, %{})
+      |> Keyword.put(:max_open_age_ms, :infinity)
+    )
+
+    previous
+  end
+
+  defp restore_startup!(previous) do
+    restore_env(Reconciler, previous.reconciler)
+    restore_env(CircuitSync, previous.circuit_sync)
+    restore_env(OpenOrderPolicy, previous.open_order_policy)
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:bitflyer, key)
+  defp restore_env(key, value), do: Application.put_env(:bitflyer, key, value)
+
+  defp ensure_paper_mode do
     mode = Bitflyer.TradeMode.current()
 
-    if mode != :paper do
-      Mix.shell().error("""
-      TRADE_MODE must be paper (got #{inspect(mode)}).
-      Example: TRADE_MODE=paper mix bitflyer.game_day_stage2
-      """)
+    if mode == :paper do
+      :ok
+    else
+      {:error, :trade_mode, mode}
+    end
+  end
 
-      System.halt(1)
+  @doc false
+  @spec persisted_start_block() :: :ok | {:halted, atom()} | :unsynced
+  def persisted_start_block do
+    case Bitflyer.Risk.Circuit.persisted_halt_reason() do
+      {:halted, reason} -> {:halted, reason}
+      :unsynced -> :unsynced
+      :clear -> :ok
+    end
+  end
+
+  @doc false
+  @spec require_ready_via_reconcile() :: :ok | {:error, term()}
+  def require_ready_via_reconcile do
+    case Reconciler.run_now() do
+      :ok ->
+        case Readiness.get() do
+          :ready -> :ok
+          other -> {:error, {:not_ready, other}}
+        end
+
+      {:error, reason} ->
+        {:error, {:reconcile_failed, reason, Readiness.get()}}
+    end
+  end
+
+  # ETS の Ready だけでは発注しない。CircuitSync を止めているので、別 BEAM が
+  # 共有 DB を halt してもここで読む。run_now はしない（enforce で新たに開かない）。
+  @doc false
+  @spec order_gate() :: :ok | {:error, term()}
+  def order_gate do
+    case persisted_start_block() do
+      :ok ->
+        case Readiness.get() do
+          :ready -> :ok
+          other -> {:error, {:not_ready, other}}
+        end
+
+      {:halted, reason} ->
+        {:error, {:persisted_halt, reason}}
+
+      :unsynced ->
+        {:error, :unsynced}
     end
   end
 
@@ -94,66 +264,80 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
     :ok = BalanceCache.refresh(:paper)
     # 既存 HWM / 建玉で enforce が halt しないよう LTP を高めに置く
     put_fresh_ticker!(Decimal.new("6000000"))
-    _ = Risk.clear_circuit()
-    :ok = Reconciler.run_now()
 
-    case Readiness.get() do
-      :ready ->
+    case require_ready_via_reconcile() do
+      :ok ->
         Mix.shell().info("ready=ready after paper reconcile")
         %{results | seed: {:ok, :ready}}
 
-      other ->
+      {:error, detail} ->
         Mix.shell().error(
-          "not ready after seed/reconcile: #{inspect(other)} (refusing mark_ready push-through)"
+          "not ready after seed/reconcile: #{inspect(detail)} (refusing mark_ready push-through)"
         )
 
-        %{results | seed: {:error, {:not_ready, other}}}
+        %{results | seed: {:error, detail}}
     end
   end
 
   defp step_open_position(%{seed: {:ok, _}} = results, internal_order_id) do
-    case TradingSystem.submit_order(command(internal_order_id), trade_mode: :paper) do
-      {:ok, order} ->
-        Mix.shell().info(
-          "open ok status=#{order.status} filled=#{Decimal.to_string(order.filled_size)}"
+    case order_gate() do
+      :ok ->
+        case TradingSystem.submit_order(command(internal_order_id), trade_mode: :paper) do
+          {:ok, order} ->
+            Mix.shell().info(
+              "open ok status=#{order.status} filled=#{Decimal.to_string(order.filled_size)}"
+            )
+
+            %{results | open: {:ok, order.status}}
+
+          other ->
+            Mix.shell().error("open failed: #{inspect(other)}")
+            %{results | open: {:error, other}}
+        end
+
+      {:error, detail} ->
+        Mix.shell().error(
+          "not ready before open: #{inspect(detail)} (persisted halt blocks paper submit)"
         )
 
-        _ = Risk.clear_circuit()
-        :ok = Readiness.mark_ready()
-        %{results | open: {:ok, order.status}}
-
-      other ->
-        Mix.shell().error("open failed: #{inspect(other)}")
-        %{results | open: {:error, other}}
+        %{results | open: {:error, detail}}
     end
   end
 
   defp step_open_position(results, _id), do: results
 
   defp step_feed_disconnect_reject(%{open: {:ok, _}} = results, internal_order_id) do
-    _ = Risk.clear_circuit()
-    :ok = Readiness.mark_ready()
-    :ok = inject_disconnected_feed!()
-    :ok = await_feed!(connected?: false)
+    case order_gate() do
+      :ok ->
+        :ok = inject_disconnected_feed!()
+        :ok = await_feed!(connected?: false)
 
-    snap = Feed.connection_snapshot()
+        snap = Feed.connection_snapshot()
 
-    Mix.shell().info(
-      "feed after inject available=#{snap.available?} connected=#{snap.connected?}"
-    )
+        Mix.shell().info(
+          "feed after inject available=#{snap.available?} connected=#{snap.connected?}"
+        )
 
-    case TradingSystem.submit_order(command(internal_order_id), trade_mode: :paper) do
-      {:error, :stale, %{reason: :feed_disconnected} = meta} ->
-        Mix.shell().info("feed reject ok reason=feed_disconnected")
-        %{results | feed_reject: {:ok, meta.reason}}
+        case TradingSystem.submit_order(command(internal_order_id), trade_mode: :paper) do
+          {:error, :stale, %{reason: :feed_disconnected} = meta} ->
+            Mix.shell().info("feed reject ok reason=feed_disconnected")
+            %{results | feed_reject: {:ok, meta.reason}}
 
-      {:error, :stale, %{reason: :feed_unavailable} = meta} ->
-        Mix.shell().info("feed reject ok reason=feed_unavailable")
-        %{results | feed_reject: {:ok, meta.reason}}
+          {:error, :stale, %{reason: :feed_unavailable} = meta} ->
+            Mix.shell().info("feed reject ok reason=feed_unavailable")
+            %{results | feed_reject: {:ok, meta.reason}}
 
-      other ->
-        Mix.shell().error("feed reject unexpected: #{inspect(other)}")
-        %{results | feed_reject: {:error, other}}
+          other ->
+            Mix.shell().error("feed reject unexpected: #{inspect(other)}")
+            %{results | feed_reject: {:error, other}}
+        end
+
+      {:error, detail} ->
+        Mix.shell().error(
+          "not ready before feed inject: #{inspect(detail)} (refusing mark_ready push-through)"
+        )
+
+        %{results | feed_reject: {:error, detail}}
     end
   end
 
@@ -164,24 +348,34 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
     :ok = restore_feed!()
     :ok = await_feed!(connected?: true)
     put_fresh_ticker!(Decimal.new("6000000"))
-    _ = Risk.clear_circuit()
-    :ok = Readiness.mark_ready()
 
-    case results.feed_reject do
-      {:ok, _} ->
-        case TradingSystem.submit_order(command(internal_order_id, "0.01"), trade_mode: :paper) do
-          {:ok, order} ->
-            Mix.shell().info("resume submit ok status=#{order.status}")
-            %{results | resume: {:ok, order.status}}
+    case order_gate() do
+      :ok ->
+        case results.feed_reject do
+          {:ok, _} ->
+            case TradingSystem.submit_order(command(internal_order_id, "0.01"),
+                   trade_mode: :paper
+                 ) do
+              {:ok, order} ->
+                Mix.shell().info("resume submit ok status=#{order.status}")
+                %{results | resume: {:ok, order.status}}
 
-          other ->
-            Mix.shell().error("resume submit failed: #{inspect(other)}")
-            %{results | resume: {:error, other}}
+              other ->
+                Mix.shell().error("resume submit failed: #{inspect(other)}")
+                %{results | resume: {:error, other}}
+            end
+
+          _ ->
+            Mix.shell().info("resume skipped: feed_reject did not succeed")
+            %{results | resume: {:error, :skipped_after_feed_reject_fail}}
         end
 
-      _ ->
-        Mix.shell().info("resume skipped: feed_reject did not succeed")
-        %{results | resume: {:error, :skipped_after_feed_reject_fail}}
+      {:error, detail} ->
+        Mix.shell().error(
+          "not ready after feed restore: #{inspect(detail)} (refusing mark_ready push-through)"
+        )
+
+        %{results | resume: {:error, detail}}
     end
   end
 
@@ -242,7 +436,7 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
     """)
   end
 
-  defp halt_if_failed!(results) do
+  defp halt_if_failed!(results, halt) do
     failed? =
       Enum.any?(
         [
@@ -260,7 +454,7 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
       )
 
     if failed? do
-      System.halt(1)
+      halt.(1)
     else
       :ok
     end

@@ -35,7 +35,7 @@ defmodule Bitflyer.Application do
           {Task.Supervisor, name: Bitflyer.MarketData.TaskSupervisor},
           shutdown: @child_shutdown_ms
         ),
-        Supervisor.child_spec(Bitflyer.Startup.Reconciler, shutdown: @child_shutdown_ms),
+        reconciler_child_spec(),
         # 発注経路の兄弟。通知失敗・クラッシュで取引木を巻き込まない。
         Supervisor.child_spec(Bitflyer.Observe.Discord, shutdown: @child_shutdown_ms)
       ] ++ market_data_feed()
@@ -184,6 +184,13 @@ defmodule Bitflyer.Application do
   end
 
   defp maybe_mark_submission_unknown(_entry), do: :skipped
+
+  @doc false
+  @spec reconciler_child_spec() :: Supervisor.child_spec()
+  def reconciler_child_spec do
+    # 引数なし。boot? は Reconciler.init/1 が env から読む。
+    Supervisor.child_spec(Bitflyer.Startup.Reconciler, shutdown: @child_shutdown_ms)
+  end
 
   defp market_data_feed do
     if Bitflyer.MarketData.enabled?() do
