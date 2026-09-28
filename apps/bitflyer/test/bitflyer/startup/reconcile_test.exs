@@ -68,6 +68,23 @@ defmodule Bitflyer.Startup.ReconcileTest do
     end
   end
 
+  defmodule BrokenBookTickerRest do
+    @behaviour Bitflyer.MarketData.Rest.Client
+
+    @impl true
+    def fetch_ticker(product_code) do
+      {:ok,
+       %{
+         "product_code" => product_code,
+         "ltp" => 5_000_000,
+         "best_bid" => 5_002_000,
+         "best_ask" => 5_001_000,
+         "timestamp" =>
+           DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
+       }}
+    end
+  end
+
   defmodule SkewedTickerRest do
     @behaviour Bitflyer.MarketData.Rest.Client
 
@@ -1320,6 +1337,32 @@ defmodule Bitflyer.Startup.ReconcileTest do
 
     assert {:error, :unsafe_api_permissions} = Reconciler.run_now()
     assert Readiness.get() == {:halted, :unsafe_api_permissions}
+  end
+
+  test "live clock check passes on LTP when the book is crossed" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+    previous_md = Application.get_env(:bitflyer, Bitflyer.MarketData)
+
+    Application.put_env(:bitflyer, :trade_mode, :live)
+    Application.put_env(:bitflyer, :exchange_client, MatchingBalancesExchange)
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.MarketData,
+      Keyword.merge(previous_md || [], rest_client: BrokenBookTickerRest)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, :trade_mode, previous)
+      Application.put_env(:bitflyer, :exchange_client, Bitflyer.Exchange.Unavailable)
+      Application.put_env(:bitflyer, Bitflyer.MarketData, previous_md)
+    end)
+
+    seed_live_balance_baseline!()
+
+    assert {:ok, _} = Reconcile.run(trade_mode: :live, exchange: MatchingBalancesExchange)
+    assert Reconciler.run_now() == :ok
+    assert Readiness.get() == :ready
   end
 
   test "live with skewed ticker timestamp halts as clock_skew" do

@@ -106,7 +106,7 @@ defmodule Bitflyer.MarketData.FeedTest do
                    500
 
     assert Cache.fresh?(@market_key, 5_000)
-    assert {:ok, %{ltp: ltp}, _} = Cache.get(@market_key)
+    assert {:ok, %{ltp: %{price: ltp}}, _} = Cache.get(@market_key)
     assert Decimal.equal?(ltp, Decimal.new(4_900_000))
 
     status = Feed.status(feed)
@@ -137,8 +137,33 @@ defmodule Bitflyer.MarketData.FeedTest do
                     %{product_code: @product}},
                    500
 
-    assert {:ok, %{ltp: ws_ltp}, _} = Cache.get(@market_key)
+    assert {:ok, %{ltp: %{price: ws_ltp}, book: book}, _} = Cache.get(@market_key)
     assert Decimal.equal?(ws_ltp, Decimal.new("5000000"))
+    assert match?(%{best_bid: _, best_ask: _}, book)
+
+    crossed =
+      Jason.encode!(%{
+        "method" => "channelMessage",
+        "params" => %{
+          "channel" => MarketData.ticker_channel(@product),
+          "message" => %{
+            "product_code" => @product,
+            "ltp" => "5000000",
+            "best_bid" => "5100000",
+            "best_ask" => "5000000"
+          }
+        }
+      })
+
+    Socket.Local.push_frame(socket, crossed)
+    _ = Feed.status(feed)
+
+    assert_receive {:telemetry, [:bitflyer, :market_data, :tick], %{count: 1},
+                    %{product_code: @product, status: :book_missing}},
+                   500
+
+    assert {:ok, %{book: nil}, _} = Cache.get(@market_key)
+    assert Cache.fresh?(@market_key, 5_000)
   end
 
   test "disconnect resubscribes and gap-fills again; stale cache rejects risk" do

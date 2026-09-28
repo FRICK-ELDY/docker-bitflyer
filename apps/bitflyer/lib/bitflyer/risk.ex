@@ -9,7 +9,7 @@ defmodule Bitflyer.Risk do
   検査: 同期 → FailureRate 同期 → Feed 接続（`market_feed_gate`）→ 鮮度 →
   時計ずれ → 注文サイズ → 建玉 →
   live spot 売りカバー（買い建玉 − 未約定売りの base 負担。手数料余白込み） → 価格逸脱 →
-  成行 spread（`max_spread_pct`） →
+  成行 spread（`max_spread_pct`。板欠落は `bid_ask_missing`。LTP 鮮度と時計は残る） →
   発注頻度予約 → 日次損失 → 日次ドローダウン（realized+unrealized） → 残高。
   live は先に銘柄種別を検査し、spot 以外（FX/CFD）を拒否する。
   live は `max_open_age_ms` が有限でないと認可しない（GTC 無期限を防ぐ）。
@@ -44,7 +44,7 @@ defmodule Bitflyer.Risk do
   require Ash.Query
 
   alias Bitflyer.MarketData
-  alias Bitflyer.MarketData.{Cache, Feed}
+  alias Bitflyer.MarketData.{Cache, Feed, Normalize}
   alias Bitflyer.OperationalStatus
 
   alias Bitflyer.Risk.{
@@ -416,32 +416,34 @@ defmodule Bitflyer.Risk do
   @doc """
   ticker 値の取引所時刻とホスト壁時計のずれを検査する。
 
-  `source_timestamp` 欠落は常に fail-closed（リプレイ耐性）。
+  時刻は LTP 層の `source_timestamp`（平坦な同名フィールドも読む）。
+  板の有無は見ない。時刻欠落は常に fail-closed（リプレイ耐性）。
   """
   @spec check_source_timestamp(map() | term(), non_neg_integer(), keyword()) ::
           :ok | {:error, :clock_skew, map()}
   def check_source_timestamp(value, max_skew_ms, opts \\ [])
 
-  def check_source_timestamp(%{source_timestamp: %DateTime{} = source}, max_skew_ms, opts)
+  def check_source_timestamp(value, max_skew_ms, opts)
       when is_integer(max_skew_ms) and max_skew_ms >= 0 do
-    now = Keyword.get_lazy(opts, :now_utc, &DateTime.utc_now/0)
-    skew_ms = abs(DateTime.diff(now, source, :millisecond))
+    case Normalize.source_timestamp(value) do
+      %DateTime{} = source ->
+        now = Keyword.get_lazy(opts, :now_utc, &DateTime.utc_now/0)
+        skew_ms = abs(DateTime.diff(now, source, :millisecond))
 
-    if skew_ms > max_skew_ms do
-      {:error, :clock_skew,
-       %{
-         skew_ms: skew_ms,
-         max_ms: max_skew_ms,
-         source_timestamp: source
-       }}
-    else
-      :ok
+        if skew_ms > max_skew_ms do
+          {:error, :clock_skew,
+           %{
+             skew_ms: skew_ms,
+             max_ms: max_skew_ms,
+             source_timestamp: source
+           }}
+        else
+          :ok
+        end
+
+      _ ->
+        {:error, :clock_skew, %{reason: :missing_source_timestamp, max_ms: max_skew_ms}}
     end
-  end
-
-  def check_source_timestamp(_value, max_skew_ms, _opts)
-      when is_integer(max_skew_ms) and max_skew_ms >= 0 do
-    {:error, :clock_skew, %{reason: :missing_source_timestamp, max_ms: max_skew_ms}}
   end
 
   defp check_order_size(command, limits) do
@@ -860,7 +862,7 @@ defmodule Bitflyer.Risk do
 
     case Cache.get(key, server) do
       {:ok, value, _received_at} ->
-        case extract_ltp(value) do
+        case Normalize.ltp_price(value) do
           %Decimal{} = ltp -> {:ok, ltp}
           _ -> :miss
         end
@@ -876,42 +878,13 @@ defmodule Bitflyer.Risk do
 
     case Cache.get(key, server) do
       {:ok, value, _received_at} ->
-        case extract_bid_ask(value) do
+        case Normalize.book(value) do
           {:ok, bid, ask} -> {:ok, bid, ask}
           :miss -> :miss
         end
 
       :miss ->
         :miss
-    end
-  end
-
-  defp extract_ltp(%{ltp: %Decimal{} = ltp}) do
-    if Decimal.positive?(ltp), do: ltp, else: nil
-  end
-
-  defp extract_ltp(%{"ltp" => %Decimal{} = ltp}) do
-    if Decimal.positive?(ltp), do: ltp, else: nil
-  end
-
-  defp extract_ltp(_), do: nil
-
-  defp extract_bid_ask(%{best_bid: %Decimal{} = bid, best_ask: %Decimal{} = ask}) do
-    validate_bid_ask(bid, ask)
-  end
-
-  defp extract_bid_ask(%{"best_bid" => %Decimal{} = bid, "best_ask" => %Decimal{} = ask}) do
-    validate_bid_ask(bid, ask)
-  end
-
-  defp extract_bid_ask(_), do: :miss
-
-  defp validate_bid_ask(bid, ask) do
-    if Decimal.positive?(bid) and Decimal.positive?(ask) and
-         Decimal.compare(ask, bid) != :lt do
-      {:ok, bid, ask}
-    else
-      :miss
     end
   end
 
@@ -1150,16 +1123,27 @@ defmodule Bitflyer.Risk do
     Bitflyer.Telemetry.execute(
       :risk_rejected,
       %{count: 1},
-      Map.merge(
-        %{
-          rejection_code: code,
-          reason: code,
-          trade_mode: Bitflyer.TradeMode.current(),
-          product_code: Map.get(command, :product_code) || Map.get(meta, :product_code),
-          side: Map.get(command, :side)
-        },
-        Map.take(meta, [:limit, :currency, :kind, :skew_ms, :max_ms])
-      )
+      rejection_metadata(command, code, meta)
     )
+  end
+
+  defp rejection_metadata(command, code, meta) do
+    %{
+      rejection_code: code,
+      reason: code,
+      trade_mode: Bitflyer.TradeMode.current(),
+      product_code: Map.get(command, :product_code) || Map.get(meta, :product_code),
+      side: Map.get(command, :side)
+    }
+    |> Map.merge(Map.take(meta, [:limit, :currency, :kind, :skew_ms, :max_ms]))
+    |> maybe_put_detail(meta)
+  end
+
+  # 拒否コード（`:stale` 等）とは別に、`bid_ask_missing` のような内訳を残す。
+  defp maybe_put_detail(metadata, meta) do
+    case Map.get(meta, :reason) do
+      detail when is_atom(detail) -> Map.put(metadata, :detail, detail)
+      _ -> metadata
+    end
   end
 end

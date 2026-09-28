@@ -202,6 +202,7 @@ config :logger, :default_formatter,
     :snapshot_hash,
     :skew_ms,
     :max_ms,
+    :detail,
     :strategy_parameter_revision_id,
     :trading_day
   ]

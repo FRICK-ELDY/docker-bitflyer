@@ -1,7 +1,7 @@
 defmodule Bitflyer.OrderExecutor.Paper do
   @moduledoc false
 
-  alias Bitflyer.MarketData.Cache
+  alias Bitflyer.MarketData.{Cache, Normalize}
   alias Bitflyer.OrderExecutor.Paper.FillPricing
   alias Bitflyer.OrderExecutor.{Balances, Positions}
   alias Bitflyer.Trading.Order
@@ -122,9 +122,9 @@ defmodule Bitflyer.OrderExecutor.Paper do
 
         case Cache.get(key, server) do
           {:ok, value, _received_at} ->
-            case extract_ltp(value) do
-              {:ok, ltp} -> {:ok, ltp}
-              :error -> {:error, :fill_price_unavailable, %{market_key: key}}
+            case Normalize.ltp_price(value) do
+              %Decimal{} = ltp -> {:ok, ltp}
+              _ -> {:error, :fill_price_unavailable, %{market_key: key}}
             end
 
           :miss ->
@@ -135,25 +135,6 @@ defmodule Bitflyer.OrderExecutor.Paper do
         {:error, :invalid_command, %{field: :market_key}}
     end
   end
-
-  defp extract_ltp(%{ltp: ltp}), do: cast_ltp(ltp)
-  defp extract_ltp(%{"ltp" => ltp}), do: cast_ltp(ltp)
-  defp extract_ltp(_), do: :error
-
-  defp cast_ltp(%Decimal{} = ltp) do
-    if Decimal.positive?(ltp), do: {:ok, ltp}, else: :error
-  end
-
-  defp cast_ltp(ltp) when is_binary(ltp) do
-    case Decimal.parse(ltp) do
-      {decimal, ""} -> cast_ltp(decimal)
-      _ -> :error
-    end
-  end
-
-  defp cast_ltp(ltp) when is_integer(ltp), do: cast_ltp(Decimal.new(ltp))
-  defp cast_ltp(ltp) when is_float(ltp), do: cast_ltp(Decimal.from_float(ltp))
-  defp cast_ltp(_), do: :error
 
   defp mark_filled(%Order{} = order, fill_price) do
     attrs = %{

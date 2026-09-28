@@ -139,7 +139,7 @@ Ready 状態の正本は `Bitflyer.Readiness`（`:not_ready` / `:ready` / `{:hal
 | パス | 役割 | 200 の条件 | 主な用途 |
 | --- | --- | --- | --- |
 | `GET /health/live` | liveness | プロセスが応答できる（常時） | Compose healthcheck / 再起動判定 |
-| `GET /health/ready` | readiness | DB 可 + Readiness `:ready` +（MarketData 有効時は Feed 接続かつ全銘柄鮮度） | 外部監視。WS 断・stale を 503 で検知 |
+| `GET /health/ready` | readiness | DB 可 + Readiness `:ready` +（MarketData 有効時は Feed 接続かつ全銘柄の LTP 鮮度） | 外部監視。WS 断・stale を 503 で検知。板だけの欠落は 200 のまま、JSON の `book` で見る |
 | `GET /health` | 従来互換 | DB 可かつ halted でない（起動中 `:not_ready` 含む） | 既存ツール向け |
 
 LiveView Socket が Endpoint で `/live` を使うため、liveness は `/health/live` とする。Compose の healthcheck は `/health/live` を見る（WS 断でコンテナ再起動しない）。盲目運転の検知は `/health/ready` を監視する。
@@ -154,7 +154,9 @@ Status UI（`:browser`）は発注可否・建玉・未約定・当日損益・h
 4. executor は内部注文 ID で冪等に送る。`dry_run` なら送らず記録のみ、`paper` なら擬似約定、`live` なら bitFlyer REST
 5. 約定・拒否・取消は datastore に書き、strategy と risk に返す
 
-strategy から API を直接叩かない。market-data の遅延や欠損があるときは、新しい注文を出さない。
+strategy から API を直接叩かない。market-data の遅延や LTP の欠損があるときは、新しい注文を出さない。
+
+Ticker の Cache 値は `{ltp, book}` の 2 層である。`ltp` は価格と取引所時刻（`source_timestamp`）。`book` は有効な bid/ask だけで、欠落・ゼロ・負・crossed は `nil` のまま LTP を残す。成行は板が無いと `bid_ask_missing` で拒否する。指値は LTP の鮮度・時計・価格逸脱で通り、板は要求しない。`/health/ready` と Discord の halt / disconnect は LTP 鮮度と Feed 接続を見るので、板だけの異常では落ちない（配信停止と混ぜない）。切り分けは ready JSON の `market_data.entries[].book`、tick telemetry の `status: :book_missing`、拒否 telemetry の `detail: :bid_ask_missing`（`reason` は `:stale` のまま）である。
 
 ## 可観測性
 
@@ -170,7 +172,7 @@ strategy から API を直接叩かない。market-data の遅延や欠損があ
 - コンテナは `restart: unless-stopped` 相当で自動再起動する
 - ヘルスチェックは「プロセス生存」だけでなく「データ鮮度」と「取引所との同期」を見る
 - WebSocket 切断時は再接続し、必要なら REST で穴埋めする。購読は JSON-RPC request id の ACK（`result: true`）を待ち、書込み成功だけでは connected にしない。未 ACK / error / 失敗 ACK / timeout は再接続する
-- 時計ずれは注文や署名に影響するため、ホストの時刻同期を前提にする。ticker `source_timestamp` とホスト壁時計の差が `max_clock_skew_ms` を超えると Risk が拒否し、live 起動突合でも halt する。`source_timestamp` 欠落も発注拒否（fail-closed）
+- 時計ずれは注文や署名に影響するため、ホストの時刻同期を前提にする。時刻は ticker の LTP 層 `source_timestamp` とホスト壁時計の差で、`max_clock_skew_ms` を超えると Risk が拒否し、live 起動突合でも halt する。LTP 層の時刻欠落も発注拒否（fail-closed）。板の有無は時計検査に使わない
 - live の未約定は `BITFLYER_MAX_OPEN_AGE_MS` 超過で取消し、終端確認後に hold を解放する。未設定・infinity では起動しない
 - グレースフルシャットダウンでは、新規発注を止め、進行中の書き込みを終えてから終了する
 

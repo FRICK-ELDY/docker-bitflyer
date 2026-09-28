@@ -62,6 +62,7 @@ defmodule Bitflyer.Telemetry do
                         :timeout_ms,
                         :skew_ms,
                         :max_ms,
+                        :detail,
                         :strategy_parameter_revision_id,
                         :trading_day
                       ])

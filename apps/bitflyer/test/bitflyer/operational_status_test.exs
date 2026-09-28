@@ -237,8 +237,42 @@ defmodule Bitflyer.OperationalStatusTest do
 
     refute status.orders_allowed?
     assert status.orders_reason == :stale_market_data
+    refute status.market_data.all_books?
+    refute hd(status.market_data.entries).book?
     refute status.market_data.all_fresh?
     assert hd(status.market_data.entries).age_ms == 10_000
+  end
+
+  test "fresh LTP with a missing book stays fresh and reports the book" do
+    now = Cache.monotonic_ms()
+
+    assert Cache.put(
+             @market_key,
+             %{
+               ltp: %{
+                 price: Decimal.new("5000000"),
+                 source_timestamp: DateTime.utc_now()
+               },
+               book: nil
+             },
+             received_at: now
+           ) == :ok
+
+    market =
+      OperationalStatus.market_data_snapshot(
+        now: now,
+        max_age_ms: 5_000,
+        product_codes: [@product],
+        enabled?: true
+      )
+
+    assert market.all_fresh?
+    refute market.all_books?
+    entry = hd(market.entries)
+    assert entry.fresh?
+    refute entry.book?
+
+    assert OperationalStatus.market_feed_gate(market, @connected_feed) == :ok
   end
 
   test "feed_snapshot gate fields follow connection_snapshot when feed is down" do

@@ -995,10 +995,14 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       # mid 500万・spread 4bps。既定 max_spread_pct 0.5% は通るが ask は LTP より高い
       assert :ok =
                Cache.put(@market_key, %{
-                 ltp: ltp,
-                 best_bid: Decimal.new("4999000"),
-                 best_ask: ask,
-                 source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+                 ltp: %{
+                   price: ltp,
+                   source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+                 },
+                 book: %{
+                   best_bid: Decimal.new("4999000"),
+                   best_ask: ask
+                 }
                })
 
       seed_balance_cache!(:live, %{"JPY" => ltp_notional, "BTC" => Decimal.new("0")})
@@ -1035,7 +1039,7 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       ltp = Decimal.new("5000000")
       size = Decimal.new("0.01")
       put_fresh_market(ltp)
-      reserved_jpy = Decimal.mult(fresh_ticker_value(ltp).best_ask, size)
+      reserved_jpy = Decimal.mult(fresh_ticker_value(ltp).book.best_ask, size)
       assert Decimal.gt?(reserved_jpy, Decimal.mult(ltp, size))
 
       seed_balance_cache!(:live, %{

@@ -2,20 +2,31 @@ defmodule Bitflyer.MarketData.Normalize do
   @moduledoc """
   取引所 ticker JSON を Cache 用 `{key, value}` に正規化する。
 
-  `ltp` / `best_bid` / `best_ask` に加え、取引所 `timestamp` を
-  `source_timestamp`（UTC `DateTime`）として保持する。
-  公開 ticker のオフセット無し日時は UTC とみなす（Private API の JST 契約とは別）。
-  時刻欠落は `nil`（Risk の skew は fail-closed）。
-  `ltp` / bid / ask の欠落・ゼロ・負、および crossed（ask < bid）は `:error`
-  （Cache に載せない。取引所が瞬間 0 を返しても旧値の鮮度切れで fail-closed）。
+  値は `{ltp, book}` の 2 層。`ltp` は価格と取引所 `timestamp`
+  （`source_timestamp`、UTC `DateTime`）。公開 ticker のオフセット無し日時は
+  UTC とみなす（Private API の JST 契約とは別）。時刻欠落は `nil`
+  （Risk の skew は fail-closed）。
+  `book` は有効な `best_bid` / `best_ask`（正かつ ask >= bid）。
+  欠落・ゼロ・負・パース不能・crossed（ask < bid）は板だけ `nil` にし、
+  LTP は Cache に載せる（鮮度と時計検査は残る。spread は `bid_ask_missing`）。
+  `ltp` の欠落・ゼロ・負、および時刻文字列のパース失敗は `:error`
+  （Cache に載せない）。
   WS は `params.channel` と message の `product_code` が一致しない場合 `:error`。
   """
 
-  @type ticker_value :: %{
-          required(:ltp) => Decimal.t(),
-          required(:best_bid) => Decimal.t(),
-          required(:best_ask) => Decimal.t(),
+  @type ltp_layer :: %{
+          required(:price) => Decimal.t(),
           required(:source_timestamp) => DateTime.t() | nil
+        }
+
+  @type book_layer :: %{
+          required(:best_bid) => Decimal.t(),
+          required(:best_ask) => Decimal.t()
+        }
+
+  @type ticker_value :: %{
+          required(:ltp) => ltp_layer(),
+          required(:book) => book_layer() | nil
         }
 
   @doc """
@@ -31,16 +42,11 @@ defmodule Bitflyer.MarketData.Normalize do
 
     with true <- is_binary(product_code) and product_code != "",
          {:ok, decimal_ltp} <- cast_positive_decimal(ltp),
-         {:ok, decimal_bid} <- cast_positive_decimal(bid),
-         {:ok, decimal_ask} <- cast_positive_decimal(ask),
-         true <- Decimal.compare(decimal_ask, decimal_bid) != :lt,
          {:ok, source_timestamp} <- cast_source_timestamp(timestamp) do
       {:ok, {:ticker, product_code},
        %{
-         ltp: decimal_ltp,
-         best_bid: decimal_bid,
-         best_ask: decimal_ask,
-         source_timestamp: source_timestamp
+         ltp: %{price: decimal_ltp, source_timestamp: source_timestamp},
+         book: cast_book(bid, ask)
        }}
     else
       _ -> :error
@@ -99,6 +105,61 @@ defmodule Bitflyer.MarketData.Normalize do
   end
 
   def from_ws_frame(_), do: :ignore
+
+  @doc """
+  ticker 値から正の LTP を取る。
+
+  本番は `{ltp: %{price: ...}}`。平坦な `%{ltp: Decimal}` も読む
+  （テストや移行前の手書き値）。
+  """
+  @spec ltp_price(term()) :: Decimal.t() | nil
+  def ltp_price(%{ltp: %{price: price}}), do: positive_decimal(price)
+  def ltp_price(%{"ltp" => %{"price" => price}}), do: positive_decimal(price)
+  def ltp_price(%{ltp: price}), do: positive_decimal(price)
+  def ltp_price(%{"ltp" => price}), do: positive_decimal(price)
+  def ltp_price(_), do: nil
+
+  @doc """
+  ticker 値から有効な板（正かつ ask >= bid）を取る。
+
+  `book` キーがあるときはその層だけを見る。`nil` や異常は `:miss` で、
+  同じマップの平坦な `best_bid` / `best_ask` には落ちない。
+  層が無い手書き値だけ、平坦な気配を読む。
+  """
+  @spec book(term()) :: {:ok, Decimal.t(), Decimal.t()} | :miss
+  def book(%{book: nil}), do: :miss
+  def book(%{"book" => nil}), do: :miss
+  def book(%{book: book}) when is_map(book), do: book_quotes(book)
+  def book(%{"book" => book}) when is_map(book), do: book_quotes(book)
+  def book(%{best_bid: bid, best_ask: ask}), do: valid_book(bid, ask)
+  def book(%{"best_bid" => bid, "best_ask" => ask}), do: valid_book(bid, ask)
+  def book(_), do: :miss
+
+  @doc """
+  時計検査用の取引所時刻。
+
+  LTP 層（`ltp.price` がある）があるときはその `source_timestamp` だけを見る。
+  層の時刻が nil なら平坦フィールドへは落ちない。層が無い手書き値だけ平坦な
+  `source_timestamp` を読む。
+  """
+  @spec source_timestamp(term()) :: DateTime.t() | nil
+  def source_timestamp(%{ltp: ltp}) when is_map(ltp) and is_map_key(ltp, :price) do
+    case Map.get(ltp, :source_timestamp) do
+      %DateTime{} = ts -> ts
+      _ -> nil
+    end
+  end
+
+  def source_timestamp(%{"ltp" => ltp}) when is_map(ltp) and is_map_key(ltp, "price") do
+    case Map.get(ltp, "source_timestamp") do
+      %DateTime{} = ts -> ts
+      _ -> nil
+    end
+  end
+
+  def source_timestamp(%{source_timestamp: %DateTime{} = ts}), do: ts
+  def source_timestamp(%{"source_timestamp" => %DateTime{} = ts}), do: ts
+  def source_timestamp(_), do: nil
 
   @doc """
   JSON-RPC 応答（購読 ACK / error）。
@@ -179,6 +240,16 @@ defmodule Bitflyer.MarketData.Normalize do
   defp rpc_error_reason(%{message: message}) when is_binary(message), do: message
   defp rpc_error_reason(_), do: :rpc_error
 
+  defp cast_book(bid, ask) do
+    with {:ok, decimal_bid} <- cast_positive_decimal(bid),
+         {:ok, decimal_ask} <- cast_positive_decimal(ask),
+         true <- Decimal.compare(decimal_ask, decimal_bid) != :lt do
+      %{best_bid: decimal_bid, best_ask: decimal_ask}
+    else
+      _ -> nil
+    end
+  end
+
   defp cast_positive_decimal(v) do
     case Decimal.cast(v) do
       {:ok, %Decimal{} = d} ->
@@ -188,6 +259,27 @@ defmodule Bitflyer.MarketData.Normalize do
         :error
     end
   end
+
+  defp positive_decimal(%Decimal{} = d) do
+    if Decimal.positive?(d), do: d, else: nil
+  end
+
+  defp positive_decimal(_), do: nil
+
+  defp book_quotes(%{best_bid: bid, best_ask: ask}), do: valid_book(bid, ask)
+  defp book_quotes(%{"best_bid" => bid, "best_ask" => ask}), do: valid_book(bid, ask)
+  defp book_quotes(_), do: :miss
+
+  defp valid_book(%Decimal{} = bid, %Decimal{} = ask) do
+    if Decimal.positive?(bid) and Decimal.positive?(ask) and
+         Decimal.compare(ask, bid) != :lt do
+      {:ok, bid, ask}
+    else
+      :miss
+    end
+  end
+
+  defp valid_book(_, _), do: :miss
 
   # 欠落は許容（nil）。値が有るのにパースできない場合のみ :error。
   defp cast_source_timestamp(nil), do: {:ok, nil}

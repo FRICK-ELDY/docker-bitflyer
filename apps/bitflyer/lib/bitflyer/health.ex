@@ -12,6 +12,8 @@ defmodule Bitflyer.Health do
     Feed／鮮度は `OperationalStatus.market_feed_gate/2` と同一（Status ALLOWED・
     `Risk.authorize` と矛盾しない。接続は `Feed.connection_snapshot/0`）。
     WS 断・stale・halt・DB 断は 503。外部監視はこちらを見る。
+    板だけの欠落（`book: false`）は LTP が新鮮なら 200 のまま。JSON の
+    `market_data.entries[].book` で切り分ける。成行拒否は別途 telemetry。
   - `snapshot` / `GET /health` — 従来互換。DB 断または halted で 503。
     起動中の `:not_ready` は 200（boot reconcile 完了前でも Compose が通しやすい）。
 
@@ -175,6 +177,7 @@ defmodule Bitflyer.Health do
         %{
           "product_code" => entry.product_code,
           "fresh" => entry.fresh?,
+          "book" => Map.get(entry, :book?),
           "age_ms" => age_ms_json(entry.age_ms)
         }
       end)
@@ -182,6 +185,7 @@ defmodule Bitflyer.Health do
     Map.put(map, "market_data", %{
       "enabled" => market_data.enabled?,
       "all_fresh" => market_data.all_fresh?,
+      "all_books" => Map.get(market_data, :all_books?),
       "entries" => entries
     })
   end

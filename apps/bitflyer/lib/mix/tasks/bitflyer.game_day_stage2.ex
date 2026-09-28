@@ -497,10 +497,14 @@ defmodule Mix.Tasks.Bitflyer.GameDayStage2 do
 
     :ok =
       Cache.put(@market_key, %{
-        ltp: ltp,
-        best_bid: Decimal.sub(ltp, half),
-        best_ask: Decimal.add(ltp, half),
-        source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+        ltp: %{
+          price: ltp,
+          source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+        },
+        book: %{
+          best_bid: Decimal.sub(ltp, half),
+          best_ask: Decimal.add(ltp, half)
+        }
       })
   end
 

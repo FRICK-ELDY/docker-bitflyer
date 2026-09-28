@@ -200,6 +200,8 @@ defmodule UiWeb.StatusLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/")
 
+    assert has_element?(view, "#market-freshness-BTC_JPY", "fresh")
+    refute has_element?(view, "#market-freshness-BTC_JPY", "no book")
     assert has_element?(view, "#exposure-position-BTC_JPY")
     assert has_element?(view, "#daily-pnl-unrealized", "-400000")
     assert Readiness.get() == :ready
@@ -219,6 +221,7 @@ defmodule UiWeb.StatusLiveTest do
     assert has_element?(view, "#feed-status", "disabled")
     assert has_element?(view, "#market-freshness", "fresh")
     assert has_element?(view, "#market-freshness-BTC_JPY", "fresh")
+    assert has_element?(view, "#market-freshness-BTC_JPY", "no book")
     refute has_element?(view, "#ops-resume")
   end
 

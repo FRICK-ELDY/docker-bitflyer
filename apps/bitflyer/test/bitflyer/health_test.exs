@@ -7,8 +7,15 @@ defmodule Bitflyer.HealthTest do
     enabled?: true,
     max_age_ms: 5_000,
     all_fresh?: true,
+    all_books?: true,
     entries: [
-      %{product_code: "FX_BTC_JPY", key: {:ticker, "FX_BTC_JPY"}, fresh?: true, age_ms: 10}
+      %{
+        product_code: "FX_BTC_JPY",
+        key: {:ticker, "FX_BTC_JPY"},
+        fresh?: true,
+        book?: true,
+        age_ms: 10
+      }
     ]
   }
 
@@ -16,8 +23,15 @@ defmodule Bitflyer.HealthTest do
     enabled?: true,
     max_age_ms: 5_000,
     all_fresh?: false,
+    all_books?: false,
     entries: [
-      %{product_code: "FX_BTC_JPY", key: {:ticker, "FX_BTC_JPY"}, fresh?: false, age_ms: :miss}
+      %{
+        product_code: "FX_BTC_JPY",
+        key: {:ticker, "FX_BTC_JPY"},
+        fresh?: false,
+        book?: false,
+        age_ms: :miss
+      }
     ]
   }
 
@@ -143,6 +157,25 @@ defmodule Bitflyer.HealthTest do
     json = Health.to_json_map(health)
     assert json["feed"]["connected"] == true
     assert json["market_data"]["all_fresh"] == true
+    assert json["market_data"]["all_books"] == true
+    assert hd(json["market_data"]["entries"])["book"] == true
+  end
+
+  test "ready_snapshot stays ready when LTP is fresh and the book is missing" do
+    market =
+      @fresh_market
+      |> Map.put(:all_books?, false)
+      |> Map.update!(:entries, fn [entry] -> [%{entry | book?: false}] end)
+
+    health = Health.build_ready(:ok, :ready, :dry_run, market, @connected_feed)
+
+    assert health.status == :ready
+    assert health.healthy?
+    json = Health.to_json_map(health)
+    assert json["status"] == "ready"
+    assert json["market_data"]["all_fresh"] == true
+    assert json["market_data"]["all_books"] == false
+    assert hd(json["market_data"]["entries"])["book"] == false
   end
 
   test "ready_snapshot fails when feed is disconnected" do
@@ -170,7 +203,12 @@ defmodule Bitflyer.HealthTest do
     assert health.reason == :stale_market_data
 
     assert Health.to_json_map(health)["market_data"]["entries"] == [
-             %{"product_code" => "FX_BTC_JPY", "fresh" => false, "age_ms" => nil}
+             %{
+               "product_code" => "FX_BTC_JPY",
+               "fresh" => false,
+               "book" => false,
+               "age_ms" => nil
+             }
            ]
   end
 

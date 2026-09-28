@@ -476,13 +476,20 @@ defmodule Bitflyer.MarketData.Feed do
     )
   end
 
+  defp tick_status(value) do
+    case Normalize.book(value) do
+      {:ok, _, _} -> :ok
+      :miss -> :book_missing
+    end
+  end
+
   defp put_tick(key, value, product_code, opts \\ []) do
     _ = Cache.put(key, value, opts)
 
     Bitflyer.Telemetry.execute(
       :market_data_tick,
       %{count: 1},
-      %{product_code: product_code, status: :ok}
+      %{product_code: product_code, status: tick_status(value)}
     )
 
     _ = Bitflyer.Strategy.Runner.notify_tick(key, value)
