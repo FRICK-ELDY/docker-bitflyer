@@ -715,6 +715,43 @@ defmodule Bitflyer.RiskTest do
              )
   end
 
+  test "paper market buy hold stays on adverse LTP and ignores best_ask" do
+    ltp = Decimal.new("5000000")
+    ask = Decimal.new("5010000")
+    size = Decimal.new("0.01")
+
+    assert :ok =
+             Cache.put(@market_key, %{
+               ltp: ltp,
+               best_bid: ltp,
+               best_ask: ask,
+               source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+             })
+
+    assert {:ok, %{currency: "JPY", amount: amount}} =
+             Risk.balance_hold(
+               valid_command(%{order_type: :market, size: size}),
+               trade_mode: :paper
+             )
+
+    assert {:ok, priced} =
+             Bitflyer.OrderExecutor.Paper.FillPricing.effective_price(:buy, ltp)
+
+    assert Decimal.equal?(amount, Decimal.mult(priced, size))
+    refute Decimal.equal?(amount, Decimal.mult(ask, size))
+  end
+
+  test "live market buy hold fails closed when best_ask is missing" do
+    assert :ok =
+             Cache.put(@market_key, %{
+               ltp: Decimal.new("5000000"),
+               source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+             })
+
+    assert {:error, :stale, %{reason: :bid_ask_missing}} =
+             Risk.balance_hold(valid_command(%{order_type: :market}), trade_mode: :live)
+  end
+
   test "authorize rejects market order when bid/ask missing from cache" do
     assert Readiness.mark_ready() == :ok
 

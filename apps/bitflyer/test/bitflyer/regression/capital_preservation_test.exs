@@ -981,11 +981,62 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
       assert SpyExchange.place_count() == 1
     end
 
-    test "live market cancel releases reserved LTP1 not a higher LTP2" do
+    test "live market buy rejects LTP cash and reserves best_ask across a thin spread" do
       Application.put_env(:bitflyer, :trade_mode, :live)
       Application.put_env(:bitflyer, :live_confirmed, true)
       assert Readiness.mark_ready() == :ok
-      put_fresh_market(Decimal.new("5000000"))
+
+      ltp = Decimal.new("5000000")
+      ask = Decimal.new("5001000")
+      size = Decimal.new("0.01")
+      ltp_notional = Decimal.mult(ltp, size)
+      ask_notional = Decimal.mult(ask, size)
+
+      # mid 500万・spread 4bps。既定 max_spread_pct 0.5% は通るが ask は LTP より高い
+      assert :ok =
+               Cache.put(@market_key, %{
+                 ltp: ltp,
+                 best_bid: Decimal.new("4999000"),
+                 best_ask: ask,
+                 source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+               })
+
+      seed_balance_cache!(:live, %{"JPY" => ltp_notional, "BTC" => Decimal.new("0")})
+
+      assert {:error, :limit_exceeded, %{limit: :insufficient_balance, required: required}} =
+               System.submit_order(
+                 command("live-ask-short", %{order_type: :market, size: size}),
+                 trade_mode: :live,
+                 positions: []
+               )
+
+      assert Decimal.equal?(required, ask_notional)
+      assert SpyExchange.place_count() == 0
+
+      seed_balance_cache!(:live, %{"JPY" => ask_notional, "BTC" => Decimal.new("0")})
+
+      assert {:ok, %Order{status: :pending}} =
+               System.submit_order(
+                 command("live-ask-fit", %{order_type: :market, size: size}),
+                 trade_mode: :live,
+                 positions: []
+               )
+
+      assert {:ok, reserved} = Bitflyer.Risk.BalanceCache.get(:live)
+      assert Decimal.equal?(reserved["JPY"], Decimal.new("0"))
+      assert SpyExchange.place_count() == 1
+    end
+
+    test "live market cancel releases the ask reserved at submit" do
+      Application.put_env(:bitflyer, :trade_mode, :live)
+      Application.put_env(:bitflyer, :live_confirmed, true)
+      assert Readiness.mark_ready() == :ok
+
+      ltp = Decimal.new("5000000")
+      size = Decimal.new("0.01")
+      put_fresh_market(ltp)
+      reserved_jpy = Decimal.mult(fresh_ticker_value(ltp).best_ask, size)
+      assert Decimal.gt?(reserved_jpy, Decimal.mult(ltp, size))
 
       seed_balance_cache!(:live, %{
         "JPY" => Decimal.new("100000"),
@@ -996,16 +1047,20 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
                System.submit_order(
                  command("live-mkt-cancel-1", %{
                    order_type: :market,
-                   size: Decimal.new("0.01")
+                   size: size
                  }),
                  trade_mode: :live,
                  positions: []
                )
 
       assert {:ok, after_reserve} = Bitflyer.Risk.BalanceCache.get(:live)
-      assert Decimal.equal?(after_reserve["JPY"], Decimal.new("50000"))
 
-      # cancel 時に LTP が上がっても、拘束は submit 時の 50_000 だけ戻る
+      assert Decimal.equal?(
+               after_reserve["JPY"],
+               Decimal.sub(Decimal.new("100000"), reserved_jpy)
+             )
+
+      # cancel 時に板が上がっても、拘束は submit 時の ask 名目だけ戻る
       put_fresh_market(Decimal.new("8000000"))
 
       assert {:ok, _} = OrderExecutor.cancel(order, exchange: CancelOkExchange)

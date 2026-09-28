@@ -133,8 +133,9 @@ defmodule Bitflyer.Risk.BalanceCache do
   @doc """
   利用可能額を原子的に減額する。不足・未同期はエラー。
 
-  `:hold_id`（通常は `internal_order_id`）を渡すと拘束額を記録し、
-  取消時は `release_hold/3` で **同じ額** を戻す（LTP 再計算しない）。
+  `:hold_id`（通常は `internal_order_id`）を渡すと、渡した `amount` を記録する。
+  取消の `release_hold/3` はその記録額を戻し、後の ticker から名目を再計算しない。
+  live 成行買いの記録額は `Risk.balance_hold/2` の `best_ask × size`。
   """
   @spec reserve(trade_mode(), String.t(), Decimal.t(), keyword()) ::
           :ok
