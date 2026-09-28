@@ -22,7 +22,7 @@
 | P2 #9 | ash.codegen --check / Sandbox manual / README | **完了** |
 | P0 #1 | commission 一次証跡 | **完了**（2026-09-28。買い …6098 / 売り …6123 の実差分が更新後 expected と JPY 1 円・BTC 1 satoshi 以内） |
 | P0 #2 | ハーネス独立性 | **完了**（2026-09-28。`:quote_mark` の売りは発注→約定同期→Reconciler で `balance_mismatch` halt。既定の縦回帰は Ready。実測差分は `live_balance_test` が固定し、内部式を quote_mark に寄せると halt 側の期待が失敗する） |
-| P1 #3 | HWM 認可後 crash 窓 | **完了**（2026-09-28。認可は ETS のみ上げ `PeakWriter` へ cast。write-behind 保留中に `DailyLoss.reinit` しても drain 後の DB 高値と再 reinit が一致。`prep_stop` も保留中の高値を書く） |
+| P1 #3 | HWM 認可後 crash 窓 | **部分完了**（2026-09-28。writer 不在の認可は unsynced。失敗した upsert は再送する。DailyLoss か PeakWriter の片方生存なら高値は戻る。ノード強制終了で両方のメモリが消える窓は残る） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -41,7 +41,7 @@
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 3 | HWM 認可後 crash 窓 | **完了 (2026-09-28)。** 認可の peak 上昇は `PeakWriter` へ cast（ホットパスは DB を待たない）。同一日は高い方だけ upsert し、成功後に `persisted_peak` を進める。`prep_stop` が drain。write-behind を止めたまま認可 → `DailyLoss.reinit`（ETS 高値が落ちる）→ resume/drain のあと DB と再 reinit の peak が認可時の高値。停止側は `prep_stop drains a suspended peak writer so HWM is in the database` | 認可直後 crash でも DB 高値が残るテストがある |
+| 3 | HWM 認可後 crash 窓 | **部分完了 (2026-09-28)。** writer 不在は `{:error, :unsynced}` で認可しない。upsert 失敗は pending に残して再送し、DailyLoss が死んでいても高値を捨てない。PeakWriter 自身の再起動は ETS の未永続高値を積み直す。`prep_stop` の drain 失敗は `persist_failed` で永続 halt。残るのはノード強制終了で DailyLoss と PeakWriter の両メモリが消える窓（認可の戻りより前に DB へ同期しない設計の残差） | 認可直後 crash でも DB 高値が残るテストがある |
 | 5 | 別ホスト監視の実配備 | 作業 PC で `register-watch-ready-task.ps1` を VLAN1 の `READY_URL` に向けて登録。証跡を [watch-ready-evidence.md](../architecture/env/watch-ready-evidence.md) に「本番向き常駐」として残す | 取引ホスト停止を外から検知した記録がある |
 | 6b | Game Day の停止解除副作用 | `mix bitflyer.game_day_stage2` から無条件 `Risk.clear_circuit()` を撤去。開始時に `RiskState.halted` なら理由を出して中断。`mark_ready` 押し通しをやめ、Reconciler 結果で Ready を要求 | paper ドリルが live 停止理由を消さない。Ready が突合経路でしか付かない |
 

@@ -320,6 +320,45 @@ defmodule Bitflyer.RiskTest do
     assert Decimal.eq?(after_boot, Decimal.new("100000"))
   end
 
+  test "authorize persists HWM before returning when the peak writer is absent" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    assert :ok = DailyLoss.seed_net(:dry_run, Decimal.new("100000"))
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               trade_mode: :dry_run,
+               peak_writer: :missing_peak_writer
+             )
+
+    day = DailyLoss.trading_day(DateTime.utc_now())
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    row = Enum.find(rows, &(&1.trade_mode == :dry_run))
+    assert row
+    assert Decimal.eq?(row.peak, Decimal.new("100000"))
+
+    assert :ok = DailyLoss.reinit()
+    assert {:ok, %{peak: restored}} = DailyLoss.snapshot(:dry_run)
+    assert Decimal.eq?(restored, Decimal.new("100000"))
+  end
+
+  test "authorize rejects when the peak writer is absent and the fallback upsert fails" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    assert :ok = DailyLoss.seed_net(:dry_run, Decimal.new("100000"))
+
+    assert {:error, :unsynced, %{reason: :hwm_persist_failed}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               trade_mode: :dry_run,
+               peak_writer: :missing_peak_writer,
+               fallback_upsert: fn _mode, _day, _peak -> {:error, :db_down} end
+             )
+
+    assert {:error, :unsynced} = DailyLoss.snapshot(:dry_run)
+  end
+
   test "enforce after authorize flush persists HWM so reinit keeps unrealized drawdown" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()

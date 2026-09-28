@@ -2,13 +2,16 @@ defmodule Bitflyer.Risk.PeakWriter do
   @moduledoc """
   認可で上がった当日 equity ピーク（HWM）の write-behind。
 
-  ホットパスは `GenServer.cast` のみ。このプロセスが `DailyEquityPeak.upsert/3`
-  を単調に書き、成功後に `DailyLoss` の `persisted_peak` を進める。
-  同一 `(trade_mode, trading_day)` は高い方だけ残す。
+  ホットパスは enqueue の受理まで。DB の upsert はこのプロセスが行う。
+  同一 `(trade_mode, trading_day)` は高い方だけ残し、成功するまで pending から捨てない。
+  成功後に `DailyLoss` の `persisted_peak` を進める。
 
-  `Application.prep_stop` の `drain/1` と子停止時の `terminate/2` が未書きを
-  DB まで流す。認可プロセスが先に落ちても、この監督下プロセスが書き終える。
-  upsert 失敗は当該モードを unsynced（fail-closed）。
+  upsert 失敗は unsync を試し、pending を残して再送する。
+  DailyLoss 再起動で ack / unsync が届かないときも pending を残す。
+  自プロセスが落ちても、生存している DailyLoss の未永続高値を `init` で積み直す。
+
+  `Application.prep_stop` の `drain/1` と子停止時の `terminate/2` が未書きを流す。
+  ノード強制終了でこのプロセスと DailyLoss の両方が消えると、DB 未着の高値は残らない。
   """
 
   use GenServer
@@ -18,6 +21,7 @@ defmodule Bitflyer.Risk.PeakWriter do
 
   @name __MODULE__
   @drain_timeout_ms 10_000
+  @retry_ms 50
   @trade_modes [:dry_run, :paper, :live]
 
   @type trade_mode :: Bitflyer.TradeMode.t()
@@ -25,24 +29,33 @@ defmodule Bitflyer.Risk.PeakWriter do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, @name)
-    GenServer.start_link(__MODULE__, %{name: name}, name: name)
+
+    GenServer.start_link(__MODULE__, %{daily_loss: Keyword.get(opts, :daily_loss, DailyLoss)},
+      name: name
+    )
   end
 
   @doc """
-  高いピークを非同期に積む。0 以下は無視する。
+  高いピークを積む。受理まで待つ。DB 完了は待たない。0 以下は無視する。
   """
-  @spec enqueue(trade_mode(), Date.t(), Decimal.t(), keyword()) :: :ok
+  @spec enqueue(trade_mode(), Date.t(), Decimal.t(), keyword()) :: :ok | {:error, term()}
   def enqueue(trade_mode, %Date{} = day, %Decimal{} = peak, opts \\ [])
       when trade_mode in @trade_modes do
     server = Keyword.get(opts, :server, @name)
     daily_loss = Keyword.get(opts, :daily_loss, DailyLoss)
-    GenServer.cast(server, {:enqueue, trade_mode, day, peak, daily_loss})
+
+    try do
+      GenServer.call(server, {:enqueue, trade_mode, day, peak, daily_loss}, 5_000)
+    catch
+      :exit, {:timeout, _} -> {:error, :timeout}
+      :exit, reason -> {:error, reason}
+    end
   end
 
   @doc """
   未書きのピークが DB に落ちるまで待つ。停止中の保留もここで書く。
   """
-  @spec drain(keyword()) :: :ok | {:error, :timeout}
+  @spec drain(keyword()) :: :ok | {:error, term()}
   def drain(opts \\ []) do
     server = Keyword.get(opts, :server, @name)
     timeout_ms = Keyword.get(opts, :timeout_ms, @drain_timeout_ms)
@@ -51,6 +64,22 @@ defmodule Bitflyer.Risk.PeakWriter do
       GenServer.call(server, :drain, timeout_ms)
     catch
       :exit, {:timeout, _} -> {:error, :timeout}
+      :exit, {:noproc, _} -> {:error, :noproc}
+      :exit, reason -> {:error, reason}
+    end
+  end
+
+  @doc """
+  テスト用。まだ書いていない件数。
+  """
+  @spec pending_count(keyword()) :: non_neg_integer() | {:error, term()}
+  def pending_count(opts \\ []) do
+    server = Keyword.get(opts, :server, @name)
+
+    try do
+      GenServer.call(server, :pending_count)
+    catch
+      :exit, reason -> {:error, reason}
     end
   end
 
@@ -59,13 +88,7 @@ defmodule Bitflyer.Risk.PeakWriter do
   """
   @spec suspend(keyword()) :: :ok | {:error, :forbidden}
   def suspend(opts \\ []) do
-    server = Keyword.get(opts, :server, @name)
-
-    if test_injections_allowed?() do
-      GenServer.call(server, :suspend)
-    else
-      {:error, :forbidden}
-    end
+    call_if_test(opts, :suspend)
   end
 
   @doc """
@@ -73,13 +96,7 @@ defmodule Bitflyer.Risk.PeakWriter do
   """
   @spec resume(keyword()) :: :ok | {:error, :forbidden}
   def resume(opts \\ []) do
-    server = Keyword.get(opts, :server, @name)
-
-    if test_injections_allowed?() do
-      GenServer.call(server, :resume)
-    else
-      {:error, :forbidden}
-    end
+    call_if_test(opts, :resume)
   end
 
   @doc """
@@ -102,29 +119,30 @@ defmodule Bitflyer.Risk.PeakWriter do
   """
   @spec reset_upsert(keyword()) :: :ok | {:error, :forbidden}
   def reset_upsert(opts \\ []) do
-    server = Keyword.get(opts, :server, @name)
+    call_if_test(opts, :reset_upsert)
+  end
 
-    if test_injections_allowed?() do
-      GenServer.call(server, :reset_upsert)
+  @impl true
+  def init(%{daily_loss: daily_loss}) do
+    state =
+      Enum.reduce(load_unpersisted(daily_loss), empty_state(), fn {mode, day, peak}, acc ->
+        put_pending(acc, mode, day, peak, daily_loss)
+      end)
+
+    if map_size(state.pending) == 0 do
+      {:ok, state}
     else
-      {:error, :forbidden}
+      {:ok, %{state | writing?: true}, {:continue, :flush}}
     end
   end
 
   @impl true
-  def init(%{name: _name}) do
-    {:ok,
-     %{
-       suspended?: false,
-       writing?: false,
-       pending: %{},
-       waiters: [],
-       upsert: &DailyEquityPeak.upsert/3
-     }}
+  def handle_continue(:flush, state) do
+    {:noreply, flush_one(state)}
   end
 
   @impl true
-  def handle_cast({:enqueue, trade_mode, day, peak, daily_loss}, state)
+  def handle_call({:enqueue, trade_mode, day, peak, daily_loss}, _from, state)
       when trade_mode in @trade_modes do
     state =
       if Decimal.compare(peak, 0) == :gt do
@@ -135,10 +153,9 @@ defmodule Bitflyer.Risk.PeakWriter do
         state
       end
 
-    {:noreply, state}
+    {:reply, :ok, state}
   end
 
-  @impl true
   def handle_call(:suspend, _from, state) do
     {:reply, :ok, %{state | suspended?: true}}
   end
@@ -148,7 +165,7 @@ defmodule Bitflyer.Risk.PeakWriter do
   end
 
   def handle_call(:drain, from, state) do
-    state = absorb_casts(%{state | suspended?: false})
+    state = absorb_enqueues(%{state | suspended?: false})
     state = kick(state)
 
     if idle?(state) do
@@ -156,6 +173,10 @@ defmodule Bitflyer.Risk.PeakWriter do
     else
       {:noreply, %{state | waiters: [from | state.waiters]}}
     end
+  end
+
+  def handle_call(:pending_count, _from, state) do
+    {:reply, map_size(state.pending), state}
   end
 
   def handle_call({:set_upsert, fun}, _from, state) do
@@ -167,9 +188,13 @@ defmodule Bitflyer.Risk.PeakWriter do
   end
 
   @impl true
-  def handle_info(:flush, %{suspended?: true} = state) do
-    # テストの suspend 中は予約済み flush を進めない。drain / resume が kick する。
+  def handle_info(:flush, %{suspended?: true, waiters: []} = state) do
     {:noreply, %{state | writing?: false}}
+  end
+
+  def handle_info(:flush, %{suspended?: true} = state) do
+    # drain が待っている。suspend より未書きの flush を優先する。
+    {:noreply, flush_one(%{state | suspended?: false})}
   end
 
   def handle_info(:flush, state) do
@@ -178,68 +203,113 @@ defmodule Bitflyer.Risk.PeakWriter do
 
   @impl true
   def terminate(_reason, state) do
-    state = absorb_casts(%{state | suspended?: false})
-    _ = flush_pending(state)
+    _ = flush_pending(absorb_enqueues(%{state | suspended?: false}), 0)
     :ok
   end
 
   defp flush_one(state) do
-    state = absorb_casts(state)
+    state = absorb_enqueues(state)
 
-    case pop_pending(state) do
-      {:empty, state} ->
-        state = absorb_casts(state)
+    case peek_pending(state) do
+      :empty ->
+        finish_if_idle(state)
 
-        case pop_pending(state) do
-          {:empty, state} ->
-            reply_waiters(%{state | writing?: false})
+      {mode, day, peak, daily_loss} ->
+        case persist_attempt(state, mode, day, peak, daily_loss) do
+          :done ->
+            state =
+              state
+              |> absorb_enqueues()
+              |> drop_covered(mode, day, peak)
 
-          {{mode, day, peak, daily_loss}, state} ->
-            write_and_continue(state, mode, day, peak, daily_loss)
+            send(self(), :flush)
+            %{state | writing?: true}
+
+          :retry ->
+            state = requeue(state, mode, day, peak, daily_loss)
+            Process.send_after(self(), :flush, @retry_ms)
+            %{state | writing?: true}
+        end
+    end
+  end
+
+  defp finish_if_idle(state) do
+    state = absorb_enqueues(state)
+
+    case peek_pending(state) do
+      :empty ->
+        reply_waiters(%{state | writing?: false})
+
+      _ ->
+        send(self(), :flush)
+        %{state | writing?: true}
+    end
+  end
+
+  defp flush_pending(state, rounds) when rounds > 8 do
+    Bitflyer.Telemetry.log(:critical, "peak writer terminate left peaks unpersisted", %{
+      reason: :terminate_rounds
+    })
+
+    state
+  end
+
+  defp flush_pending(state, rounds) do
+    state = absorb_enqueues(state)
+
+    case peek_pending(state) do
+      :empty ->
+        state = absorb_enqueues(state)
+
+        case peek_pending(state) do
+          :empty ->
+            reply_waiters(state)
+
+          _ ->
+            flush_pending(state, rounds + 1)
         end
 
-      {{mode, day, peak, daily_loss}, state} ->
-        write_and_continue(state, mode, day, peak, daily_loss)
+      {mode, day, peak, daily_loss} ->
+        case persist_attempt(state, mode, day, peak, daily_loss) do
+          :done ->
+            state =
+              state
+              |> absorb_enqueues()
+              |> drop_covered(mode, day, peak)
+
+            flush_pending(state, rounds + 1)
+
+          :retry ->
+            flush_pending(requeue(state, mode, day, peak, daily_loss), rounds + 1)
+        end
     end
   end
 
-  defp write_and_continue(state, mode, day, peak, daily_loss) do
-    _ = persist_one(state, mode, day, peak, daily_loss)
-    send(self(), :flush)
-    %{state | writing?: true}
-  end
-
-  defp persist_one(state, trade_mode, day, peak, daily_loss) do
-    result =
-      try do
-        state.upsert.(trade_mode, day, peak)
-      rescue
-        error -> {:error, error}
-      catch
-        kind, reason -> {:error, {kind, reason}}
-      end
-
-    case result do
+  defp persist_attempt(state, trade_mode, day, peak, daily_loss) do
+    case do_upsert(state, trade_mode, day, peak) do
       :ok ->
-        ack(daily_loss, trade_mode, day, peak)
+        case ack(daily_loss, trade_mode, day, peak) do
+          :ok -> :done
+          :stale_day -> :done
+          :down -> :retry
+        end
 
       {:error, reason} ->
-        mark_unsynced(daily_loss, trade_mode, day, reason)
-
-      other ->
-        mark_unsynced(daily_loss, trade_mode, day, other)
+        _ = mark_unsynced(daily_loss, trade_mode, day, reason)
+        :retry
     end
   end
 
-  defp flush_pending(state) do
-    case pop_pending(state) do
-      {:empty, _state} ->
-        :ok
-
-      {{mode, day, peak, daily_loss}, state} ->
-        _ = persist_one(state, mode, day, peak, daily_loss)
-        flush_pending(state)
+  defp do_upsert(state, trade_mode, day, peak) do
+    case state.upsert.(trade_mode, day, peak) do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+      other -> {:error, other}
     end
+  rescue
+    error -> {:error, error}
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   defp ack(daily_loss, trade_mode, day, peak) do
@@ -248,13 +318,39 @@ defmodule Bitflyer.Risk.PeakWriter do
       :stale_day -> :stale_day
     end
   catch
-    :exit, _ -> :down
+    :exit, reason ->
+      Bitflyer.Telemetry.log(:error, "peak persist ack failed; peak kept for retry", %{
+        reason: inspect(reason),
+        trade_mode: trade_mode
+      })
+
+      :down
   end
 
   defp mark_unsynced(daily_loss, trade_mode, day, reason) do
-    GenServer.call(daily_loss, {:peak_persist_failed, trade_mode, day, reason})
+    case GenServer.call(daily_loss, {:peak_persist_failed, trade_mode, day, reason}) do
+      :ok -> :ok
+      :stale_day -> :stale_day
+    end
   catch
-    :exit, _ -> :down
+    :exit, exit_reason ->
+      Bitflyer.Telemetry.log(:error, "peak unsync failed; peak kept for retry", %{
+        reason: inspect(exit_reason),
+        trade_mode: trade_mode
+      })
+
+      :down
+  end
+
+  defp load_unpersisted(daily_loss) do
+    GenServer.call(daily_loss, :unpersisted_peaks, 1_000)
+  catch
+    :exit, reason ->
+      Bitflyer.Telemetry.log(:error, "peak writer missed unpersisted peaks on start", %{
+        reason: inspect(reason)
+      })
+
+      []
   end
 
   defp kick(%{suspended?: true} = state), do: state
@@ -289,15 +385,34 @@ defmodule Bitflyer.Risk.PeakWriter do
     %{state | pending: pending}
   end
 
-  defp pop_pending(%{pending: pending} = state) when map_size(pending) == 0 do
-    {:empty, state}
-  end
+  defp peek_pending(%{pending: pending}) when map_size(pending) == 0, do: :empty
 
-  defp pop_pending(%{pending: pending} = state) do
+  defp peek_pending(%{pending: pending}) do
     [{key, entry}] = Enum.take(pending, 1)
     {mode, day} = key
+    {mode, day, entry.peak, entry.daily_loss}
+  end
 
-    {{mode, day, entry.peak, entry.daily_loss}, %{state | pending: Map.delete(pending, key)}}
+  defp requeue(state, trade_mode, day, peak, daily_loss) do
+    key = {trade_mode, day}
+    pending = Map.delete(state.pending, key)
+    %{state | pending: Map.put(pending, key, %{peak: peak, daily_loss: daily_loss})}
+  end
+
+  defp drop_covered(state, trade_mode, day, written_peak) do
+    key = {trade_mode, day}
+
+    case Map.fetch(state.pending, key) do
+      :error ->
+        state
+
+      {:ok, %{peak: peak}} ->
+        if Decimal.compare(peak, written_peak) == :gt do
+          state
+        else
+          %{state | pending: Map.delete(state.pending, key)}
+        end
+    end
   end
 
   defp reply_waiters(%{waiters: []} = state), do: state
@@ -307,16 +422,37 @@ defmodule Bitflyer.Risk.PeakWriter do
     %{state | waiters: []}
   end
 
-  # drain 判定の直前に届いた cast を pending に取り込む。
-  # 取り込み前に idle と返すと、停止側が未処理メッセージを捨てる。
-  defp absorb_casts(state) do
+  # flush 中に届いた enqueue を pending に取り込み、受理を返す。
+  defp absorb_enqueues(state) do
     receive do
-      {:"$gen_cast", {:enqueue, trade_mode, day, peak, daily_loss}} ->
+      {:"$gen_call", from, {:enqueue, trade_mode, day, peak, daily_loss}} ->
+        GenServer.reply(from, :ok)
+
         state
         |> put_pending(trade_mode, day, peak, daily_loss)
-        |> absorb_casts()
+        |> absorb_enqueues()
     after
       0 -> state
+    end
+  end
+
+  defp empty_state do
+    %{
+      suspended?: false,
+      writing?: false,
+      pending: %{},
+      waiters: [],
+      upsert: &DailyEquityPeak.upsert/3
+    }
+  end
+
+  defp call_if_test(opts, message) do
+    server = Keyword.get(opts, :server, @name)
+
+    if test_injections_allowed?() do
+      GenServer.call(server, message)
+    else
+      {:error, :forbidden}
     end
   end
 

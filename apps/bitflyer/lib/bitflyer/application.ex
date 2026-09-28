@@ -114,10 +114,32 @@ defmodule Bitflyer.Application do
           reason: :application_stop
         })
 
-      {:error, :timeout} ->
-        Bitflyer.Telemetry.log(:critical, "prep_stop: peak writer drain timed out", %{
-          reason: :application_stop
+      {:error, reason} ->
+        Bitflyer.Telemetry.log(:critical, "prep_stop: peak writer drain failed", %{
+          reason: inspect(reason)
         })
+
+        # DB へ halt を書けなくても、ローカル印を先に残す。
+        case Bitflyer.Risk.DrainHalt.record() do
+          :persisted ->
+            Bitflyer.Telemetry.log(:critical, "prep_stop: peak drain halt persisted", %{
+              reason: :persist_failed
+            })
+
+          :marker_only ->
+            Bitflyer.Telemetry.log(
+              :critical,
+              "prep_stop: peak drain halt was not written to RiskState",
+              %{reason: :persist_failed}
+            )
+
+          :unrecorded ->
+            Bitflyer.Telemetry.log(
+              :critical,
+              "prep_stop: peak drain halt was not written to RiskState or the local marker",
+              %{reason: :persist_failed}
+            )
+        end
     end
 
     state

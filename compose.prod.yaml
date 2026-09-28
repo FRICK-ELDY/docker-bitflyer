@@ -38,6 +38,14 @@ services:
       retries: 10
     restart: unless-stopped
 
+  halt-dir:
+    image: debian:bookworm-slim
+    user: "0:0"
+    volumes:
+      - halt_marker:/var/lib/bitflyer
+    entrypoint: ["chown", "1000:1000", "/var/lib/bitflyer"]
+    restart: "no"
+
   app:
     # digest 固定: APP_IMAGE=ghcr.io/.../docker-bitflyer@sha256:...
     # 未設定時はローカル build（検証用）。:latest だけに頼らない。
@@ -52,6 +60,9 @@ services:
     # 子は直列停止するため、1 子 5s × 複数 + Repo 用に 45s（prep_stop で発注は即停止）
     stop_grace_period: 45s
     restart: unless-stopped
+    volumes:
+      # HWM drain 失敗の印。イメージ更新でも消さない。所有者は halt-dir が uid 1000 にする。
+      - halt_marker:/var/lib/bitflyer
     environment:
       # .env.prod で明示する（例: ecto://postgres:SECRET@db:5432/docker_bitflyer_prod）
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
@@ -73,12 +84,15 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-docker_bitflyer_prod}
       PHX_SERVER: "true"
       PORT: "4000"
+      BITFLYER_DRAIN_HALT_PATH: /var/lib/bitflyer/hwm-drain-halt
     env_file:
       - path: .env.prod
         required: false
     depends_on:
       db:
         condition: service_healthy
+      halt-dir:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4000/health/live >/dev/null"]
       interval: 10s
@@ -88,3 +102,4 @@ services:
 
 volumes:
   postgres_prod_data:
+  halt_marker:

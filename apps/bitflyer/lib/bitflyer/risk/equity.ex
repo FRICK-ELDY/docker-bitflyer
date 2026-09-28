@@ -222,7 +222,9 @@ defmodule Bitflyer.Risk.Equity do
         {:ok, server} -> [server: server]
         :error -> []
       end
-      |> Keyword.merge(Keyword.take(opts, [:now_dt, :persist, :write_behind, :peak_writer]))
+      |> Keyword.merge(
+        Keyword.take(opts, [:now_dt, :persist, :write_behind, :peak_writer, :fallback_upsert])
+      )
 
     DailyLoss.record_peak(trade_mode, equity_pnl, daily_opts)
   end

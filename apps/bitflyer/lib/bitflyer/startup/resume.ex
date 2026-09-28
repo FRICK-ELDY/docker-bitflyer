@@ -146,7 +146,8 @@ defmodule Bitflyer.Startup.Resume do
 
     case ensure_equity_resumable(trade_mode, opts) do
       :ok ->
-        with :ok <- Circuit.close(circuit_opts),
+        with :ok <- Bitflyer.Risk.DrainHalt.clear_marker(),
+             :ok <- Circuit.close(circuit_opts),
              :ok <- mark_ready(readiness) do
           Bitflyer.Telemetry.log(:info, "resume succeeded", %{
             reason: halt_reason,
