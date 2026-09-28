@@ -30,7 +30,7 @@ Elixir Umbrella（`apps/ui` Phoenix / `apps/bitflyer` Ash）と PostgreSQL を C
 | datastore（Ash: Order / Position / Fill / Balance / DailyEquityPeak / RiskState） | implemented | `Bitflyer.Repo` に閉じる |
 | cache（ETS） | implemented | 単一ノード前提。Redis なし |
 | TradeMode | implemented | `dry_run` / `paper` / `live` + `BITFLYER_LIVE_CONFIRM` |
-| 既定銘柄 | **spot `BTC_JPY`**（allowlist） | live は spot 限定（`FX_*` / 未登録ペアは起動・認可で拒否）。FX live は `getcollateral` 実装後（[backlog](.workspace/1_backlog/fx-collateral-adapter.md)） |
+| 既定銘柄 | **spot `BTC_JPY`**（allowlist） | live は手数料一次証跡のある銘柄だけ（当面 `BTC_JPY`。`ETH_JPY` など他 spot と `FX_*` は起動・認可で拒否）。FX live は `getcollateral` 実装後（[backlog](.workspace/1_backlog/fx-collateral-adapter.md)） |
 | Readiness / 突合 / resume / baseline / recover | implemented | boot・定期突合。live は権限（出金禁止）・ticker 時計検査あり。`mix bitflyer.resume` / baseline / recover。`prep_stop` はゲート閉鎖＋ in-flight / HWM drain |
 | observe — telemetry / 構造化ログ | implemented | allowlist（`:kind` / `:currency` / `:limit` 含む）。prod は ConsoleReporter 既定オン（低頻度ドメインのみ） |
 | observe — Discord 通知 | implemented | Incoming Webhook。halt / mismatch / disconnect + 起動直後 HEARTBEAT。未設定でも起動。発注は止めない |
@@ -180,7 +180,7 @@ Hex の既知 advisory が対象。`heroicons` / `daisyui` など GitHub タグ�
 
 ### live（spot 限定）の運用前提
 
-- 既定・推奨は **`BTC_JPY` + `getbalance`**。`product_codes` に `FX_*` を入れると live 起動が拒否される
+- 既定・推奨は **`BTC_JPY` + `getbalance`**。`product_codes` に一次証跡の無い銘柄（`ETH_JPY` など）や `FX_*` を入れると live 起動が拒否される。追加は [commission-unit-evidence.md](.workspace/0_doc/architecture/env/commission-unit-evidence.md) に売買の実測表を足してから `Product` の集合へ入れる
 - **同一 API キー口座の手動 FX/CFD 建玉は監視しない。** spot 設定時は `getpositions` を呼ばず建玉突合もしないため、口座に残る CFD エクスポージャはボットの Ready / Risk から見えない。live 解禁前に当該キー口座を spot 専用にするか、手動建玉を解消すること
 - spot の内部 `Position` は Risk の建玉上限用であり、取引所建玉との突合対象外。**在庫の正本は `getbalance`（BTC/JPY）**。Fill 後の Position ドリフトは残高突合と LiveFills に依存する
 

@@ -149,10 +149,14 @@ defmodule Bitflyer.Config.LiveSafetyTest do
     assert strategy[:module] == Bitflyer.Strategy
   end
 
-  test "assert_live_products! accepts spot and rejects FX" do
+  test "assert_live_products! accepts evidenced BTC_JPY and rejects other spot and FX" do
     assert :ok = LiveSafety.assert_live_products!(["BTC_JPY"])
 
-    assert_raise ArgumentError, ~r/only supports spot/, fn ->
+    assert_raise ArgumentError, ~r/commission evidence/, fn ->
+      LiveSafety.assert_live_products!(["ETH_JPY"])
+    end
+
+    assert_raise ArgumentError, ~r/commission evidence/, fn ->
       LiveSafety.assert_live_products!(["FX_BTC_JPY"])
     end
 
@@ -174,12 +178,36 @@ defmodule Bitflyer.Config.LiveSafetyTest do
       Keyword.put(previous, :product_codes, ["FX_BTC_JPY"])
     )
 
-    assert_raise ArgumentError, ~r/only supports spot/, fn ->
+    assert_raise ArgumentError, ~r/commission evidence/, fn ->
       LiveSafety.apply_live_overrides!(
         [enabled: false, module: Bitflyer.Strategy],
         [],
         getenv(@valid_env)
       )
+    end
+  end
+
+  test "apply_live_overrides! rejects ETH_JPY alone or mixed with BTC_JPY" do
+    previous = Application.get_env(:bitflyer, Bitflyer.MarketData, [])
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, Bitflyer.MarketData, previous)
+    end)
+
+    for product_codes <- [["ETH_JPY"], ["BTC_JPY", "ETH_JPY"]] do
+      Application.put_env(
+        :bitflyer,
+        Bitflyer.MarketData,
+        Keyword.put(previous, :product_codes, product_codes)
+      )
+
+      assert_raise ArgumentError, ~r/ETH_JPY/, fn ->
+        LiveSafety.apply_live_overrides!(
+          [enabled: false, module: Bitflyer.Strategy],
+          [],
+          getenv(@valid_env)
+        )
+      end
     end
   end
 end

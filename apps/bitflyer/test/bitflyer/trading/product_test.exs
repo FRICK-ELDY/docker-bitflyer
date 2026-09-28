@@ -19,6 +19,14 @@ defmodule Bitflyer.Trading.ProductTest do
     refute Product.fx?("BTC_JPY")
   end
 
+  test "live evidence is BTC_JPY even when other pairs are spot" do
+    assert Product.live_evidenced?("BTC_JPY")
+    assert Product.spot?("ETH_JPY")
+    refute Product.live_evidenced?("ETH_JPY")
+    refute Product.live_evidenced?("FX_BTC_JPY")
+    assert Product.live_evidenced_products() == ["BTC_JPY"]
+  end
+
   test "fee_currency is base for spot and quote for fx" do
     assert Product.fee_currency("BTC_JPY") == "BTC"
     assert Product.fee_currency("ETH_BTC") == "ETH"

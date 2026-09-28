@@ -1391,6 +1391,24 @@ defmodule Bitflyer.RiskTest do
     assert meta.market_type == :fx
   end
 
+  test "live rejects ETH_JPY because commission evidence is BTC_JPY only" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+
+    assert {:error, :invalid_command, meta} =
+             Risk.authorize(
+               valid_command(%{
+                 product_code: "ETH_JPY",
+                 market_key: {:ticker, "ETH_JPY"}
+               }),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert meta.reason == :unsupported_product_for_live
+    assert meta.market_type == :spot
+  end
+
   test "dry_run still allows FX product codes for paper-style fixtures" do
     assert Readiness.mark_ready() == :ok
     assert put_fresh_ticker({:ticker, "FX_BTC_JPY"}) == :ok

@@ -2,8 +2,9 @@ defmodule Bitflyer.Trading.Product do
   @moduledoc """
   銘柄コードから基軸・決済通貨と市場種別を取り出す。
 
-  live の残高モデルは現物（`getbalance`）のみ。FX/CFD（`getcollateral`）は未実装のため、
-  live 対象は allowlist の `:spot` に限定する（improvement-plan P0 #2 B）。
+  live の残高モデルは現物（`getbalance`）のみ。FX/CFD（`getcollateral`）は未実装。
+  起動と認可は、さらに手数料単位の一次証跡がある銘柄（`live_evidenced?/1`、当面 `BTC_JPY`）だけを通す。
+  spot allowlist の他ペアは paper の手数料モデル用で、実測表を足すまで live では通さない。
   """
 
   @type market_type :: :spot | :fx | :unsupported
@@ -66,6 +67,20 @@ defmodule Bitflyer.Trading.Product do
   @spec spot?(String.t()) :: boolean()
   def spot?(product_code) when is_binary(product_code), do: market_type(product_code) == :spot
 
+  # 買い・売りの commission 実測（commission-unit-evidence.md）がある銘柄。
+  # 他ペアは実測表を足してからこの集合へ入れる。spot? 全体は live で通さない。
+  @live_evidenced_products MapSet.new(["BTC_JPY"])
+
+  @doc """
+  live 起動と認可で通す銘柄か。
+
+  `spot?/1` より狭い。当面は `BTC_JPY` のみ。
+  """
+  @spec live_evidenced?(String.t()) :: boolean()
+  def live_evidenced?(product_code) when is_binary(product_code) do
+    MapSet.member?(@live_evidenced_products, product_code)
+  end
+
   # Lightning 現物の公表上限（約定数量 × 0.15%）。口座の実レートはこれ以下。
   # 認可はこの率で base を多めに拘束し、全量売りが insufficient_funds になるのを拒む。
   # BTC_JPY の実測は 0.15%。他ペアの単位は未実測で、余白だけ先に天井へ揃える。
@@ -121,4 +136,7 @@ defmodule Bitflyer.Trading.Product do
 
   @doc false
   def spot_products, do: MapSet.to_list(@spot_products)
+
+  @doc false
+  def live_evidenced_products, do: Enum.sort(@live_evidenced_products)
 end
