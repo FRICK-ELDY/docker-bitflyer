@@ -46,6 +46,8 @@ services:
       DB_PORT: "5432"
       POSTGRES_USER: postgres
       POSTGRES_DB: docker_bitflyer_dev
+      # 開発 bind mount 上。コンテナ作り直しでも印が残る。
+      BITFLYER_DRAIN_HALT_PATH: /app/.data/hwm-drain-halt
     env_file:
       - path: .env
         required: false

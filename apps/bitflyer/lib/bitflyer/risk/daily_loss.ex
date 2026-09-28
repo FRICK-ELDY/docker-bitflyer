@@ -7,8 +7,10 @@ defmodule Bitflyer.Risk.DailyLoss do
   GenServer の外で行い、init / reload / reinit で当日行を読む。
   読取・永続化失敗は unsynced（fail-closed）。
 
-  認可は `persist: false` で ETS の peak だけ上げる（`persisted_peak` は進めない）。
-  Fill 後 / 突合 / resume の `Equity.enforce`（既定 persist）で
+  認可は `persist: false` で ETS の peak だけ上げる（同期の Ash はしない）。
+  `:write_behind` が true のとき、上昇分を監督下 `PeakWriter` が受け取る。
+  writer が居ないとき、および同期 persist の失敗は `{:error, :unsynced}`。
+  Fill 後 / 突合 / resume の `Equity.enforce`（既定 persist）でも
   `peak > persisted_peak` なら DB へ flush する。HWM は Fill 合計ではない。
   reload は同日 ETS と DB の高い方を残し、日付跨ぎは当日行だけを使う。
 
@@ -160,11 +162,22 @@ defmodule Bitflyer.Risk.DailyLoss do
   @doc """
   テスト用。synced・barrier 0・損失 0 に戻す（Fill は触らない）。
   """
-  @spec reset(keyword()) :: :ok
+  @spec reset(keyword()) :: :ok | {:error, term()}
   def reset(opts \\ []) do
+    # 保留中の write-behind を先に落としてから ETS を消す（ack の書き戻しを残さない）。
+    # drain できないときは 0・synced に戻さない（未保存の高値を消したことにしない）。
+    # PeakWriter 関数は呼ばない（モジュール循環を避ける）。
     server = Keyword.get(opts, :server, @name)
     now = Keyword.get_lazy(opts, :now_dt, &DateTime.utc_now/0)
-    GenServer.call(server, {:reset, now})
+
+    case drain_peak_writer() do
+      :ok ->
+        GenServer.call(server, {:reset, now})
+
+      {:error, _reason} = error ->
+        _ = mark_unsynced(server: server)
+        error
+    end
   end
 
   @doc """
@@ -204,9 +217,18 @@ defmodule Bitflyer.Risk.DailyLoss do
   永続化失敗は当該モードを unsynced にして `{:error, :unsynced}`。
   ETS の日付が壁時計と違うときは先に `reload` し、当日の ETS も更新する。
 
+  認可は `:persist` を `false` にし、同期 upsert をしない。`:write_behind` が
+  true なら同じ上昇を `PeakWriter` が受理するまで待つ（DB 完了は待たない）。
+  writer が受理できないときは同期 upsert に倒す。それも失敗すれば
+  `{:error, :unsynced}`。再送で後から DB に書けても `synced` は戻さない。
+  認可を同じプロセスで再開するには reload か再起動が要る。
+
   ## Options
-  - `:persist` — `false` なら ETS の peak のみ（認可ホットパス。flush もしない）。
+  - `:persist` — `false` なら ETS の peak のみ（同期 flush もしない）。
     関数なら `(trade_mode, Date.t(), Decimal.t() -> :ok | {:error, term()})`（テスト用）
+  - `:write_behind` — `true` かつ `:persist` が `false` のとき、上昇 / 未永続分を
+    `Bitflyer.Risk.PeakWriter` が受理するまで `GenServer.call` する。
+    不在なら同期 upsert。DB の完了は待たない
   """
   @spec record_peak(trade_mode(), Decimal.t(), keyword()) ::
           {:ok, Decimal.t()} | {:error, :unsynced}
@@ -270,10 +292,14 @@ defmodule Bitflyer.Risk.DailyLoss do
         )
 
       {:flush, day, peak} ->
-        # 認可で ETS だけ上がったピークを DB へ。persist: false では何もしない。
+        # 認可で ETS だけ上がったピーク。同期 persist はしない。
+        # write_behind があるときだけ監督下 writer へ渡す。
         case persist do
           false ->
-            {:ok, peak}
+            case schedule_write_behind(trade_mode, day, peak, opts) do
+              :ok -> {:ok, peak}
+              {:error, :unsynced} -> {:error, :unsynced}
+            end
 
           _ ->
             persist_and_commit(
@@ -304,7 +330,10 @@ defmodule Bitflyer.Risk.DailyLoss do
        ) do
     case GenServer.call(server, {:commit_peak, trade_mode, day, new_peak, :ets_only}) do
       {:ok, peak} ->
-        {:ok, peak}
+        case schedule_write_behind(trade_mode, day, peak, opts) do
+          :ok -> {:ok, peak}
+          {:error, :unsynced} -> {:error, :unsynced}
+        end
 
       :stale_day ->
         retry_record_peak_after_stale_commit(
@@ -358,6 +387,94 @@ defmodule Bitflyer.Risk.DailyLoss do
         _ = GenServer.call(server, {:peak_persist_failed, trade_mode, day, other})
         {:error, :unsynced}
     end
+  end
+
+  # DB 完了は待たない。writer がメッセージを受け取るまでだけ呼ぶ。
+  # 登録名への call だけなので PeakWriter をコンパイル依存にしない。
+  defp schedule_write_behind(trade_mode, day, peak, opts) do
+    if Keyword.get(opts, :write_behind, false) and Decimal.compare(peak, 0) == :gt do
+      writer = Keyword.get(opts, :peak_writer, Bitflyer.Risk.PeakWriter)
+      daily_loss = Keyword.get(opts, :server, @name)
+
+      try do
+        GenServer.call(writer, {:enqueue, trade_mode, day, peak, daily_loss}, 5_000)
+      catch
+        :exit, reason ->
+          fallback_persist(trade_mode, day, peak, daily_loss, reason, opts)
+      end
+    else
+      :ok
+    end
+  end
+
+  # writer が受理できないときは同期 upsert に倒す。それも失敗したら unsynced で認可しない。
+  defp fallback_persist(trade_mode, day, peak, daily_loss, reason, opts) do
+    case fallback_upsert(trade_mode, day, peak, opts) do
+      :ok ->
+        case GenServer.call(daily_loss, {:commit_peak, trade_mode, day, peak, :persisted}) do
+          {:ok, _} -> :ok
+          :stale_day -> :ok
+        end
+
+      {:error, error} ->
+        _ =
+          GenServer.call(
+            daily_loss,
+            {:peak_persist_failed, trade_mode, day, {:peak_writer_unavailable, reason, error}}
+          )
+
+        {:error, :unsynced}
+
+      other ->
+        _ =
+          GenServer.call(
+            daily_loss,
+            {:peak_persist_failed, trade_mode, day, {:peak_writer_unavailable, reason, other}}
+          )
+
+        {:error, :unsynced}
+    end
+  end
+
+  defp fallback_upsert(trade_mode, day, peak, opts) do
+    case Keyword.get(opts, :fallback_upsert) do
+      fun when is_function(fun, 3) ->
+        if test_injections_allowed?() do
+          fun.(trade_mode, day, peak)
+        else
+          DailyEquityPeak.upsert(trade_mode, day, peak)
+        end
+
+      _ ->
+        DailyEquityPeak.upsert(trade_mode, day, peak)
+    end
+  end
+
+  defp test_injections_allowed? do
+    :bitflyer
+    |> Application.get_env(Bitflyer.Risk, [])
+    |> Keyword.get(:allow_test_injections, false) == true
+  end
+
+  # reset は writer の ack より後で ETS を消す。関数呼び出しにすると PeakWriter と循環する。
+  defp drain_peak_writer do
+    timeout_ms = 10_000
+
+    GenServer.call(Bitflyer.Risk.PeakWriter, :drain, timeout_ms)
+  catch
+    :exit, {:timeout, _} ->
+      Bitflyer.Telemetry.log(:error, "peak writer drain timed out before daily loss reset", %{
+        reason: :timeout
+      })
+
+      {:error, :timeout}
+
+    :exit, reason ->
+      Bitflyer.Telemetry.log(:error, "peak writer drain failed before daily loss reset", %{
+        reason: inspect(reason)
+      })
+
+      {:error, :down}
   end
 
   defp retry_record_peak_after_stale_commit(
@@ -589,6 +706,8 @@ defmodule Bitflyer.Risk.DailyLoss do
     if row_day == day do
       # peak は認可の並行上昇を残す。persisted は DB に書いた new_peak だけ進める
       # （Ash 窓中に ETS が上がっても「flush 済み」にしない）。
+      # synced は維持する。persist 失敗の unsynced は、後から upsert できても
+      # この ack では戻さない（認可の再開は reload / 再起動）。
       stored_peak = Decimal.max(peak, new_peak)
 
       stored_persisted =
@@ -609,17 +728,43 @@ defmodule Bitflyer.Risk.DailyLoss do
     end
   end
 
+  def handle_call(:unpersisted_peaks, _from, table) do
+    peaks =
+      Enum.flat_map(@trade_modes, fn mode ->
+        {day, _loss, _net, _synced, _barrier, _gen, peak, persisted} = read_mode(table, mode)
+
+        if Decimal.compare(peak, persisted) == :gt and Decimal.compare(peak, 0) == :gt do
+          [{mode, day, peak}]
+        else
+          []
+        end
+      end)
+
+    {:reply, peaks, table}
+  end
+
   def handle_call({:peak_persist_failed, trade_mode, day, reason}, _from, table) do
     {row_day, loss, net, _synced, barrier, gen, peak, persisted} = read_mode(table, trade_mode)
-    insert_row(table, {trade_mode, row_day, loss, net, false, barrier, gen, peak, persisted})
 
-    Bitflyer.Telemetry.log(
-      :error,
-      "daily equity peak persist failed; marked unsynced",
-      %{reason: inspect(reason), trade_mode: trade_mode, trading_day: Date.to_iso8601(day)}
-    )
+    if row_day == day do
+      insert_row(table, {trade_mode, row_day, loss, net, false, barrier, gen, peak, persisted})
 
-    {:reply, :ok, table}
+      Bitflyer.Telemetry.log(
+        :error,
+        "daily equity peak persist failed; marked unsynced",
+        %{reason: inspect(reason), trade_mode: trade_mode, trading_day: Date.to_iso8601(day)}
+      )
+
+      {:reply, :ok, table}
+    else
+      Bitflyer.Telemetry.log(
+        :warning,
+        "daily equity peak persist failed on a stale trading day; left ETS day untouched",
+        %{reason: inspect(reason), trade_mode: trade_mode, trading_day: Date.to_iso8601(day)}
+      )
+
+      {:reply, :stale_day, table}
+    end
   end
 
   defp apply_one(table, mode, day, loss, net, loaded_peak, load_gen, true = _force?, release?) do

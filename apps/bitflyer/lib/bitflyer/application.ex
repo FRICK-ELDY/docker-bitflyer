@@ -25,6 +25,11 @@ defmodule Bitflyer.Application do
         Bitflyer.OrderExecutor.InFlight,
         Bitflyer.OrderExecutor.LiveFills.Gate,
         Bitflyer.Risk.DailyLoss,
+        # DailyLoss より後に起動し、停止時は先に落ちる。terminate が HWM を DB へ書く。
+        Supervisor.child_spec(
+          {Bitflyer.Risk.PeakWriter, []},
+          shutdown: @child_shutdown_ms
+        ),
         Bitflyer.Risk.BalanceCache,
         Supervisor.child_spec(
           {Task.Supervisor, name: Bitflyer.MarketData.TaskSupervisor},
@@ -57,6 +62,7 @@ defmodule Bitflyer.Application do
   1. Discord telemetry 解除
   2. `Readiness.mark_not_ready_safe/0`（新規 submit 拒否。halted は維持）
   3. `InFlight.drain/1`（進行中完了待ち。timeout 時は pending を submission_unknown 化）
+  4. `PeakWriter.drain/1`（認可で上がった未永続 HWM を DB へ）
   """
   @impl true
   def prep_stop(state) do
@@ -100,6 +106,40 @@ defmodule Bitflyer.Application do
         )
 
         _ = finalize_drain_timeout(leftovers)
+    end
+
+    case Bitflyer.Risk.PeakWriter.drain() do
+      :ok ->
+        Bitflyer.Telemetry.log(:info, "prep_stop: peak writer drain complete", %{
+          reason: :application_stop
+        })
+
+      {:error, reason} ->
+        Bitflyer.Telemetry.log(:critical, "prep_stop: peak writer drain failed", %{
+          reason: inspect(reason)
+        })
+
+        # DB へ halt を書けなくても、ローカル印を先に残す。
+        case Bitflyer.Risk.DrainHalt.record() do
+          :persisted ->
+            Bitflyer.Telemetry.log(:critical, "prep_stop: peak drain halt persisted", %{
+              reason: :persist_failed
+            })
+
+          :marker_only ->
+            Bitflyer.Telemetry.log(
+              :critical,
+              "prep_stop: peak drain halt was not written to RiskState",
+              %{reason: :persist_failed}
+            )
+
+          :unrecorded ->
+            Bitflyer.Telemetry.log(
+              :critical,
+              "prep_stop: peak drain halt was not written to RiskState or the local marker",
+              %{reason: :persist_failed}
+            )
+        end
     end
 
     state

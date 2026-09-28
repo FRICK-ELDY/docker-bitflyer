@@ -356,4 +356,14 @@ defmodule Bitflyer.Risk.DailyLossTest do
     paper = Enum.find(rows, &(&1.trade_mode == :paper))
     assert Decimal.eq?(paper.peak, Decimal.new("50000"))
   end
+
+  test "persist failure for another trading day does not unsync today" do
+    assert {:ok, _} = DailyLoss.record_peak(:live, Decimal.new("10000"))
+
+    assert :stale_day =
+             GenServer.call(DailyLoss, {:peak_persist_failed, :live, ~D[1999-01-01], :old})
+
+    assert {:ok, %{peak: peak}} = DailyLoss.snapshot(:live)
+    assert Decimal.eq?(peak, Decimal.new("10000"))
+  end
 end

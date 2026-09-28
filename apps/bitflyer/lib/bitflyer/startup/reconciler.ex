@@ -138,7 +138,26 @@ defmodule Bitflyer.Startup.Reconciler do
     Reconcile.run(trade_mode: Bitflyer.TradeMode.current(), exchange: state.exchange)
   end
 
-  defp apply_result({:ok, internal}, state) do
+  defp apply_result(result, state) do
+    # ローカル印、または既に DB にある halt を Ready 判定より先に ETS へ載せる。
+    # 印を消したあとの起動でも、成功した突合が persist_failed を消して Ready にしない。
+    _ = Bitflyer.Risk.DrainHalt.enforce(readiness: state.readiness)
+    _ = halt_if_persisted(state)
+    do_apply_result(result, state)
+  end
+
+  defp halt_if_persisted(state) do
+    case Bitflyer.Risk.Circuit.persisted_halt_reason() do
+      {:halted, reason} ->
+        _ = state.readiness.halt(reason)
+        :halted
+
+      _ ->
+        :clear
+    end
+  end
+
+  defp do_apply_result({:ok, internal}, state) do
     trade_mode = Bitflyer.TradeMode.current()
 
     balance_result = sync_balance_cache(trade_mode, internal)
@@ -211,7 +230,7 @@ defmodule Bitflyer.Startup.Reconciler do
     end
   end
 
-  defp apply_result({:error, reason, details}, state) do
+  defp do_apply_result({:error, reason, details}, state) do
     detail_meta =
       if is_map(details) do
         Map.take(details, [
@@ -359,17 +378,9 @@ defmodule Bitflyer.Startup.Reconciler do
       {:ok, %RiskState{halted: false}} ->
         :ok
 
-      {:ok, %RiskState{} = risk} ->
-        case risk
-             |> Ash.Changeset.for_update(:update, %{
-               halted: false,
-               reason: nil,
-               halted_at: nil
-             })
-             |> Ash.update() do
-          {:ok, _} -> :ok
-          {:error, error} -> {:error, error}
-        end
+      {:ok, %RiskState{halted: true}} ->
+        # 成功突合は停止を解除しない。解除は Resume だけ。
+        {:error, :risk_halted}
 
       {:error, error} ->
         {:error, error}

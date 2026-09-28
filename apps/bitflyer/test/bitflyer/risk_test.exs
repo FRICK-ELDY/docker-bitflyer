@@ -263,13 +263,17 @@ defmodule Bitflyer.RiskTest do
              )
   end
 
-  test "authorize raises HWM in ETS without persisting DailyEquityPeak" do
+  test "authorize raises HWM in ETS without syncing DailyEquityPeak" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
     assert :ok = DailyLoss.seed_net(:dry_run, Decimal.new("100000"))
 
     assert {:ok, %AuthorizedOrder{}} =
-             Risk.authorize(valid_command(), positions: [], trade_mode: :dry_run)
+             Risk.authorize(valid_command(),
+               positions: [],
+               trade_mode: :dry_run,
+               write_behind: false
+             )
 
     assert {:ok, %{peak: peak}} = DailyLoss.snapshot(:dry_run)
     assert Decimal.eq?(peak, Decimal.new("100000"))
@@ -277,6 +281,82 @@ defmodule Bitflyer.RiskTest do
     day = DailyLoss.trading_day(DateTime.utc_now())
     assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
     refute Enum.any?(rows, &(&1.trade_mode == :dry_run))
+  end
+
+  test "authorize crash before peak flush still leaves HWM after write-behind" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    assert :ok = DailyLoss.seed_net(:dry_run, Decimal.new("100000"))
+    assert :ok = Bitflyer.Risk.PeakWriter.suspend()
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(valid_command(), positions: [], trade_mode: :dry_run)
+
+    assert {:ok, %{peak: ets_peak}} = DailyLoss.snapshot(:dry_run)
+    assert Decimal.eq?(ets_peak, Decimal.new("100000"))
+
+    day = DailyLoss.trading_day(DateTime.utc_now())
+    assert {:ok, rows_before} = DailyEquityPeak.fetch_day(day)
+    refute Enum.any?(rows_before, &(&1.trade_mode == :dry_run))
+
+    # 認可直後の DailyLoss 再起動。DB に高値が無いので ETS peak は消える。
+    assert :ok = DailyLoss.reinit()
+    assert {:ok, %{peak: lost}} = DailyLoss.snapshot(:dry_run)
+    assert Decimal.eq?(lost, Decimal.new(0))
+
+    assert :ok = Bitflyer.Risk.PeakWriter.resume()
+    assert :ok = Bitflyer.Risk.PeakWriter.drain()
+
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    row = Enum.find(rows, &(&1.trade_mode == :dry_run))
+    assert row
+    assert Decimal.eq?(row.peak, Decimal.new("100000"))
+
+    assert {:ok, %{peak: restored}} = DailyLoss.snapshot(:dry_run)
+    assert Decimal.eq?(restored, Decimal.new("100000"))
+
+    assert :ok = DailyLoss.reinit()
+    assert {:ok, %{peak: after_boot}} = DailyLoss.snapshot(:dry_run)
+    assert Decimal.eq?(after_boot, Decimal.new("100000"))
+  end
+
+  test "authorize persists HWM before returning when the peak writer is absent" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    assert :ok = DailyLoss.seed_net(:dry_run, Decimal.new("100000"))
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               trade_mode: :dry_run,
+               peak_writer: :missing_peak_writer
+             )
+
+    day = DailyLoss.trading_day(DateTime.utc_now())
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    row = Enum.find(rows, &(&1.trade_mode == :dry_run))
+    assert row
+    assert Decimal.eq?(row.peak, Decimal.new("100000"))
+
+    assert :ok = DailyLoss.reinit()
+    assert {:ok, %{peak: restored}} = DailyLoss.snapshot(:dry_run)
+    assert Decimal.eq?(restored, Decimal.new("100000"))
+  end
+
+  test "authorize rejects when the peak writer is absent and the fallback upsert fails" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    assert :ok = DailyLoss.seed_net(:dry_run, Decimal.new("100000"))
+
+    assert {:error, :unsynced, %{reason: :hwm_persist_failed}} =
+             Risk.authorize(valid_command(),
+               positions: [],
+               trade_mode: :dry_run,
+               peak_writer: :missing_peak_writer,
+               fallback_upsert: fn _mode, _day, _peak -> {:error, :db_down} end
+             )
+
+    assert {:error, :unsynced} = DailyLoss.snapshot(:dry_run)
   end
 
   test "enforce after authorize flush persists HWM so reinit keeps unrealized drawdown" do
@@ -305,8 +385,11 @@ defmodule Bitflyer.RiskTest do
              Risk.authorize(valid_command(), positions: [], trade_mode: :dry_run)
 
     day = DailyLoss.trading_day(DateTime.utc_now())
+    assert :ok = Bitflyer.Risk.PeakWriter.drain()
     assert {:ok, rows_before} = DailyEquityPeak.fetch_day(day)
-    refute Enum.any?(rows_before, &(&1.trade_mode == :dry_run))
+    row_before = Enum.find(rows_before, &(&1.trade_mode == :dry_run))
+    assert row_before
+    assert Decimal.eq?(row_before.peak, Decimal.new("100000"))
 
     assert {:ok, position} =
              Position
@@ -319,7 +402,7 @@ defmodule Bitflyer.RiskTest do
              })
              |> Ash.create()
 
-    # 実現益後に含み損で equity を下げる（peak は認可で ETS のみ上昇済み）
+    # 実現益後に含み損で equity を下げる（peak は認可の write-behind で既に永続）
     assert put_fresh_ticker(@market_key, Decimal.new("1000000")) == :ok
 
     assert {:ok, snap} =

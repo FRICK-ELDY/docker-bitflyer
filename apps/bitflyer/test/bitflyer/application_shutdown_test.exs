@@ -11,8 +11,10 @@ defmodule Bitflyer.ApplicationShutdownTest do
 
   alias Bitflyer.OrderExecutor.InFlight
   alias Bitflyer.Readiness
+  alias Bitflyer.Risk
+  alias Bitflyer.Risk.{DailyLoss, PeakWriter}
   alias Bitflyer.System
-  alias Bitflyer.Trading.Order
+  alias Bitflyer.Trading.{DailyEquityPeak, Order}
 
   @market_key {:ticker, "BTC_JPY"}
 
@@ -177,6 +179,27 @@ defmodule Bitflyer.ApplicationShutdownTest do
     assert Readiness.get() == {:halted, :submission_unknown}
 
     assert :ok = InFlight.untrack(ref)
+  end
+
+  test "prep_stop drains a suspended peak writer so HWM is in the database" do
+    assert Readiness.mark_ready() == :ok
+    assert put_fresh_ticker(@market_key) == :ok
+    assert :ok = DailyLoss.seed_net(:dry_run, Decimal.new("100000"))
+    assert :ok = PeakWriter.suspend()
+
+    assert {:ok, _} =
+             Risk.authorize(valid_command("shutdown-hwm-1"), positions: [], trade_mode: :dry_run)
+
+    day = DailyLoss.trading_day(DateTime.utc_now())
+    assert {:ok, rows_before} = DailyEquityPeak.fetch_day(day)
+    refute Enum.any?(rows_before, &(&1.trade_mode == :dry_run))
+
+    assert [] = Bitflyer.Application.prep_stop([])
+
+    assert {:ok, rows} = DailyEquityPeak.fetch_day(day)
+    row = Enum.find(rows, &(&1.trade_mode == :dry_run))
+    assert row
+    assert Decimal.eq?(row.peak, Decimal.new("100000"))
   end
 
   test "persist after drain-unknown heals status to pending with exchange_order_id" do
