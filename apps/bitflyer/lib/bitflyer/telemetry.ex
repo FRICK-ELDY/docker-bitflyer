@@ -57,6 +57,8 @@ defmodule Bitflyer.Telemetry do
                         :unexplained,
                         :allowance,
                         :limit,
+                        :size,
+                        :ask_size,
                         :operator,
                         :snapshot_hash,
                         :timeout_ms,

@@ -7,6 +7,7 @@ defmodule Bitflyer.MarketData.Normalize do
   UTC とみなす（Private API の JST 契約とは別）。時刻欠落は `nil`
   （Risk の skew は fail-closed）。
   `book` は有効な `best_bid` / `best_ask`（正かつ ask >= bid）。
+  正の `best_ask_size` があるときだけ板に載せる。欠落・ゼロは板を消さない。
   欠落・ゼロ・負・パース不能・crossed（ask < bid）は板だけ `nil` にし、
   LTP は Cache に載せる（鮮度と時計検査は残る。spread は `bid_ask_missing`）。
   `ltp` の欠落・ゼロ・負、および時刻文字列のパース失敗は `:error`
@@ -21,7 +22,8 @@ defmodule Bitflyer.MarketData.Normalize do
 
   @type book_layer :: %{
           required(:best_bid) => Decimal.t(),
-          required(:best_ask) => Decimal.t()
+          required(:best_ask) => Decimal.t(),
+          optional(:best_ask_size) => Decimal.t()
         }
 
   @type ticker_value :: %{
@@ -38,6 +40,7 @@ defmodule Bitflyer.MarketData.Normalize do
     ltp = Map.get(message, "ltp") || Map.get(message, :ltp)
     bid = Map.get(message, "best_bid") || Map.get(message, :best_bid)
     ask = Map.get(message, "best_ask") || Map.get(message, :best_ask)
+    ask_size = Map.get(message, "best_ask_size") || Map.get(message, :best_ask_size)
     timestamp = Map.get(message, "timestamp") || Map.get(message, :timestamp)
 
     with true <- is_binary(product_code) and product_code != "",
@@ -46,7 +49,7 @@ defmodule Bitflyer.MarketData.Normalize do
       {:ok, {:ticker, product_code},
        %{
          ltp: %{price: decimal_ltp, source_timestamp: source_timestamp},
-         book: cast_book(bid, ask)
+         book: cast_book(bid, ask, ask_size)
        }}
     else
       _ -> :error
@@ -134,6 +137,20 @@ defmodule Bitflyer.MarketData.Normalize do
   def book(%{best_bid: bid, best_ask: ask}), do: valid_book(bid, ask)
   def book(%{"best_bid" => bid, "best_ask" => ask}), do: valid_book(bid, ask)
   def book(_), do: :miss
+
+  @doc """
+  最上段の ask 数量。板が無い、または正の数量が無いときは `:miss`。
+
+  JSON 数値は float になるので、satoshi（小数 8 桁）へ切り捨ててから使う。
+  切り上げると、見えている数量より大きい注文を最上段以内とみなす。
+  """
+  @spec best_ask_size(term()) :: {:ok, Decimal.t()} | :miss
+  def best_ask_size(%{book: book}) when is_map(book), do: quote_size(book)
+  def best_ask_size(%{"book" => book}) when is_map(book), do: quote_size(book)
+  def best_ask_size(%{book: _}), do: :miss
+  def best_ask_size(%{"book" => _}), do: :miss
+  def best_ask_size(value) when is_map(value), do: quote_size(value)
+  def best_ask_size(_), do: :miss
 
   @doc """
   時計検査用の取引所時刻。
@@ -240,13 +257,40 @@ defmodule Bitflyer.MarketData.Normalize do
   defp rpc_error_reason(%{message: message}) when is_binary(message), do: message
   defp rpc_error_reason(_), do: :rpc_error
 
-  defp cast_book(bid, ask) do
+  defp cast_book(bid, ask, ask_size) do
     with {:ok, decimal_bid} <- cast_positive_decimal(bid),
          {:ok, decimal_ask} <- cast_positive_decimal(ask),
          true <- Decimal.compare(decimal_ask, decimal_bid) != :lt do
-      %{best_bid: decimal_bid, best_ask: decimal_ask}
+      book = %{best_bid: decimal_bid, best_ask: decimal_ask}
+
+      case cast_size(ask_size) do
+        {:ok, size} -> Map.put(book, :best_ask_size, size)
+        _ -> book
+      end
     else
       _ -> nil
+    end
+  end
+
+  defp quote_size(map) when is_map(map) do
+    raw = Map.get(map, :best_ask_size) || Map.get(map, "best_ask_size")
+
+    case cast_size(raw) do
+      {:ok, size} -> {:ok, size}
+      _ -> :miss
+    end
+  end
+
+  # JSON 数値は float。satoshi へ切り捨て、見えている数量を大きく見せない。
+  defp cast_size(v) do
+    case Decimal.cast(v) do
+      {:ok, %Decimal{} = decimal} ->
+        floored = Decimal.round(decimal, 8, :floor)
+
+        if Decimal.positive?(floored), do: {:ok, floored}, else: :error
+
+      _ ->
+        :error
     end
   end
 

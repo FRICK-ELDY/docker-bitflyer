@@ -35,9 +35,10 @@ defmodule Bitflyer.Risk do
   正本の減額は submit 時 `reserve/4`。probe→reserve のあいだに残高が減れば
   認可通過後に `:insufficient_balance` になりうる（近似）。Runner は同理由に
   バックオフを付け、throttle だけの Tight loop を避ける。
-  live 成行買いの拘束は `best_ask × size` ちょうど（LTP だと薄いスプレッドで過小）。
-  ticker に気配数量が無いので、最上段を超えて歩いた平均は ask を超えうる。
-  その超過は拘束せず、部分約定の解放はサイズ比のまま残る。
+  live 成行買いの拘束は、サイズが最上段 `best_ask_size` 以内のとき `best_ask × size`
+  ちょうど。  数量が無い、またはサイズが最上段を超える成行買いは live も paper も拒否する
+  （その先の価格は ticker に無く、余白では支出の上限にならない）。
+  判定後に最上段が削れた歩行は、この拘束では実支出へ揃えず、次の残高突合まで残る。
   paper 成行買いは LTP に `FillPricing` の不利化だけを載せる（ask は重ねない）。
   """
 
@@ -167,8 +168,8 @@ defmodule Bitflyer.Risk do
   発注が拘束する通貨と額。`BalanceCache.reserve/4` 用。
 
   dry_run は残高モデル無しのため `{:ok, :skip}`。
-  買いの quote 拘束は `quote_notional/2`。live 成行は `best_ask × size` ちょうど
-  （歩いた約定が ask を超える分は拘束しない）。
+  買いの quote 拘束は `quote_notional/2`。live と paper の成行は最上段以内だけ通す。
+  live の額は `best_ask × size`。数量欠落は `ask_size_missing`、超過は `ask_depth`。
   paper 成行は LTP に手数料とスリッページを載せた価格（ask は使わない）。
   指値は指定価格（paper は手数料のみ上乗せ）。売りは base 数量
   （live は手数料余白込み）。
@@ -815,22 +816,56 @@ defmodule Bitflyer.Risk do
     price = Map.get(command, :price)
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
 
-    with {:ok, unit_price} <- base_unit_price(trade_mode, side, order_type, price, command, opts),
+    with {:ok, gated_ask} <-
+           check_market_buy_depth(trade_mode, side, order_type, size, command, opts),
+         {:ok, unit_price} <-
+           base_unit_price(trade_mode, side, order_type, price, command, opts, gated_ask),
          {:ok, priced} <- paper_unit_price(trade_mode, side, order_type, unit_price) do
       {:ok, Decimal.mult(priced, size)}
     end
   end
 
-  defp base_unit_price(_trade_mode, _side, :limit, %Decimal{} = price, _command, _opts),
-    do: {:ok, price}
+  defp check_market_buy_depth(trade_mode, :buy, :market, size, command, opts)
+       when trade_mode in [:live, :paper] do
+    market_key = Map.fetch!(command, :market_key)
 
-  # live 成行買いの拘束は best_ask × size ちょうど。LTP だと薄いスプレッドで過小になる。
-  # ticker に気配数量が無いので、サイズが最上段を超えると平均約定は ask を超えうる。
-  # 部分約定後の解放はサイズ比（align_hold_to_filled）のため、その超過分だけ
-  # 利用可能 JPY が実支出より甘く残る。板厚超過はこの条項では塞がない。
-  defp base_unit_price(:live, :buy, :market, _price, command, opts) do
-    case fetch_bid_ask(command, opts) do
-      {:ok, _bid, ask} ->
+    case fetch_top(command, opts) do
+      :miss ->
+        {:error, :stale, %{market_key: market_key, reason: :bid_ask_missing}}
+
+      {:ok, _bid, _ask, :miss} ->
+        {:error, :stale, %{market_key: market_key, reason: :ask_size_missing}}
+
+      {:ok, _bid, ask, {:ok, ask_size}} ->
+        if Decimal.compare(size, ask_size) == :gt do
+          {:error, :limit_exceeded,
+           %{limit: :ask_depth, size: size, ask_size: ask_size, market_key: market_key}}
+        else
+          {:ok, ask}
+        end
+    end
+  end
+
+  defp check_market_buy_depth(_trade_mode, _side, _order_type, _size, _command, _opts),
+    do: {:ok, nil}
+
+  defp base_unit_price(
+         _trade_mode,
+         _side,
+         :limit,
+         %Decimal{} = price,
+         _command,
+         _opts,
+         _gated_ask
+       ),
+       do: {:ok, price}
+
+  defp base_unit_price(:live, :buy, :market, _price, _command, _opts, %Decimal{} = gated_ask),
+    do: {:ok, gated_ask}
+
+  defp base_unit_price(:live, :buy, :market, _price, command, opts, _gated_ask) do
+    case fetch_top(command, opts) do
+      {:ok, _bid, ask, _ask_size} ->
         {:ok, ask}
 
       :miss ->
@@ -841,7 +876,7 @@ defmodule Bitflyer.Risk do
 
   # paper 成行買いは LTP を基準にする。不利化は次の paper_unit_price が行い、
   # ask を重ねると手数料・スリッページが二重になる。
-  defp base_unit_price(_trade_mode, _side, _order_type, _price, command, opts) do
+  defp base_unit_price(_trade_mode, _side, _order_type, _price, command, opts, _gated_ask) do
     case fetch_ltp(command, opts) do
       {:ok, ltp} ->
         {:ok, ltp}
@@ -871,6 +906,22 @@ defmodule Bitflyer.Risk do
         case Normalize.ltp_price(value) do
           %Decimal{} = ltp -> {:ok, ltp}
           _ -> :miss
+        end
+
+      :miss ->
+        :miss
+    end
+  end
+
+  defp fetch_top(command, opts) do
+    key = Map.fetch!(command, :market_key)
+    server = Keyword.get(opts, :server, Cache)
+
+    case Cache.get(key, server) do
+      {:ok, value, _received_at} ->
+        case Normalize.book(value) do
+          {:ok, bid, ask} -> {:ok, bid, ask, Normalize.best_ask_size(value)}
+          :miss -> :miss
         end
 
       :miss ->
@@ -1141,7 +1192,7 @@ defmodule Bitflyer.Risk do
       product_code: Map.get(command, :product_code) || Map.get(meta, :product_code),
       side: Map.get(command, :side)
     }
-    |> Map.merge(Map.take(meta, [:limit, :currency, :kind, :skew_ms, :max_ms]))
+    |> Map.merge(Map.take(meta, [:limit, :currency, :kind, :skew_ms, :max_ms, :size, :ask_size]))
     |> maybe_put_detail(meta)
   end
 

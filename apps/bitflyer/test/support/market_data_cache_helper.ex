@@ -24,7 +24,9 @@ defmodule Bitflyer.TestSupport.MarketDataCacheHelper do
       },
       book: %{
         best_bid: Decimal.sub(ltp, half),
-        best_ask: Decimal.add(ltp, half)
+        best_ask: Decimal.add(ltp, half),
+        # live 成行買いは最上段数量が必要。テストの通常サイズより厚い段にする。
+        best_ask_size: Decimal.new("100")
       }
     }
   end

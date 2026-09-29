@@ -45,7 +45,8 @@ defmodule Bitflyer.Strategy.Runner do
     :max_daily_loss,
     :insufficient_balance,
     # 一時的な薄商い。settle すると同一 intent が二度と出ない
-    :max_spread_pct
+    :max_spread_pct,
+    :ask_depth
   ]
 
   @spec start_link(keyword()) :: GenServer.on_start()

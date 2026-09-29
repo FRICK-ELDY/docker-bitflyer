@@ -33,6 +33,34 @@ defmodule Bitflyer.MarketData.NormalizeTest do
     assert ts.day == 8
   end
 
+  test "from_ticker floors a JSON number ask size and reads a string key" do
+    raw = 0.0681551
+
+    assert {:ok, _, %{book: book}} =
+             Normalize.from_ticker(ticker(%{"best_ask_size" => raw}))
+
+    assert {:ok, size} = Normalize.best_ask_size(%{book: book})
+    assert Decimal.compare(size, Decimal.new("0.0681551")) != :gt
+    assert Decimal.positive?(size)
+
+    assert {:ok, flat} =
+             Normalize.best_ask_size(%{"best_bid" => "1", "best_ask_size" => "0.2"})
+
+    assert Decimal.equal?(flat, Decimal.new("0.2"))
+  end
+
+  test "from_ticker keeps a positive best_ask_size and drops a zero one" do
+    assert {:ok, _, %{book: book}} =
+             Normalize.from_ticker(ticker(%{"best_ask_size" => "0.01"}))
+
+    assert {:ok, size} = Normalize.best_ask_size(%{book: book})
+    assert Decimal.equal?(size, Decimal.new("0.01"))
+
+    assert {:ok, _, value} = Normalize.from_ticker(ticker(%{"best_ask_size" => 0}))
+    assert :miss = Normalize.best_ask_size(value)
+    refute Map.has_key?(value.book, :best_ask_size)
+  end
+
   test "from_ticker allows missing timestamp as nil" do
     assert {:ok, {:ticker, "FX_BTC_JPY"}, %{ltp: %{price: ltp, source_timestamp: nil}}} =
              Normalize.from_ticker(ticker(%{}))

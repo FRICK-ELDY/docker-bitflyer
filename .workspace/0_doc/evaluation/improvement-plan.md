@@ -24,7 +24,7 @@
 | P2 #10 | improvement-plan 運用 | **完了**（2026-09-29。完了主張 11 件をコードまたは証跡と突き合わせ、見方と矛盾して却下した項目は 0。記録は [evaluation-2026-09-29.md](./evaluation-2026-09-29.md) の採否表） |
 | P0 #1 | commission 一次証跡 | **完了**（2026-09-28。買い …6098 / 売り …6123 の実差分が更新後 expected と JPY 1 円・BTC 1 satoshi 以内。2026-09-29 再読で見方との矛盾なし。適用範囲は BTC_JPY。他銘柄の live 通過は P2 #16 で証跡集合に閉じた） |
 | P0 #2 | ハーネス独立性 | **完了**（2026-09-28。`:quote_mark` の売りは発注→約定同期→Reconciler で `balance_mismatch` halt。既定の縦回帰は Ready。2026-09-29 再読で見方との矛盾なし） |
-| P2 #7（2026-09-28） | 成行拘束の ask 化 | **完了**（2026-09-28。live 成行買いの probe/reserve は `best_ask × size` ちょうど。ask 欠落は `bid_ask_missing`。最上段を超える超過は未拘束のまま。見方（ask 拘束）は満たす。超過は P2 #19） |
+| P2 #7（2026-09-28） | 成行拘束の ask 化 | **完了**（2026-09-28。live 成行買いの probe/reserve は `best_ask × size` ちょうど。ask 欠落は `bid_ask_missing`。最上段以内は ask ちょうどのまま。超過分は P2 #19） |
 | P2 #8 | ticker 2 層化 | **完了**（2026-09-28。crossed / 欠落 / ゼロの板は `book: nil` のまま LTP を Cache に載せる。成行認可は `bid_ask_missing`。2026-09-29 再読で見方との矛盾なし） |
 | P2 #9（2026-09-29） | DailyEquityPeak の GREATEST upsert | **完了**（2026-09-29。`upsert/3` は `INSERT ... ON CONFLICT DO UPDATE SET peak = GREATEST(...)` の 1 文。別接続 3 本で保存 peak は最高値。2026-09-29 再読で見方との矛盾なし） |
 | P1 #3 | HWM 認可後 crash 窓 | **完了**（2026-09-29。`peak_writer_test` の `write-behind success leaves the DB peak after both processes are discarded` は `record_peak` が `160000` を返したあと PeakWriter を kill し `DailyLoss.reinit` してもその peak が残る。upsert 失敗の enqueue は `{:error, :unsynced}`） |
@@ -32,6 +32,7 @@
 | P2 #16 | live 銘柄を一次証跡へ合わせる | **完了**（2026-09-29。`live_safety_test` の `apply_live_overrides! rejects ETH_JPY alone or mixed with BTC_JPY` は `["ETH_JPY"]` と `["BTC_JPY", "ETH_JPY"]` の両方で `ArgumentError`。`risk_test` の `live rejects ETH_JPY because commission evidence is BTC_JPY only` は live 認可が `unsupported_product_for_live`。82 tests, 0 failures） |
 | P2 #17 | `halted_at` を起点のまま残す | **完了**（2026-09-29。`halted_at` はその reason で最初に止まった時刻。`game_day_stage2_test` の `application reconciler child boots only when env boot? is true` は `boot?: true` の起動後に `:periodic_reconcile` しても `manual_halt` の時刻を残す。`reconcile_test` の同一 reason の周期 2 回目も残す。`legacy_unmapped_halt` は `risk_halted` へ変わり時刻が進む） |
 | P2 #18 | PeakWriter の再試行間隔 | **完了**（2026-09-29。`repeated db failures back off and do not repeat the same error` は `retry_timer_left` が 50ms 以下から 4 秒超へ延び、同じ error は続かず live は unsynced のまま。`a failed lower enqueue keeps the higher pending peak` は失敗した 100000 のあとも pending と DB が 200000。paper の成功後も live の `retry_ms` は 200 のまま、待ちタイマーが残る） |
+| P2 #19 | 成行買いの板厚超過 | **完了**（2026-09-29。余白では支出の上限にならないため、最上段を超える live 成行買いは拒否する。`live market buy rejects a size that walks past the top` は size 0.02・最上段 0.01 で `ask_depth`。数量の無い板は `ask_size_missing`。最上段以内は ask×size） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -53,7 +54,6 @@ P0 に未完了は無い。前回まで P0 だった commission とハーネス�
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 19 | 成行買いの板厚超過 | 深さ付き板か、保守的な余白を best ask の拘束に足す。P2 #7 の ask 拘束は完了のまま、この残差だけを閉じる | 最上段数量を超えるサイズで、拘束額が ask×size より大きい回帰がある |
 | 20 | ready 証跡の冒頭を見方に合わせる | `watch-ready-evidence.md` 冒頭の「外の監視ホストが無いと閉じない」を、作業PC常駐を完了とする現行の見方へ書き換える。完了の事実は取り消さない | 冒頭と 2026-09-29 の常駐記録が同じ完了条件を述べる |
 | 21 | Risk の説明を実装に合わせる | `risk.ex` の「HWM のために DB 往復しない / cast する」を、enqueue が upsert 完了まで `:ok` を返さない実装へ合わせる | moduledoc を読んだ人が、認可の戻り前に DB へ書くと分かる |
 

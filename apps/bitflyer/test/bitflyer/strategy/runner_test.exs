@@ -9,6 +9,7 @@ defmodule Bitflyer.Strategy.RunnerTest do
   import Bitflyer.TestSupport.ReadinessHelper
   import Bitflyer.TestSupport.BalanceCacheHelper
 
+  alias Bitflyer.MarketData.Cache
   alias Bitflyer.Readiness
   alias Bitflyer.Strategy.Runner
   alias Bitflyer.Trading.Order
@@ -213,6 +214,36 @@ defmodule Bitflyer.Strategy.RunnerTest do
     _ = :sys.get_state(pid)
 
     assert {:ok, %Order{}} =
+             Order
+             |> Ash.Query.filter(internal_order_id == ^@order_id)
+             |> Ash.read_one()
+  end
+
+  test "ask_depth is not settled so the same intent can retry" do
+    previous = Application.get_env(:bitflyer, :trade_mode)
+    Application.put_env(:bitflyer, :trade_mode, :paper)
+
+    on_exit(fn -> Application.put_env(:bitflyer, :trade_mode, previous) end)
+
+    assert Readiness.mark_ready() == :ok
+    value = fresh_ticker_value()
+
+    Cache.put(@market_key, %{
+      value
+      | book: Map.put(value.book, :best_ask_size, Decimal.new("0.001"))
+    })
+
+    seed_balance_cache!(:paper, %{"JPY" => Decimal.new("10000000"), "BTC" => Decimal.new("0")})
+
+    assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
+    state = :sys.get_state(Runner)
+    refute MapSet.member?(state.submitted, @order_id)
+
+    assert :ok = Runner.notify_tick(@market_key, %{ltp: Decimal.new("5000000")})
+    state2 = :sys.get_state(Runner)
+    refute MapSet.member?(state2.submitted, @order_id)
+
+    assert {:ok, nil} =
              Order
              |> Ash.Query.filter(internal_order_id == ^@order_id)
              |> Ash.read_one()

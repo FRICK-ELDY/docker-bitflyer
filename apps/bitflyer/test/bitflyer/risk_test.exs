@@ -724,6 +724,112 @@ defmodule Bitflyer.RiskTest do
              )
   end
 
+  test "live market buy rejects a size that walks past the top" do
+    ask = Decimal.new("5001000")
+    size = Decimal.new("0.02")
+    top = Decimal.new("0.01")
+
+    assert :ok =
+             Cache.put(@market_key, %{
+               ltp: %{
+                 price: Decimal.new("5000000"),
+                 source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+               },
+               book: %{
+                 best_bid: Decimal.new("4999000"),
+                 best_ask: ask,
+                 best_ask_size: top
+               }
+             })
+
+    assert {:error, :limit_exceeded, %{limit: :ask_depth, ask_size: ask_size}} =
+             Risk.balance_hold(
+               valid_command(%{order_type: :market, size: size}),
+               trade_mode: :live
+             )
+
+    assert Decimal.equal?(ask_size, top)
+
+    assert {:error, :limit_exceeded, %{limit: :ask_depth}} =
+             Risk.balance_hold(
+               valid_command(%{order_type: :market, size: size}),
+               trade_mode: :paper
+             )
+
+    assert Readiness.mark_ready() == :ok
+
+    parent = self()
+    handler_id = "risk-ask-depth-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:bitflyer, :risk, :rejected],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:ask_depth_rejected, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert {:error, :limit_exceeded, %{limit: :ask_depth}} =
+             Risk.authorize(
+               valid_command(%{order_type: :market, size: size}),
+               trade_mode: :live,
+               positions: [],
+               balances: %{"JPY" => %{available: Decimal.new("10000000")}}
+             )
+
+    assert_receive {:ask_depth_rejected, metadata}
+    assert metadata.limit == :ask_depth
+    assert Decimal.equal?(metadata.size, size)
+    assert Decimal.equal?(metadata.ask_size, top)
+  end
+
+  test "live market buy rejects when the top size is missing" do
+    assert :ok =
+             Cache.put(@market_key, %{
+               ltp: %{
+                 price: Decimal.new("5000000"),
+                 source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+               },
+               book: %{
+                 best_bid: Decimal.new("4999000"),
+                 best_ask: Decimal.new("5001000")
+               }
+             })
+
+    assert {:error, :stale, %{reason: :ask_size_missing}} =
+             Risk.balance_hold(valid_command(%{order_type: :market}), trade_mode: :live)
+  end
+
+  test "live market buy hold stays at ask times size when size fits the top" do
+    ask = Decimal.new("5001000")
+    size = Decimal.new("0.01")
+
+    assert :ok =
+             Cache.put(@market_key, %{
+               ltp: %{
+                 price: Decimal.new("5000000"),
+                 source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
+               },
+               book: %{
+                 best_bid: Decimal.new("4999000"),
+                 best_ask: ask,
+                 best_ask_size: size
+               }
+             })
+
+    assert {:ok, %{amount: amount}} =
+             Risk.balance_hold(
+               valid_command(%{order_type: :market, size: size}),
+               trade_mode: :live
+             )
+
+    assert Decimal.equal?(amount, Decimal.mult(ask, size))
+  end
+
   test "paper market buy hold stays on adverse LTP and ignores best_ask" do
     ltp = Decimal.new("5000000")
     ask = Decimal.new("5010000")
@@ -734,6 +840,7 @@ defmodule Bitflyer.RiskTest do
                ltp: ltp,
                best_bid: ltp,
                best_ask: ask,
+               best_ask_size: size,
                source_timestamp: DateTime.utc_now() |> DateTime.truncate(:millisecond)
              })
 

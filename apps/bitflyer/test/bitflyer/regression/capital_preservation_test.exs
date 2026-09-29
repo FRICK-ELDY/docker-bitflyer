@@ -1001,7 +1001,8 @@ defmodule Bitflyer.Regression.CapitalPreservationTest do
                  },
                  book: %{
                    best_bid: Decimal.new("4999000"),
-                   best_ask: ask
+                   best_ask: ask,
+                   best_ask_size: size
                  }
                })
 
