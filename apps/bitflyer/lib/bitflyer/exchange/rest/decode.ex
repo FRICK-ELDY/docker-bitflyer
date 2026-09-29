@@ -94,6 +94,35 @@ defmodule Bitflyer.Exchange.Rest.Decode do
 
   def to_decimal(_), do: :error
 
+  @doc """
+  `GET /v1/me/getcollateral` を Decimal にする。
+
+  建玉評価損益は負を許す。必要証拠金・維持率・追証額・預かり証拠金の負は拒否する。
+  追証期限は空でもよい。
+  """
+  @spec collateral(map()) :: {:ok, map()} | {:error, :invalid_number | :invalid_structure}
+  def collateral(%{} = row) do
+    with {:ok, collateral} <- require_nonneg_decimal(field(row, "collateral")),
+         {:ok, open_position_pnl} <- require_decimal(field(row, "open_position_pnl")),
+         {:ok, require_collateral} <- require_nonneg_decimal(field(row, "require_collateral")),
+         {:ok, keep_rate} <- require_nonneg_decimal(field(row, "keep_rate")),
+         {:ok, margin_call_amount} <- require_nonneg_decimal(field(row, "margin_call_amount")) do
+      {:ok,
+       %{
+         collateral: collateral,
+         open_position_pnl: open_position_pnl,
+         require_collateral: require_collateral,
+         keep_rate: keep_rate,
+         margin_call_amount: margin_call_amount,
+         margin_call_due_date: field(row, "margin_call_due_date")
+       }}
+    end
+  end
+
+  def collateral(_), do: {:error, :invalid_structure}
+
+  defp field(row, key), do: Map.get(row, key)
+
   @doc false
   @spec side(term()) :: :buy | :sell | nil
   def side("BUY"), do: :buy

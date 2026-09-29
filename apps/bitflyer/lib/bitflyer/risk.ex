@@ -109,6 +109,7 @@ defmodule Bitflyer.Risk do
       with :ok <- validate_command(command),
            {:ok, opts} <- attach_positions(opts),
            :ok <- check_live_product(command, opts),
+           :ok <- check_fx_collateral(command, opts),
            :ok <- check_order_grid(command, opts),
            :ok <- check_live_open_age(opts),
            :ok <- check_sync(opts),
@@ -174,8 +175,9 @@ defmodule Bitflyer.Risk do
   買いの quote 拘束は `quote_notional/2`。live と paper の成行は最上段以内だけ通す。
   live の額は `best_ask × size`。数量欠落は `ask_size_missing`、超過は `ask_depth`。
   paper 成行は LTP に手数料とスリッページを載せた価格（ask は使わない）。
-  指値は指定価格（paper は手数料のみ上乗せ）。売りは base 数量
-  （live は手数料余白込み）。
+  指値は指定価格（paper は手数料のみ上乗せ）。現物の売りは base 数量
+  （live は手数料余白込み）。live の FX は証拠金を検査したあと
+  `fx_margin_unmeasured` を返し、額は返さない。
   """
   @spec balance_hold(map(), keyword()) ::
           {:ok, :skip}
@@ -191,27 +193,52 @@ defmodule Bitflyer.Risk do
       size = Map.fetch!(command, :size)
       product_code = Map.fetch!(command, :product_code)
 
-      case side do
-        :buy ->
-          case quote_notional(command, opts) do
-            {:ok, notional} ->
-              {:ok, %{currency: quote_currency(product_code), amount: notional}}
+      if trade_mode == :live and Product.fx?(product_code) do
+        fx_margin_blocked(product_code, opts)
+      else
+        case side do
+          :buy ->
+            case quote_notional(command, opts) do
+              {:ok, notional} ->
+                {:ok, %{currency: quote_currency(product_code), amount: notional}}
 
-            other ->
-              other
-          end
-
-        :sell ->
-          amount =
-            if trade_mode == :live do
-              Product.sell_base_debit(product_code, size)
-            else
-              # paper の手数料は約定価格に含まれ、建玉は size のまま減る。
-              size
+              other ->
+                other
             end
 
-          {:ok, %{currency: base_currency(product_code), amount: amount}}
+          :sell ->
+            amount =
+              if trade_mode == :live do
+                Product.sell_base_debit(product_code, size)
+              else
+                # paper の手数料は約定価格に含まれ、建玉は size のまま減る。
+                size
+              end
+
+            {:ok, %{currency: base_currency(product_code), amount: amount}}
+        end
       end
+    end
+  end
+
+  # 証拠金口座の余力で見る。現物 JPY / BTC の available には乗せない。
+  # 1 単位あたりの必要証拠金は未実測なので、通過後も発注は出さない。
+  defp fx_margin_blocked(product_code, opts) do
+    collateral = Keyword.get(opts, :collateral)
+    positions = Keyword.get(opts, :positions, [])
+
+    cond do
+      not is_map(collateral) ->
+        {:error, :unsynced, %{reason: :collateral_missing, product_code: product_code}}
+
+      true ->
+        case Bitflyer.Startup.LiveCollateral.check(collateral, positions: positions) do
+          :ok ->
+            {:error, :unsynced, %{reason: :fx_margin_unmeasured, product_code: product_code}}
+
+          {:error, :reconcile_mismatch, meta} ->
+            {:error, :limit_exceeded, Map.put(meta, :limit, meta.kind)}
+        end
     end
   end
 
@@ -259,6 +286,20 @@ defmodule Bitflyer.Risk do
 
       true ->
         :ok
+    end
+  end
+
+  defp check_fx_collateral(command, opts) do
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+    product_code = Map.get(command, :product_code)
+
+    if trade_mode == :live and is_binary(product_code) and Product.fx?(product_code) and
+         Product.live_evidenced?(product_code) do
+      case fx_margin_blocked(product_code, opts) do
+        {:error, _, _} = error -> error
+      end
+    else
+      :ok
     end
   end
 
@@ -755,7 +796,11 @@ defmodule Bitflyer.Risk do
       if Keyword.has_key?(opts, :balances) and test_injections_allowed?() do
         case resolve_balances(opts, trade_mode) do
           {:ok, balances} ->
-            verify_available_balance(command, balances, opts)
+            verify_available_balance(
+              command,
+              balances,
+              Keyword.put(opts, :trade_mode, trade_mode)
+            )
 
           {:error, :unsynced} ->
             {:error, :unsynced, %{reason: :balance_unsynced}}
@@ -805,51 +850,59 @@ defmodule Bitflyer.Risk do
 
     case side do
       :buy ->
-        case quote_notional(command, opts) do
-          {:ok, notional} ->
-            currency = quote_currency(product_code)
-            available = Map.get(balance_map, currency)
+        if Keyword.get(opts, :trade_mode) == :live and Product.fx?(product_code) do
+          fx_margin_blocked(product_code, opts)
+        else
+          case quote_notional(command, opts) do
+            {:ok, notional} ->
+              currency = quote_currency(product_code)
+              available = Map.get(balance_map, currency)
 
-            cond do
-              is_nil(available) ->
-                {:error, :unsynced, %{reason: :balance_currency_missing, currency: currency}}
+              cond do
+                is_nil(available) ->
+                  {:error, :unsynced, %{reason: :balance_currency_missing, currency: currency}}
 
-              Decimal.lt?(available, notional) ->
-                {:error, :limit_exceeded,
-                 %{
-                   limit: :insufficient_balance,
-                   currency: currency,
-                   available: available,
-                   required: notional
-                 }}
+                Decimal.lt?(available, notional) ->
+                  {:error, :limit_exceeded,
+                   %{
+                     limit: :insufficient_balance,
+                     currency: currency,
+                     available: available,
+                     required: notional
+                   }}
 
-              true ->
-                :ok
-            end
+                true ->
+                  :ok
+              end
 
-          other ->
-            other
+            other ->
+              other
+          end
         end
 
       :sell ->
-        currency = base_currency(product_code)
-        available = Map.get(balance_map, currency)
+        if Keyword.get(opts, :trade_mode) == :live and Product.fx?(product_code) do
+          fx_margin_blocked(product_code, opts)
+        else
+          currency = base_currency(product_code)
+          available = Map.get(balance_map, currency)
 
-        cond do
-          is_nil(available) ->
-            {:error, :unsynced, %{reason: :balance_currency_missing, currency: currency}}
+          cond do
+            is_nil(available) ->
+              {:error, :unsynced, %{reason: :balance_currency_missing, currency: currency}}
 
-          Decimal.lt?(available, size) ->
-            {:error, :limit_exceeded,
-             %{
-               limit: :insufficient_balance,
-               currency: currency,
-               available: available,
-               required: size
-             }}
+            Decimal.lt?(available, size) ->
+              {:error, :limit_exceeded,
+               %{
+                 limit: :insufficient_balance,
+                 currency: currency,
+                 available: available,
+                 required: size
+               }}
 
-          true ->
-            :ok
+            true ->
+              :ok
+          end
         end
     end
   end

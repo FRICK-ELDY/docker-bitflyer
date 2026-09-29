@@ -64,6 +64,12 @@ config :bitflyer, Bitflyer.Startup.Reconcile,
   balance_fee_tolerance_abs: %{"JPY" => "1", "BTC" => "0.00000001", "ETH" => "0.00000001"},
   position_size_tolerance_abs: %{"JPY" => "1", "BTC" => "0.00000001", "ETH" => "0.00000001"}
 
+config :bitflyer, :fx_collateral,
+  # getcollateral.keep_rate と (collateral + open_position_pnl) / require_collateral の
+  # 低い方。1 は公式ロスカット線ではなく、必要証拠金を上回る余力の下限。1 ちょうども halt。
+  # 取引所のロスカット比率は未実測。0 や負や非数は検査側が invalid_min_keep_rate で止める。
+  min_keep_rate: "1"
+
 config :bitflyer, Bitflyer.MarketData.Cache, default_max_age_ms: 5_000
 
 config :bitflyer, Bitflyer.MarketData,
@@ -199,6 +205,11 @@ config :logger, :default_formatter,
     :unexplained,
     :allowance,
     :limit,
+    :keep_rate,
+    :min_keep_rate,
+    :require_collateral,
+    :margin_call_amount,
+    :open_position_pnl,
     :size,
     :ask_size,
     :operator,

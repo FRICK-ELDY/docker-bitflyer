@@ -27,13 +27,42 @@ defmodule Bitflyer.Exchange.Rest do
 
     with {:ok, balances} <- get_balances(),
          {:ok, positions} <- get_positions(product_codes),
-         {:ok, open_orders} <- get_open_orders(product_codes) do
-      {:ok,
-       %{
-         balances: balances,
-         positions: positions,
-         open_orders: open_orders
-       }}
+         {:ok, open_orders} <- get_open_orders(product_codes),
+         {:ok, collateral} <- maybe_collateral(product_codes) do
+      snapshot = %{
+        balances: balances,
+        positions: positions,
+        open_orders: open_orders
+      }
+
+      snapshot =
+        if collateral do
+          Map.put(snapshot, :collateral, collateral)
+        else
+          snapshot
+        end
+
+      {:ok, snapshot}
+    end
+  end
+
+  @doc """
+  `GET /v1/me/getcollateral`。FX の資金正本。spot だけの snapshot では呼ばない。
+  """
+  @spec fetch_collateral() :: {:ok, map()} | {:error, term()}
+  def fetch_collateral do
+    with :ok <- require_credentials(),
+         {:ok, body} <- request(:get, "/v1/me/getcollateral"),
+         {:ok, collateral} <- Decode.collateral(body) do
+      {:ok, collateral}
+    end
+  end
+
+  defp maybe_collateral(product_codes) do
+    if Enum.any?(product_codes, &Product.fx?/1) do
+      fetch_collateral()
+    else
+      {:ok, nil}
     end
   end
 

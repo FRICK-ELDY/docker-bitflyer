@@ -74,7 +74,7 @@ defmodule Bitflyer.Config.LiveSafety do
 
         Unsupported product_codes: #{Enum.join(bad, ", ")}.
         Other spot pairs stay out until a measured buy/sell table is added.
-        FX/CFD requires getcollateral (not implemented).
+        FX/CFD stays closed until a measured margin per unit exists. getcollateral is read, but orders are not sent.
         """
 
       true ->

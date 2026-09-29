@@ -1,6 +1,6 @@
 # 要望: FX/CFD 証拠金アダプタ（getcollateral 正本）
 
-ステータス: 未着手。P0 #2 は **B（spot 限定）** で先に閉じる。全銘柄化・FX live 解禁の前提として本要望を残す。
+ステータス: 証拠金の読み取りはある（2026-09-29）。維持率は建玉と必要証拠金が矛盾すると halt する。live の FX 発注は、1 単位の必要証拠金が未実測なので出さない。現物 JPY では拘束しない。`FX_*` の live 起動は手数料実測まで拒否のまま。
 
 根拠: [improvement-plan.md](../0_doc/evaluation/improvement-plan.md) P0 #2 案 A /
 [specific-weaknesses-2026-09-10_2.md](../0_doc/evaluation/specific-weaknesses-2026-09-10_2.md)（FX に spot 残高モデルを当てていた件）

@@ -379,6 +379,11 @@ defmodule Bitflyer.Startup.Reconcile do
              balances,
              inventory_opts(opts)
            ),
+         :ok <-
+           Bitflyer.Startup.LiveCollateral.for_products(
+             snapshot,
+             Bitflyer.MarketData.product_codes()
+           ),
          :ok <- compare_open_orders(internal.open_orders, Map.get(snapshot, :open_orders, [])),
          :ok <- LiveBalance.advance(plan, opts) do
       :ok

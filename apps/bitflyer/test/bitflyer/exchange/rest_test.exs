@@ -67,6 +67,9 @@ defmodule Bitflyer.Exchange.RestTest do
           assert String.contains?(url, "child_order_state=ACTIVE")
           {:ok, response(200, fixture("getchildorders_active.json"))}
 
+        String.contains?(url, "/v1/me/getcollateral") ->
+          {:ok, response(200, collateral_body())}
+
         true ->
           flunk("unexpected url: #{url}")
       end
@@ -106,6 +109,11 @@ defmodule Bitflyer.Exchange.RestTest do
            ] = snapshot.open_orders
 
     assert Decimal.eq?(filled, Decimal.new("0"))
+    assert Decimal.eq?(snapshot.collateral.keep_rate, Decimal.new("0"))
+    assert Decimal.eq?(snapshot.collateral.require_collateral, Decimal.new("0"))
+
+    assert {:error, :reconcile_mismatch, %{kind: :keep_rate_breached}} =
+             Bitflyer.Startup.LiveCollateral.for_products(snapshot, ["FX_BTC_JPY"])
   end
 
   test "fetch_reconcile_snapshot for spot skips getpositions" do
@@ -709,6 +717,9 @@ defmodule Bitflyer.Exchange.RestTest do
         String.contains?(url, "/v1/me/getchildorders") ->
           {:ok, response(200, [])}
 
+        String.contains?(url, "/v1/me/getcollateral") ->
+          {:ok, response(200, collateral_body())}
+
         true ->
           flunk("unexpected url: #{url}")
       end
@@ -735,6 +746,17 @@ defmodule Bitflyer.Exchange.RestTest do
       "commission" => 0,
       "exec_date" => "2015-07-07T09:57:40.397",
       "child_order_acceptance_id" => "JRF-page"
+    }
+  end
+
+  defp collateral_body do
+    %{
+      "collateral" => "0",
+      "open_position_pnl" => "0",
+      "require_collateral" => "0",
+      "keep_rate" => "0",
+      "margin_call_amount" => "0",
+      "margin_call_due_date" => nil
     }
   end
 
