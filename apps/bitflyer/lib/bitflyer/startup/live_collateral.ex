@@ -7,7 +7,7 @@ defmodule Bitflyer.Startup.LiveCollateral do
   出ていれば `keep_rate_breached` / `margin_call`。
   """
 
-  @default_min_keep_rate "1"
+  @default_min_keep_rate Decimal.new("1")
 
   @type collateral :: %{
           collateral: Decimal.t(),
@@ -74,13 +74,13 @@ defmodule Bitflyer.Startup.LiveCollateral do
     open? = open_position?(positions)
 
     cond do
-      Decimal.compare(margin_call_amount, 0) == :gt or due_date?(due) ->
+      Decimal.positive?(margin_call_amount) or due_date?(due) ->
         halt(:margin_call, fields, min_keep)
 
-      Decimal.compare(require_collateral, 0) != :gt and open? ->
+      not Decimal.positive?(require_collateral) and open? ->
         halt(:keep_rate_breached, fields, min_keep)
 
-      Decimal.compare(require_collateral, 0) == :gt and
+      Decimal.positive?(require_collateral) and
           Decimal.compare(effective_keep(fields), min_keep) != :gt ->
         halt(:keep_rate_breached, fields, min_keep)
 
@@ -110,7 +110,7 @@ defmodule Bitflyer.Startup.LiveCollateral do
       code = Map.get(row, :product_code) || Map.get(row, "product_code")
       size = Map.get(row, :size) || Map.get(row, "size")
 
-      fx_position?(code) and match?(%Decimal{}, size) and Decimal.compare(size, 0) == :gt
+      fx_position?(code) and match?(%Decimal{}, size) and Decimal.positive?(size)
     end)
   end
 
@@ -134,7 +134,9 @@ defmodule Bitflyer.Startup.LiveCollateral do
   defp min_keep_rate(opts) do
     raw =
       Keyword.get_lazy(opts, :min_keep_rate, fn ->
-        Application.get_env(:bitflyer, :fx_collateral, [])
+        :bitflyer
+        |> Application.get_env(:fx_collateral, [])
+        |> Kernel.||([])
         |> Keyword.get(:min_keep_rate, @default_min_keep_rate)
       end)
 
@@ -154,7 +156,7 @@ defmodule Bitflyer.Startup.LiveCollateral do
   end
 
   defp keep_positive(%Decimal{} = value) do
-    if Decimal.compare(value, 0) == :gt do
+    if Decimal.positive?(value) do
       {:ok, value}
     else
       {:error, :reconcile_mismatch, %{kind: :invalid_min_keep_rate, min_keep_rate: value}}

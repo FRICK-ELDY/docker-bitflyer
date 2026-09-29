@@ -114,6 +114,34 @@ defmodule Bitflyer.Startup.LiveCollateralTest do
              LiveCollateral.for_products(%{}, ["FX_BTC_JPY"])
   end
 
+  test "nil fx_collateral config does not crash" do
+    previous = Application.get_env(:bitflyer, :fx_collateral)
+    Application.put_env(:bitflyer, :fx_collateral, nil)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:bitflyer, :fx_collateral, previous)
+      else
+        Application.delete_env(:bitflyer, :fx_collateral)
+      end
+    end)
+
+    assert :ok = LiveCollateral.check(sample([]))
+  end
+
+  test "atom keys decode the same as strings" do
+    assert {:ok, collateral} =
+             Decode.collateral(%{
+               collateral: "0",
+               open_position_pnl: "0",
+               require_collateral: "0",
+               keep_rate: "0",
+               margin_call_amount: "0"
+             })
+
+    assert :ok = LiveCollateral.check(collateral)
+  end
+
   defp sample(overrides) do
     Map.merge(
       %{

@@ -121,7 +121,16 @@ defmodule Bitflyer.Exchange.Rest.Decode do
 
   def collateral(_), do: {:error, :invalid_structure}
 
-  defp field(row, key), do: Map.get(row, key)
+  defp field(row, key) when is_binary(key) do
+    Map.get(row, key) || Map.get(row, atom_field(key))
+  end
+
+  defp atom_field("collateral"), do: :collateral
+  defp atom_field("open_position_pnl"), do: :open_position_pnl
+  defp atom_field("require_collateral"), do: :require_collateral
+  defp atom_field("keep_rate"), do: :keep_rate
+  defp atom_field("margin_call_amount"), do: :margin_call_amount
+  defp atom_field(_key), do: :missing_field
 
   @doc false
   @spec side(term()) :: :buy | :sell | nil
