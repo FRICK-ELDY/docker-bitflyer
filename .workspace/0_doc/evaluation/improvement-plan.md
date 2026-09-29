@@ -33,6 +33,7 @@
 | P2 #17 | `halted_at` を起点のまま残す | **完了**（2026-09-29。`halted_at` はその reason で最初に止まった時刻。`game_day_stage2_test` の `application reconciler child boots only when env boot? is true` は `boot?: true` の起動後に `:periodic_reconcile` しても `manual_halt` の時刻を残す。`reconcile_test` の同一 reason の周期 2 回目も残す。`legacy_unmapped_halt` は `risk_halted` へ変わり時刻が進む） |
 | P2 #18 | PeakWriter の再試行間隔 | **完了**（2026-09-29。`repeated db failures back off and do not repeat the same error` は `retry_timer_left` が 50ms 以下から 4 秒超へ延び、同じ error は続かず live は unsynced のまま。`a failed lower enqueue keeps the higher pending peak` は失敗した 100000 のあとも pending と DB が 200000。paper の成功後も live の `retry_ms` は 200 のまま、待ちタイマーが残る） |
 | P2 #19 | 成行買いの板厚超過 | **完了**（2026-09-29。余白では支出の上限にならないため、最上段を超える live 成行買いは拒否する。`live market buy rejects a size that walks past the top` は size 0.02・最上段 0.01 で `ask_depth`。数量の無い板は `ask_size_missing`。最上段以内は ask×size） |
+| P2 #20 | ready 証跡の冒頭を見方に合わせる | **完了**（2026-09-29。`watch-ready-evidence.md` 冒頭と「常駐（2026-09-29）」はどちらも、作業PCの `BitflyerWatchReady` が `/health/ready` を引き、失敗が証跡ログに残り、解除手順があること。専用監視PCは完了条件にしない。2026-09-13 の探針記録は残る） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -54,7 +55,6 @@ P0 に未完了は無い。前回まで P0 だった commission とハーネス�
 
 | # | 項目 | 具体策 | 完了の見方 |
 |:---:|:---|:---|:---|
-| 20 | ready 証跡の冒頭を見方に合わせる | `watch-ready-evidence.md` 冒頭の「外の監視ホストが無いと閉じない」を、作業PC常駐を完了とする現行の見方へ書き換える。完了の事実は取り消さない | 冒頭と 2026-09-29 の常駐記録が同じ完了条件を述べる |
 | 21 | Risk の説明を実装に合わせる | `risk.ex` の「HWM のために DB 往復しない / cast する」を、enqueue が upsert 完了まで `:ok` を返さない実装へ合わせる | moduledoc を読んだ人が、認可の戻り前に DB へ書くと分かる |
 
 ---
