@@ -1,10 +1,9 @@
-# 別ホスト監視の実施記録（P2 #10）
+# ready 常駐の実施記録（P1 #5）
 
 最終更新: 2026-09-29
 関連: [prod.md](./prod.md) / [game-day.md](./game-day.md) / `bin/watch-ready.sh` / `bin/watch-ready.ps1`
 
-完了条件は **取引ホストが死んでも、外の監視ホストが非 ready / 到達不能を残す** こと。
-同一ホストの Compose healthcheck や localhost cron では閉じない。
+完了条件は、作業PCの `BitflyerWatchReady` が `/health/ready` を引き、失敗が証跡ログに残り、解除手順があること。専用の監視PCは完了条件にしない。下の「常駐（2026-09-29）」が同じ条件を満たす。2026-09-13 の探針記録は残し、完了の事実は取り消さない。
 
 ## 役割
 
