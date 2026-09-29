@@ -24,12 +24,13 @@ defmodule Bitflyer.Risk do
   `feed_disconnected` / `feed_unavailable` / `stale_market_data`。
   コードは鮮度と切断を分けない（市場データが使えない＝発注しない）。
 
-  発注ホットパスでは RiskState・発注頻度・日次損失・残高・HWM 永続化のために DB 往復しない。
+  発注ホットパスでは RiskState・発注頻度・日次損失の額・残高のために DB 往復しない。
   頻度は `Risk.OrderRate.reserve/3`（authorize 時に原子的予約）、取引所エラー連続は `Risk.FailureRate`
-  （起動 warm 失敗時は unsynced で認可拒否）、日次損失は `Risk.DailyLoss`、残高は `Risk.BalanceCache`（ETS）。
-  ドローダウン HWM の上昇は認可では ETS のみ。同期の `DailyEquityPeak` upsert はせず、
-  監督下 `PeakWriter` へ単調 upsert を cast する。Fill 後 / 突合 / resume の
-  `Equity.enforce` も `peak > persisted_peak` を flush する。
+  （起動 warm 失敗時は unsynced で認可拒否）、日次損失の額と残高は ETS
+  （`Risk.DailyLoss` / `Risk.BalanceCache`）。
+  当日高値が上がる認可だけは例外で、戻りより前に `PeakWriter.enqueue/4` が
+  `DailyEquityPeak` へ upsert し、成功するまで `:ok` を返さない。失敗は認可しない。
+  Fill 後 / 突合 / resume の `Equity.enforce` も、保存済みより高い peak は同じ upsert を待つ。
 
   残高は認可で `BalanceCache.probe/4`（`reserve/4` と同一比較・非減額）を呼ぶ。
   正本の減額は submit 時 `reserve/4`。probe→reserve のあいだに残高が減れば

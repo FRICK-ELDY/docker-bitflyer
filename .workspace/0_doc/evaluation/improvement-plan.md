@@ -34,6 +34,7 @@
 | P2 #18 | PeakWriter の再試行間隔 | **完了**（2026-09-29。`repeated db failures back off and do not repeat the same error` は `retry_timer_left` が 50ms 以下から 4 秒超へ延び、同じ error は続かず live は unsynced のまま。`a failed lower enqueue keeps the higher pending peak` は失敗した 100000 のあとも pending と DB が 200000。paper の成功後も live の `retry_ms` は 200 のまま、待ちタイマーが残る） |
 | P2 #19 | 成行買いの板厚超過 | **完了**（2026-09-29。余白では支出の上限にならないため、最上段を超える live 成行買いは拒否する。`live market buy rejects a size that walks past the top` は size 0.02・最上段 0.01 で `ask_depth`。数量の無い板は `ask_size_missing`。最上段以内は ask×size） |
 | P2 #20 | ready 証跡の冒頭を見方に合わせる | **完了**（2026-09-29。`watch-ready-evidence.md` 冒頭と「常駐（2026-09-29）」はどちらも、作業PCの `BitflyerWatchReady` が `/health/ready` を引き、失敗が証跡ログに残り、解除手順があること。専用監視PCは完了条件にしない。2026-09-13 の探針記録は残る） |
+| P2 #21 | Risk の説明を実装に合わせる | **完了**（2026-09-29。`risk.ex` の moduledoc は、当日高値が上がる認可は戻りより前に `PeakWriter.enqueue/4` が `DailyEquityPeak` へ upsert し、成功するまで `:ok` を返さない、と読める） |
 
 **「済」＝ live 解禁ではない。**
 
@@ -53,9 +54,7 @@ P0 に未完了は無い。前回まで P0 だった commission とハーネス�
 
 ## P2 — 観測と自己修復の残差
 
-| # | 項目 | 具体策 | 完了の見方 |
-|:---:|:---|:---|:---|
-| 21 | Risk の説明を実装に合わせる | `risk.ex` の「HWM のために DB 往復しない / cast する」を、enqueue が upsert 完了まで `:ok` を返さない実装へ合わせる | moduledoc を読んだ人が、認可の戻り前に DB へ書くと分かる |
+未完了は無い。#21 は上の消化済み表にある。
 
 ---
 
