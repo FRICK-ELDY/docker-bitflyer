@@ -156,7 +156,7 @@ Status UI（`:browser`）は発注可否・建玉・未約定・当日損益・h
 
 strategy から API を直接叩かない。market-data の遅延や LTP の欠損があるときは、新しい注文を出さない。
 
-Ticker の Cache 値は `{ltp, book}` の 2 層である。`ltp` は価格と取引所時刻（`source_timestamp`）。`book` は有効な bid/ask だけで、欠落・ゼロ・負・crossed は `nil` のまま LTP を残す。成行は板が無いと `bid_ask_missing` で拒否する。指値は LTP の鮮度・時計・価格逸脱で通り、板は要求しない。`/health/ready` と Discord の halt / disconnect は LTP 鮮度と Feed 接続を見るので、板だけの異常では落ちない（配信停止と混ぜない）。切り分けは ready JSON の `market_data.entries[].book`、tick telemetry の `status: :book_missing`、拒否 telemetry の `detail: :bid_ask_missing`（`reason` は `:stale` のまま）である。
+Ticker の Cache 値は `{ltp, book}` の 2 層である。`ltp` は価格と取引所時刻（`source_timestamp`）。`book` は有効な bid/ask だけで、欠落・ゼロ・負・crossed は `nil` のまま LTP を残す。正の `best_ask_size` があるときだけ板に載せる。成行は板が無いと `bid_ask_missing`、数量が無いと `ask_size_missing`、サイズが最上段を超えると `ask_depth` で拒否する。指値は LTP の鮮度・時計・価格逸脱で通り、板は要求しない。`/health/ready` と Discord の halt / disconnect は LTP 鮮度と Feed 接続を見るので、板だけの異常では落ちない（配信停止と混ぜない）。切り分けは ready JSON の `market_data.entries[].book`、tick telemetry の `status: :book_missing`、拒否 telemetry の `detail: :bid_ask_missing` / `:ask_size_missing`（`reason` は `:stale` のまま）と、`limit: :ask_depth`（`size` と `ask_size` 付き）である。
 
 ## 可観測性
 

@@ -628,6 +628,7 @@ defmodule Bitflyer.OrderExecutor.LiveFills do
   end
 
   defp settle_hold_on_terminal(%Order{status: :filled} = order) do
+    # 全量約定は判定時の hold を捨てる。マッチまでの板の歩行は実支出へ揃えない。
     Bitflyer.Risk.BalanceCache.discard_hold(:live, order.internal_order_id)
   end
 
