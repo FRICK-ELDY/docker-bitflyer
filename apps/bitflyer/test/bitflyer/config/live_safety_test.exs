@@ -149,11 +149,16 @@ defmodule Bitflyer.Config.LiveSafetyTest do
     assert strategy[:module] == Bitflyer.Strategy
   end
 
-  test "assert_live_products! accepts evidenced BTC_JPY and rejects other spot and FX" do
+  test "assert_live_products! accepts evidenced BTC_JPY and ETH_JPY and rejects other spot and FX" do
     assert :ok = LiveSafety.assert_live_products!(["BTC_JPY"])
+    assert :ok = LiveSafety.assert_live_products!(["ETH_JPY"])
+
+    assert_raise ArgumentError, ~r/one product_code/, fn ->
+      LiveSafety.assert_live_products!(["BTC_JPY", "ETH_JPY"])
+    end
 
     assert_raise ArgumentError, ~r/commission evidence/, fn ->
-      LiveSafety.assert_live_products!(["ETH_JPY"])
+      LiveSafety.assert_live_products!(["XRP_JPY"])
     end
 
     assert_raise ArgumentError, ~r/commission evidence/, fn ->
@@ -187,27 +192,41 @@ defmodule Bitflyer.Config.LiveSafetyTest do
     end
   end
 
-  test "apply_live_overrides! rejects ETH_JPY alone or mixed with BTC_JPY" do
+  test "apply_live_overrides! accepts one evidenced product and rejects a shared limit pair" do
     previous = Application.get_env(:bitflyer, Bitflyer.MarketData, [])
 
     on_exit(fn ->
       Application.put_env(:bitflyer, Bitflyer.MarketData, previous)
     end)
 
-    for product_codes <- [["ETH_JPY"], ["BTC_JPY", "ETH_JPY"]] do
-      Application.put_env(
-        :bitflyer,
-        Bitflyer.MarketData,
-        Keyword.put(previous, :product_codes, product_codes)
+    assert :ok = apply_live_overrides_ok(["ETH_JPY"])
+
+    assert_raise ArgumentError, ~r/one product_code/, fn ->
+      apply_live_overrides_ok(["BTC_JPY", "ETH_JPY"])
+    end
+  end
+
+  defp apply_live_overrides_ok(product_codes) do
+    previous = Application.get_env(:bitflyer, Bitflyer.MarketData, [])
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, Bitflyer.MarketData, previous)
+    end)
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.MarketData,
+      Keyword.put(previous, :product_codes, product_codes)
+    )
+
+    {_strategy, risk} =
+      LiveSafety.apply_live_overrides!(
+        [enabled: false, module: Bitflyer.Strategy],
+        [],
+        getenv(@valid_env)
       )
 
-      assert_raise ArgumentError, ~r/ETH_JPY/, fn ->
-        LiveSafety.apply_live_overrides!(
-          [enabled: false, module: Bitflyer.Strategy],
-          [],
-          getenv(@valid_env)
-        )
-      end
-    end
+    assert is_list(risk)
+    :ok
   end
 end

@@ -11,7 +11,8 @@ defmodule Bitflyer.Risk do
   live spot 売りカバー（買い建玉 − 未約定売りの base 負担。手数料余白込み） → 価格逸脱 →
   成行 spread（`max_spread_pct`。板欠落は `bid_ask_missing`。LTP 鮮度と時計は残る） →
   発注頻度予約 → 日次損失 → 日次ドローダウン（realized+unrealized） → 残高。
-  live は先に銘柄を検査し、一次証跡の無いペア（spot の `ETH_JPY` を含む）と FX/CFD を拒否する。
+  live は先に銘柄を検査し、一次証跡の無い spot と FX/CFD、および購読外の銘柄を拒否する。
+  一次証跡のある銘柄は、続けて発注数量の刻みと最小数量を検査する。
   live は `max_open_age_ms` が有限でないと認可しない（GTC 無期限を防ぐ）。
   live spot の売りは Position なしのベースライン在庫を対象にしない。
 
@@ -108,6 +109,7 @@ defmodule Bitflyer.Risk do
       with :ok <- validate_command(command),
            {:ok, opts} <- attach_positions(opts),
            :ok <- check_live_product(command, opts),
+           :ok <- check_order_grid(command, opts),
            :ok <- check_live_open_age(opts),
            :ok <- check_sync(opts),
            :ok <- check_failure_rate(opts),
@@ -260,26 +262,68 @@ defmodule Bitflyer.Risk do
     end
   end
 
-  # live は Product.live_evidenced?/1 が真の銘柄だけ通す。当面は BTC_JPY。
-  # 証跡の無い spot（ETH_JPY など）と FX は unsupported_product_for_live。
+  # live は購読中かつ Product.live_evidenced?/1 の銘柄だけ通す。
+  # 証跡の無い spot と FX は unsupported_product_for_live。
+  # 証跡はあっても購読外は unsubscribed_product。
   defp check_live_product(command, opts) do
     trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
     product_code = Map.get(command, :product_code)
+    subscribed = Bitflyer.MarketData.product_codes()
 
     cond do
       trade_mode != :live ->
         :ok
 
-      is_binary(product_code) and Product.live_evidenced?(product_code) ->
-        :ok
-
-      true ->
+      not (is_binary(product_code) and Product.live_evidenced?(product_code)) ->
         {:error, :invalid_command,
          %{
            reason: :unsupported_product_for_live,
            product_code: product_code,
            market_type: market_type(product_code)
          }}
+
+      product_code not in subscribed ->
+        {:error, :invalid_command,
+         %{
+           reason: :unsubscribed_product,
+           product_code: product_code,
+           subscribed: subscribed
+         }}
+
+      true ->
+        :ok
+    end
+  end
+
+  # 発注数量は銘柄の刻みと最小数量。paper / dry_run は未検査（刻みは live の実発注用）。
+  defp check_order_grid(command, opts) do
+    trade_mode = Keyword.get_lazy(opts, :trade_mode, &Bitflyer.TradeMode.current/0)
+    product_code = Map.get(command, :product_code)
+    size = Map.get(command, :size)
+    side = Map.get(command, :side)
+
+    cond do
+      trade_mode != :live ->
+        :ok
+
+      not (is_binary(product_code) and match?(%Decimal{}, size) and side in [:buy, :sell]) ->
+        :ok
+
+      true ->
+        case Product.check_order_size(product_code, size) do
+          :ok ->
+            case Product.ensure_buy_can_flatten(product_code, side, size) do
+              :ok ->
+                :ok
+
+              {:error, reason} ->
+                {:error, :invalid_command,
+                 %{reason: reason, product_code: product_code, size: size}}
+            end
+
+          {:error, reason} ->
+            {:error, :invalid_command, %{reason: reason, product_code: product_code, size: size}}
+        end
     end
   end
 
