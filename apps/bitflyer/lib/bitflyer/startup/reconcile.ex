@@ -6,8 +6,9 @@ defmodule Bitflyer.Startup.Reconcile do
   2. モード別に突合する（dry_run/paper は内部正、live は取引所）
   3. 不整合なら `{:error, reason}` — Ready にはしない
 
-  live では `required_balance_currencies`（既定: JPY / BTC）の
-  BalanceSnapshot が無ければ `balance_baseline_missing` で失敗する。
+  live では `required_balance_currencies`（既定: JPY / BTC）に、購読銘柄の
+  base / quote を足した通貨の BalanceSnapshot が無ければ `balance_baseline_missing`
+  で失敗する。ETH_JPY を購読すると ETH が必須になる。
   空の内部残高リストだけでは compare 成功にしない。
 
   残高 amount は tip との厳密一致ではなく、直近 tip 以降の spot Fill 合計と
@@ -131,9 +132,16 @@ defmodule Bitflyer.Startup.Reconcile do
   @spec reason_to_string(reason()) :: String.t()
   defdelegate reason_to_string(reason), to: HaltReason, as: :to_string
 
-  defp required_balance_currencies do
-    Application.get_env(:bitflyer, __MODULE__, [])
-    |> Keyword.get(:required_balance_currencies, ["JPY", "BTC"])
+  def required_balance_currencies do
+    configured =
+      Application.get_env(:bitflyer, __MODULE__, [])
+      |> Keyword.get(:required_balance_currencies, ["JPY", "BTC"])
+
+    currencies =
+      configured ++
+        Bitflyer.Trading.Product.balance_currencies(Bitflyer.MarketData.product_codes())
+
+    Enum.uniq(currencies)
   end
 
   defp check_persisted_risk(%{risk_state: nil}), do: :ok

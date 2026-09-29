@@ -517,6 +517,119 @@ defmodule Bitflyer.Startup.LiveBalanceTest do
              )
   end
 
+  test "ETH subscription requires an ETH baseline and an unexplained increase halts" do
+    alias Bitflyer.Startup.Reconcile
+
+    previous = Application.get_env(:bitflyer, Bitflyer.MarketData, [])
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, Bitflyer.MarketData, previous)
+    end)
+
+    refute "ETH" in Reconcile.required_balance_currencies()
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.MarketData,
+      Keyword.put(previous, :product_codes, ["ETH_JPY"])
+    )
+
+    assert "ETH" in Reconcile.required_balance_currencies()
+
+    tips = [
+      %{
+        currency: "ETH",
+        amount: Decimal.new("0"),
+        available: Decimal.new("0"),
+        captured_at: @captured
+      }
+    ]
+
+    external = [
+      %{currency: "ETH", amount: Decimal.new("0.00000003"), available: Decimal.new("0.00000003")}
+    ]
+
+    assert {:error, :reconcile_mismatch, %{kind: :balance_baseline_missing, currency: "ETH"}} =
+             LiveBalance.explain([], external, ["ETH"], fills: [])
+
+    assert {:error, :reconcile_mismatch, %{kind: :balance_mismatch, currency: "ETH"}} =
+             LiveBalance.explain(tips, external, ["ETH"], fills: [])
+
+    fill = %{
+      product_code: "ETH_JPY",
+      side: :buy,
+      size: Decimal.new("0.01004"),
+      price: Decimal.new("420958"),
+      fee: Decimal.new("0.00001506"),
+      fee_currency: "ETH",
+      inserted_at: @captured
+    }
+
+    filled = [
+      %{
+        currency: "ETH",
+        amount: Decimal.new("0.01002494"),
+        available: Decimal.new("0.01002494")
+      }
+    ]
+
+    assert {:ok, _plan} =
+             LiveBalance.explain(tips, filled, ["ETH"],
+               fills: [fill],
+               fee_tolerance_abs: %{"ETH" => "0.00000001"}
+             )
+  end
+
+  test "ETH round trip in one window exceeds the 1 JPY floor" do
+    tip_at = @captured
+
+    tips = [
+      %{
+        currency: "JPY",
+        amount: Decimal.new("19820"),
+        available: Decimal.new("19820"),
+        captured_at: tip_at
+      },
+      %{
+        currency: "ETH",
+        amount: Decimal.new("0"),
+        available: Decimal.new("0"),
+        captured_at: tip_at
+      }
+    ]
+
+    buy = %{
+      product_code: "ETH_JPY",
+      side: :buy,
+      size: Decimal.new("0.01004"),
+      price: Decimal.new("420958"),
+      fee: Decimal.new("0.00001506"),
+      fee_currency: "ETH",
+      inserted_at: tip_at
+    }
+
+    sell = %{
+      product_code: "ETH_JPY",
+      side: :sell,
+      size: Decimal.new("0.0100099"),
+      price: Decimal.new("420058"),
+      fee: Decimal.new("0.00001501"),
+      fee_currency: "ETH",
+      inserted_at: tip_at
+    }
+
+    external = [
+      %{currency: "JPY", amount: Decimal.new("19797"), available: Decimal.new("19797")},
+      %{currency: "ETH", amount: Decimal.new("0.00000003"), available: Decimal.new("0.00000003")}
+    ]
+
+    assert {:error, :reconcile_mismatch, %{kind: :balance_mismatch, currency: "JPY"}} =
+             LiveBalance.explain(tips, external, ["JPY", "ETH"],
+               fills: [buy, sell],
+               fee_tolerance_abs: %{"JPY" => "1", "ETH" => "0.00000001"}
+             )
+  end
+
   defp tips do
     [
       %{currency: "JPY", amount: @jpy, available: @jpy, captured_at: @captured},

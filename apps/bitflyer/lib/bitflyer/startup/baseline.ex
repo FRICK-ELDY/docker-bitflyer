@@ -161,10 +161,7 @@ defmodule Bitflyer.Startup.Baseline do
 
   defp normalize_expected_hash(_), do: {:error, :expected_hash_required}
 
-  defp required_balance_currencies do
-    Application.get_env(:bitflyer, Reconcile, [])
-    |> Keyword.get(:required_balance_currencies, ["JPY", "BTC"])
-  end
+  defp required_balance_currencies, do: Reconcile.required_balance_currencies()
 
   defp target_currencies(trade_mode, required, true = _rebaseline?) do
     case existing_tip_currencies(trade_mode) do

@@ -59,19 +59,27 @@ defmodule Bitflyer.Config.LiveSafety do
 
     bad = Enum.reject(codes, &Bitflyer.Trading.Product.live_evidenced?/1)
 
-    if bad != [] do
-      allowed = Bitflyer.Trading.Product.live_evidenced_products() |> Enum.join(", ")
+    cond do
+      length(Enum.uniq(codes)) > 1 ->
+        raise ArgumentError, """
+        TRADE_MODE=live accepts one product_code.
+        max_order_size and max_position_size are a single base quantity, so BTC_JPY and ETH_JPY cannot share them.
+        """
 
-      raise ArgumentError, """
-      TRADE_MODE=live only supports products with commission evidence (currently #{allowed}).
+      bad != [] ->
+        allowed = Bitflyer.Trading.Product.live_evidenced_products() |> Enum.join(", ")
 
-      Unsupported product_codes: #{Enum.join(bad, ", ")}.
-      Other spot pairs stay out until a measured buy/sell table is added.
-      FX/CFD requires getcollateral (not implemented).
-      """
+        raise ArgumentError, """
+        TRADE_MODE=live only supports products with commission evidence (currently #{allowed}).
+
+        Unsupported product_codes: #{Enum.join(bad, ", ")}.
+        Other spot pairs stay out until a measured buy/sell table is added.
+        FX/CFD requires getcollateral (not implemented).
+        """
+
+      true ->
+        :ok
     end
-
-    :ok
   end
 
   defp configured_product_codes, do: Bitflyer.MarketData.product_codes()

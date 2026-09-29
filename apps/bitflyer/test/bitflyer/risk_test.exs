@@ -1498,15 +1498,34 @@ defmodule Bitflyer.RiskTest do
     assert meta.market_type == :fx
   end
 
-  test "live rejects ETH_JPY because commission evidence is BTC_JPY only" do
+  test "live rejects an ETH_JPY size that is finer than 0.0000001" do
+    assert Readiness.mark_ready() == :ok
+    put_fresh_market()
+    subscribe!("ETH_JPY")
+
+    assert {:error, :invalid_command, meta} =
+             Risk.authorize(
+               valid_command(%{
+                 product_code: "ETH_JPY",
+                 market_key: {:ticker, "ETH_JPY"},
+                 size: Decimal.new("0.01000992")
+               }),
+               positions: [],
+               trade_mode: :live
+             )
+
+    assert meta.reason == :off_order_step
+  end
+
+  test "live rejects non-evidenced spot" do
     assert Readiness.mark_ready() == :ok
     put_fresh_market()
 
     assert {:error, :invalid_command, meta} =
              Risk.authorize(
                valid_command(%{
-                 product_code: "ETH_JPY",
-                 market_key: {:ticker, "ETH_JPY"}
+                 product_code: "XRP_JPY",
+                 market_key: {:ticker, "XRP_JPY"}
                }),
                positions: [],
                trade_mode: :live
@@ -1514,6 +1533,66 @@ defmodule Bitflyer.RiskTest do
 
     assert meta.reason == :unsupported_product_for_live
     assert meta.market_type == :spot
+  end
+
+  test "live rejects an ETH_JPY buy that the fee would leave below the sell minimum" do
+    assert Readiness.mark_ready() == :ok
+    assert put_fresh_ticker({:ticker, "ETH_JPY"}) == :ok
+    subscribe!("ETH_JPY")
+
+    assert {:error, :invalid_command, meta} =
+             Risk.authorize(
+               valid_command(%{
+                 product_code: "ETH_JPY",
+                 market_key: {:ticker, "ETH_JPY"},
+                 side: :buy,
+                 size: Decimal.new("0.01")
+               }),
+               positions: [],
+               trade_mode: :live,
+               balances: %{"JPY" => %{available: Decimal.new("1000000")}}
+             )
+
+    assert meta.reason == :below_min_order_size
+  end
+
+  test "live authorizes an on-step ETH_JPY buy that remains sellable" do
+    assert Readiness.mark_ready() == :ok
+    assert put_fresh_ticker({:ticker, "ETH_JPY"}) == :ok
+    subscribe!("ETH_JPY")
+
+    assert {:ok, %AuthorizedOrder{}} =
+             Risk.authorize(
+               valid_command(%{
+                 product_code: "ETH_JPY",
+                 market_key: {:ticker, "ETH_JPY"},
+                 side: :buy,
+                 size: Decimal.new("0.0100301")
+               }),
+               positions: [],
+               trade_mode: :live,
+               balances: %{"JPY" => %{available: Decimal.new("1000000")}}
+             )
+  end
+
+  test "live rejects an evidenced product that is not subscribed" do
+    assert Readiness.mark_ready() == :ok
+    assert put_fresh_ticker({:ticker, "ETH_JPY"}) == :ok
+
+    assert {:error, :invalid_command, meta} =
+             Risk.authorize(
+               valid_command(%{
+                 product_code: "ETH_JPY",
+                 market_key: {:ticker, "ETH_JPY"},
+                 side: :buy,
+                 size: Decimal.new("0.0100301")
+               }),
+               positions: [],
+               trade_mode: :live,
+               balances: %{"JPY" => %{available: Decimal.new("1000000")}}
+             )
+
+    assert meta.reason == :unsubscribed_product
   end
 
   test "dry_run still allows FX product codes for paper-style fixtures" do
@@ -1546,6 +1625,20 @@ defmodule Bitflyer.RiskTest do
 
   defp put_fresh_market do
     assert put_fresh_ticker(@market_key) == :ok
+  end
+
+  defp subscribe!(product_code) do
+    previous = Application.get_env(:bitflyer, Bitflyer.MarketData, [])
+
+    on_exit(fn ->
+      Application.put_env(:bitflyer, Bitflyer.MarketData, previous)
+    end)
+
+    Application.put_env(
+      :bitflyer,
+      Bitflyer.MarketData,
+      Keyword.put(previous, :product_codes, [product_code])
+    )
   end
 
   defp clear_default_risk_state do

@@ -53,15 +53,16 @@ config :bitflyer, Bitflyer.Risk.OpenOrderPolicy,
     failure_rate_unsynced: false
   }
 
-# live 突合で必須の残高 baseline（内部 BalanceSnapshot が無いと Ready にしない）
-# amount 差分は Fill 合計 + 支払超過側の手数料許容だけで前進。増加は入金として halt。
-# 絶対床は Fill があるときの丸め専用。Fill が無い通貨では 0（1 JPY の入出金も halt）。
+# 購読銘柄の base / quote も必須になる（ETH_JPY なら ETH）。
+# snapshot が無い必須通貨は balance_baseline_missing で Ready にしない。
+# 絶対床は Fill があるときの丸め専用。ETH の床は 0.00000001 で、実測の余り 0.00000003 は残高であり床にしない。
+# Fill が無い通貨では 0（1 JPY の入出金も halt）。
 # 20bps は fee 未記録（NULL）Fill だけの見積り上限。記録済みは絶対床。
 config :bitflyer, Bitflyer.Startup.Reconcile,
   required_balance_currencies: ["JPY", "BTC"],
   balance_fee_tolerance_bps: "20",
-  balance_fee_tolerance_abs: %{"JPY" => "1", "BTC" => "0.00000001"},
-  position_size_tolerance_abs: %{"JPY" => "1", "BTC" => "0.00000001"}
+  balance_fee_tolerance_abs: %{"JPY" => "1", "BTC" => "0.00000001", "ETH" => "0.00000001"},
+  position_size_tolerance_abs: %{"JPY" => "1", "BTC" => "0.00000001", "ETH" => "0.00000001"}
 
 config :bitflyer, Bitflyer.MarketData.Cache, default_max_age_ms: 5_000
 
