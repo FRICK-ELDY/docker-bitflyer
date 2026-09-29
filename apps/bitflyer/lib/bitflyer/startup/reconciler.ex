@@ -245,7 +245,12 @@ defmodule Bitflyer.Startup.Reconciler do
           :expected,
           :actual,
           :unexplained,
-          :allowance
+          :allowance,
+          :keep_rate,
+          :min_keep_rate,
+          :require_collateral,
+          :margin_call_amount,
+          :open_position_pnl
         ])
       else
         %{}

@@ -2,7 +2,8 @@ defmodule Bitflyer.Trading.Product do
   @moduledoc """
   銘柄コードから基軸・決済通貨と市場種別を取り出す。
 
-  live の残高モデルは現物（`getbalance`）のみ。FX/CFD（`getcollateral`）は未実装。
+  live の残高モデルは現物（`getbalance`）のみ。FX/CFD の資金正本は `getcollateral`。
+  1 単位あたりの必要証拠金は未実測なので、live の FX 発注は出さない。
   起動と認可は、さらに手数料単位の一次証跡がある銘柄（`live_evidenced?/1`）だけを通す。
   当面は `BTC_JPY` と `ETH_JPY`。spot allowlist の他ペアは paper の手数料モデル用で、
   実測表を足すまで live では通さない。

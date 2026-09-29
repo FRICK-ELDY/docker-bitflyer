@@ -1595,6 +1595,31 @@ defmodule Bitflyer.RiskTest do
     assert meta.reason == :unsubscribed_product
   end
 
+  test "live FX buy does not spend spot JPY" do
+    assert {:error, :unsynced, %{reason: :fx_margin_unmeasured}} =
+             Risk.balance_hold(
+               %{
+                 product_code: "FX_BTC_JPY",
+                 side: :buy,
+                 size: Decimal.new("0.01"),
+                 order_type: :limit,
+                 price: Decimal.new("10000000"),
+                 market_key: {:ticker, "FX_BTC_JPY"}
+               },
+               trade_mode: :live,
+               balances: %{"JPY" => %{available: Decimal.new("100000000")}},
+               collateral: %{
+                 collateral: Decimal.new("100000"),
+                 open_position_pnl: Decimal.new("0"),
+                 require_collateral: Decimal.new("0"),
+                 keep_rate: Decimal.new("0"),
+                 margin_call_amount: Decimal.new("0"),
+                 margin_call_due_date: nil
+               },
+               positions: []
+             )
+  end
+
   test "dry_run still allows FX product codes for paper-style fixtures" do
     assert Readiness.mark_ready() == :ok
     assert put_fresh_ticker({:ticker, "FX_BTC_JPY"}) == :ok
@@ -1608,6 +1633,49 @@ defmodule Bitflyer.RiskTest do
                positions: [],
                trade_mode: :dry_run
              )
+  end
+
+  test "live FX sell does not spend spot JPY or BTC" do
+    assert {:error, :unsynced, %{reason: :fx_margin_unmeasured}} =
+             Risk.balance_hold(
+               %{
+                 product_code: "FX_BTC_JPY",
+                 side: :sell,
+                 size: Decimal.new("0.01"),
+                 order_type: :limit,
+                 price: Decimal.new("10000000"),
+                 market_key: {:ticker, "FX_BTC_JPY"}
+               },
+               trade_mode: :live,
+               collateral: empty_collateral(),
+               positions: []
+             )
+  end
+
+  test "live FX sell halts when a position has no required collateral" do
+    assert {:error, :limit_exceeded, %{limit: :keep_rate_breached}} =
+             Risk.balance_hold(
+               %{
+                 product_code: "FX_BTC_JPY",
+                 side: :sell,
+                 size: Decimal.new("0.01"),
+                 market_key: {:ticker, "FX_BTC_JPY"}
+               },
+               trade_mode: :live,
+               collateral: empty_collateral(),
+               positions: [%{product_code: "FX_BTC_JPY", size: Decimal.new("0.01")}]
+             )
+  end
+
+  defp empty_collateral do
+    %{
+      collateral: Decimal.new("0"),
+      open_position_pnl: Decimal.new("0"),
+      require_collateral: Decimal.new("0"),
+      keep_rate: Decimal.new("0"),
+      margin_call_amount: Decimal.new("0"),
+      margin_call_due_date: nil
+    }
   end
 
   defp valid_command(overrides \\ %{}) do
